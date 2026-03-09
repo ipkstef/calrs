@@ -67,6 +67,9 @@ enum Commands {
         /// Port to listen on
         #[arg(long, default_value = "3000")]
         port: u16,
+        /// Address to bind to (use 0.0.0.0 to listen on all interfaces)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: std::net::IpAddr,
     },
 }
 
@@ -112,10 +115,10 @@ async fn main() -> Result<()> {
         Commands::Booking { command } => commands::booking::run(&pool, command).await?,
         Commands::User { command } => commands::user::run(&pool, command).await?,
         Commands::Config { command } => commands::config::run(&pool, command).await?,
-        Commands::Serve { port } => {
+        Commands::Serve { port, host } => {
             let router = web::create_router(pool);
-            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-            println!("Booking page running at http://localhost:{}", port);
+            let addr = std::net::SocketAddr::from((host, port));
+            println!("Booking page running at http://{}:{}", host, port);
             let listener = tokio::net::TcpListener::bind(addr).await?;
             axum::serve(listener, router).await?;
         }

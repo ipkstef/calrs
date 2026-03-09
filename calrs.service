@@ -7,7 +7,7 @@ After=network.target
 Type=simple
 User=calrs
 Group=calrs
-ExecStart=/usr/local/bin/calrs serve --port 3000
+ExecStart=/usr/local/bin/calrs serve --host 127.0.0.1 --port 3000
 WorkingDirectory=/var/lib/calrs
 Environment=CALRS_DATA_DIR=/var/lib/calrs
 Environment=CALRS_BASE_URL=http://localhost:3000
