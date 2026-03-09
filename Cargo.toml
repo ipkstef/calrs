@@ -1,0 +1,57 @@
+[package]
+name = "calrs"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, self-hostable scheduling platform. Like Cal.com, but written in Rust."
+license = "AGPL-3.0"
+repository = "https://github.com/vates/calrs"
+
+[[bin]]
+name = "calrs"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "migrate", "chrono", "uuid"] }
+
+# HTTP client (for CalDAV)
+reqwest = { version = "0.11", features = ["rustls-tls", "json"], default-features = false }
+
+# XML parsing (CalDAV is XML over WebDAV)
+quick-xml = { version = "0.31", features = ["serialize"] }
+
+# iCal parsing/generation
+icalendar = "0.16"
+
+# Time & timezone
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Secrets / config
+directories = "5"
+toml = "0.8"
+
+# Terminal output
+colored = "2"
+tabled = "0.15"
+hex = "0.4.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
