@@ -48,6 +48,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | RECURRENCE-ID handling | 0.7.1 | Modified recurring event instances no longer cause phantom occurrences |
 | Admin impersonation | 0.8.0 | Admins can impersonate any user for troubleshooting |
 | HTML emails | 0.8.3 | Clean, responsive HTML email notifications with plain text fallback |
+| Multi-VEVENT sync | 0.8.4 | Recurring events with modified instances properly synced from CalDAV |
+
+## [0.8.4] - 2026-03-09
+
+### Fixed
+
+- **Multi-VEVENT CalDAV sync** — recurring events with modified instances (RECURRENCE-ID) are now split and stored as separate rows during sync, so modified occurrences correctly block or free availability
+  - BlueMind bundles the parent VEVENT (with RRULE) and modified instances in a single CalDAV resource; the sync now splits them using `split_vevents()`
+  - New unique index `(uid, COALESCE(recurrence_id, ''))` allows parent and modified instances to coexist
+  - Fixed both CLI sync and **web dashboard sync** (which was still using the old single-VEVENT logic)
+  - Migration 009 was not registered in `db.rs` — now properly included
 
 ## [0.8.3] - 2026-03-09
 
