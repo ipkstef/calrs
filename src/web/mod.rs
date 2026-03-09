@@ -1820,6 +1820,7 @@ async fn compute_group_slots(
              JOIN accounts a ON a.id = cs.account_id
              WHERE a.user_id = ? AND c.is_busy = 1
                AND (e.rrule IS NULL OR e.rrule = '')
+               AND (e.status IS NULL OR e.status != 'CANCELLED')
                AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
         )
         .bind(user_id)
@@ -1845,6 +1846,7 @@ async fn compute_group_slots(
              JOIN caldav_sources cs ON cs.id = c.source_id
              JOIN accounts a ON a.id = cs.account_id
              WHERE a.user_id = ? AND c.is_busy = 1
+               AND (e.status IS NULL OR e.status != 'CANCELLED')
                AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
         )
         .bind(user_id)
@@ -2013,6 +2015,7 @@ async fn pick_group_member(
              JOIN accounts a ON a.id = cs.account_id
              WHERE a.user_id = ? AND c.is_busy = 1
                AND (e.rrule IS NULL OR e.rrule = '')
+               AND (e.status IS NULL OR e.status != 'CANCELLED')
                AND ((e.start_at < ? AND e.end_at > ?) OR (e.start_at < ? AND e.end_at > ?))
              LIMIT 1",
         )
@@ -2036,6 +2039,7 @@ async fn pick_group_member(
              JOIN caldav_sources cs ON cs.id = c.source_id
              JOIN accounts a ON a.id = cs.account_id
              WHERE a.user_id = ? AND c.is_busy = 1
+               AND (e.status IS NULL OR e.status != 'CANCELLED')
                AND e.rrule IS NOT NULL AND e.rrule != ''",
         )
         .bind(user_id)
@@ -2385,6 +2389,7 @@ async fn handle_booking_for_user(
     let mut busy: Vec<(String, String)> = sqlx::query_as(
         "SELECT start_at, end_at FROM events
          WHERE (rrule IS NULL OR rrule = '')
+           AND (status IS NULL OR status != 'CANCELLED')
          UNION ALL
          SELECT start_at, end_at FROM bookings WHERE status = 'confirmed'",
     )
@@ -2395,7 +2400,8 @@ async fn handle_booking_for_user(
     // Recurring events — expand and check
     let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != ''",
+         WHERE rrule IS NOT NULL AND rrule != ''
+           AND (status IS NULL OR status != 'CANCELLED')",
     )
     .fetch_all(&state.pool)
     .await
@@ -2623,6 +2629,7 @@ async fn compute_slots(
     let non_recurring: Vec<(String, String)> = sqlx::query_as(
         "SELECT start_at, end_at FROM events
          WHERE (rrule IS NULL OR rrule = '')
+           AND (status IS NULL OR status != 'CANCELLED')
            AND ((start_at <= ? AND end_at >= ?) OR (start_at <= ? AND end_at >= ?))
          UNION ALL
          SELECT start_at, end_at FROM bookings
@@ -2644,7 +2651,9 @@ async fn compute_slots(
     let end_compact = end_date.format("%Y%m%dT235959").to_string();
     let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != '' AND (start_at <= ? OR start_at <= ?)",
+         WHERE rrule IS NOT NULL AND rrule != ''
+           AND (status IS NULL OR status != 'CANCELLED')
+           AND (start_at <= ? OR start_at <= ?)",
     )
     .bind(&end_iso)
     .bind(&end_compact)
@@ -3045,6 +3054,7 @@ async fn handle_booking(
     let mut busy: Vec<(String, String)> = sqlx::query_as(
         "SELECT start_at, end_at FROM events
          WHERE (rrule IS NULL OR rrule = '')
+           AND (status IS NULL OR status != 'CANCELLED')
          UNION ALL
          SELECT start_at, end_at FROM bookings WHERE status = 'confirmed'",
     )
@@ -3055,7 +3065,8 @@ async fn handle_booking(
     // Recurring events — expand and check
     let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != ''",
+         WHERE rrule IS NOT NULL AND rrule != ''
+           AND (status IS NULL OR status != 'CANCELLED')",
     )
     .fetch_all(&state.pool)
     .await
@@ -3280,6 +3291,7 @@ async fn troubleshoot(
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
            AND (e.rrule IS NULL OR e.rrule = '')
+           AND (e.status IS NULL OR e.status != 'CANCELLED')
            AND ((e.start_at < ? AND e.end_at > ?) OR (e.start_at < ? AND e.end_at > ?))
          ORDER BY e.start_at",
     )
@@ -3298,6 +3310,7 @@ async fn troubleshoot(
          JOIN caldav_sources cs ON cs.id = c.source_id
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
+           AND (e.status IS NULL OR e.status != 'CANCELLED')
            AND e.rrule IS NOT NULL AND e.rrule != ''
            AND (e.start_at <= ? OR e.start_at <= ?)",
     )

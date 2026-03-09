@@ -176,6 +176,7 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
             let mut busy_events: Vec<(String, String)> = sqlx::query_as(
                 "SELECT start_at, end_at FROM events
                  WHERE (rrule IS NULL OR rrule = '')
+                   AND (status IS NULL OR status != 'CANCELLED')
                    AND ((start_at <= ? AND end_at >= ?) OR (start_at <= ? AND end_at >= ?))
                  UNION ALL
                  SELECT start_at, end_at FROM bookings
@@ -196,7 +197,9 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
             let end_compact_rrule = end_date.format("%Y%m%dT235959").to_string();
             let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
                 "SELECT start_at, end_at, rrule, raw_ical FROM events
-                 WHERE rrule IS NOT NULL AND rrule != '' AND (start_at <= ? OR start_at <= ?)",
+                 WHERE rrule IS NOT NULL AND rrule != ''
+                   AND (status IS NULL OR status != 'CANCELLED')
+                   AND (start_at <= ? OR start_at <= ?)",
             )
             .bind(&end_iso)
             .bind(&end_compact_rrule)
