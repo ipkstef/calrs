@@ -36,6 +36,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Timezone support | 0.4.0 | Guest timezone picker, browser auto-detection, tz-aware booking |
 | Calendar source management UI | 0.5.0 | Add/test/sync/remove CalDAV sources from the web dashboard |
 | Provider presets | 0.5.0 | BlueMind, Nextcloud, Fastmail, iCloud, Google, etc. with auto-fill |
+| Docker image | 0.5.1 | Multi-stage Dockerfile, docker-compose example |
+| systemd service | 0.5.1 | Production-ready unit file with security hardening |
+
+## [0.5.1] - 2026-03-09
+
+### Added
+
+- **Dockerfile** — multi-stage build (rust:bookworm builder, debian:bookworm-slim runtime), runs as unprivileged `calrs` user
+- **`.dockerignore`** — keeps build context clean
+- **systemd service file** (`calrs.service`) — production-ready unit with `ProtectSystem=strict`, `NoNewPrivileges`, and other hardening directives
+- **Install section in README** — Docker, Docker Compose, binary + systemd, and from-source instructions
 
 ## [0.5.0] - 2026-03-09
 

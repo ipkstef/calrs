@@ -1,0 +1,27 @@
+[Unit]
+Description=calrs — self-hostable scheduling
+Documentation=https://github.com/vates/calrs
+After=network.target
+
+[Service]
+Type=simple
+User=calrs
+Group=calrs
+ExecStart=/usr/local/bin/calrs serve --port 3000
+WorkingDirectory=/var/lib/calrs
+Environment=CALRS_DATA_DIR=/var/lib/calrs
+Environment=CALRS_BASE_URL=http://localhost:3000
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/calrs
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

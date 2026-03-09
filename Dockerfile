@@ -1,0 +1,29 @@
+# Stage 1: Build
+FROM rust:1.82-bookworm AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+COPY migrations/ migrations/
+
+RUN cargo build --release
+
+# Stage 2: Runtime
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -r -s /bin/false -m -d /var/lib/calrs calrs
+
+COPY --from=builder /build/target/release/calrs /usr/local/bin/calrs
+COPY templates/ /opt/calrs/templates/
+
+WORKDIR /opt/calrs
+USER calrs
+
+ENV CALRS_DATA_DIR=/var/lib/calrs
+EXPOSE 3000
+
+ENTRYPOINT ["calrs"]
+CMD ["serve", "--port", "3000"]

@@ -64,21 +64,71 @@
 - **CLI** — full command set for headless operation (init, source, sync, event-type, booking, config, user)
 - **Single binary** — no runtime dependencies beyond the binary itself
 
-## Quick start
+## Install
+
+### Docker (recommended)
 
 ```bash
-# Build
-cargo build --release
-
-# Initialize
-calrs init
-
-# Start the web server
-calrs serve --port 3000
-# Visit http://localhost:3000, register, then add calendars from the dashboard
+docker build -t calrs .
+docker run -d --name calrs \
+  -p 3000:3000 \
+  -v calrs-data:/var/lib/calrs \
+  -e CALRS_BASE_URL=https://cal.example.com \
+  calrs
 ```
 
-Or use the CLI to set up everything headless:
+Then visit `http://localhost:3000`, register an account, and add your calendars from the dashboard.
+
+### Docker Compose
+
+```yaml
+services:
+  calrs:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - calrs-data:/var/lib/calrs
+    environment:
+      - CALRS_BASE_URL=https://cal.example.com
+    restart: unless-stopped
+
+volumes:
+  calrs-data:
+```
+
+### Binary + systemd
+
+```bash
+# Build from source
+cargo build --release
+
+# Install
+sudo cp target/release/calrs /usr/local/bin/
+sudo cp -r templates /var/lib/calrs/templates
+
+# Create a system user
+sudo useradd -r -s /bin/false -m -d /var/lib/calrs calrs
+
+# Install and configure the service
+sudo cp calrs.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now calrs
+```
+
+Edit `/etc/systemd/system/calrs.service` to set `CALRS_BASE_URL` to your public URL. The service runs on port 3000 by default — put nginx or caddy in front for TLS.
+
+### From source (development)
+
+```bash
+cargo build --release
+calrs init
+calrs serve --port 3000
+```
+
+## CLI quick start
+
+Once installed, you can manage everything from the web UI or use the CLI:
 
 ```bash
 # Connect your CalDAV calendar
@@ -216,9 +266,9 @@ calrs/
 - [x] Group event types (combined availability + round-robin)
 - [x] Timezone support
 - [x] Calendar source management from the web UI
+- [x] Docker image + systemd service
 - [ ] CalDAV write (push confirmed bookings back to your calendar)
 - [ ] Recurrence rule expansion
-- [ ] Docker image
 
 ## License
 
