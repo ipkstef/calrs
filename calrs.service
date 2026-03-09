@@ -1,6 +1,6 @@
 [Unit]
 Description=calrs — self-hostable scheduling
-Documentation=https://github.com/vates/calrs
+Documentation=https://github.com/olivierlambert/calrs
 After=network.target
 
 [Service]

@@ -5,5 +5,5 @@ language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/vates/calrs"
-edit-url-template = "https://github.com/vates/calrs/edit/main/docs/src/{path}"
+git-repository-url = "https://github.com/olivierlambert/calrs"
+edit-url-template = "https://github.com/olivierlambert/calrs/edit/main/docs/src/{path}"

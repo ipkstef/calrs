@@ -4,7 +4,7 @@ version = "0.8.6"
 edition = "2021"
 description = "A fast, self-hostable scheduling platform. Like Cal.com, but written in Rust."
 license = "AGPL-3.0"
-repository = "https://github.com/vates/calrs"
+repository = "https://github.com/olivierlambert/calrs"
 
 [[bin]]
 name = "calrs"
