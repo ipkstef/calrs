@@ -26,6 +26,7 @@ pub fn create_router(pool: SqlitePool) -> Router {
 
     Router::new()
         .merge(crate::auth::auth_router())
+        .route("/", get(root_redirect))
         .route("/dashboard", get(dashboard))
         .route("/dashboard/bookings/{id}/cancel", post(cancel_booking))
         .route("/dashboard/bookings/{id}/confirm", post(confirm_booking))
@@ -58,6 +59,12 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/{slug}", get(show_slots))
         .route("/{slug}/book", get(show_book_form).post(handle_booking))
         .with_state(state)
+}
+
+// --- Root redirect ---
+
+async fn root_redirect() -> impl IntoResponse {
+    Redirect::to("/auth/login")
 }
 
 // --- Dashboard ---
