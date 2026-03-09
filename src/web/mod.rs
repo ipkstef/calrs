@@ -61,6 +61,7 @@ pub struct AppState {
 
 pub fn create_router(pool: SqlitePool) -> Router {
     let mut env = Environment::new();
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
     env.set_loader(minijinja::path_loader("templates"));
 
     let state = Arc::new(AppState {
@@ -93,6 +94,8 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/dashboard/admin/users/{id}/toggle-enabled", post(admin_toggle_enabled))
         .route("/dashboard/admin/auth", post(admin_update_auth))
         .route("/dashboard/admin/oidc", post(admin_update_oidc))
+        .route("/dashboard/admin/impersonate/{id}", post(admin_impersonate))
+        .route("/dashboard/admin/stop-impersonate", post(admin_stop_impersonate))
         // Group event type management
         .route("/dashboard/group-event-types/new", get(new_group_event_type_form).post(create_group_event_type))
         // Group public routes (before the catch-all)
@@ -109,6 +112,14 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .with_state(state)
 }
 
+/// Helper: create impersonation template context values (active, target_name, admin_name).
+fn impersonation_ctx(auth_user: &crate::auth::AuthUser) -> (bool, String, String) {
+    match &auth_user.impersonation {
+        Some(info) => (true, info.target_name.clone(), info.admin_name.clone()),
+        None => (false, String::new(), String::new()),
+    }
+}
+
 // --- Root redirect ---
 
 async fn root_redirect() -> impl IntoResponse {
@@ -121,7 +132,7 @@ async fn dashboard(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let event_types: Vec<(String, String, i32, bool, i32)> = sqlx::query_as(
         "SELECT et.slug, et.title, et.duration_min, et.enabled, et.requires_confirmation
@@ -272,11 +283,15 @@ async fn dashboard(
         })
         .collect();
 
+    let (impersonating, impersonating_name, _impersonating_admin) = impersonation_ctx(&auth_user);
+    // When impersonating, show admin role to keep admin button accessible
+    let effective_role = if impersonating { "admin".to_string() } else { user.role.clone() };
+
     Html(
         tmpl.render(context! {
             user_name => user.name,
             user_email => user.email,
-            user_role => user.role,
+            user_role => effective_role,
             username => user.username,
             event_types => et_ctx,
             group_event_types => group_et_ctx,
@@ -284,6 +299,8 @@ async fn dashboard(
             pending_bookings => pending_ctx,
             bookings => bookings_ctx,
             sources => sources_ctx,
+            impersonating => impersonating,
+            impersonating_name => impersonating_name,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
     )
@@ -302,7 +319,7 @@ async fn cancel_booking(
     Path(booking_id): Path<String>,
     Form(form): Form<CancelForm>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     // Verify the booking belongs to this user and is confirmed
     let booking: Option<(String, String, String, String, String, String, String, String)> =
@@ -370,7 +387,7 @@ async fn confirm_booking(
     auth_user: crate::auth::AuthUser,
     Path(booking_id): Path<String>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     // Verify the booking belongs to this user and is pending
     let booking: Option<(String, String, String, String, String, String, String, Option<String>)> =
@@ -455,7 +472,7 @@ async fn new_event_type_form(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     // Get groups the user belongs to
     let groups: Vec<(String, String)> = sqlx::query_as(
@@ -504,7 +521,7 @@ async fn create_event_type(
     auth_user: crate::auth::AuthUser,
     Form(form): Form<EventTypeForm>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     // Find the user's account
     let account_id: Option<String> = sqlx::query_scalar(
@@ -601,7 +618,7 @@ async fn edit_event_type_form(
     auth_user: crate::auth::AuthUser,
     Path(slug): Path<String>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, i32, String, Option<String>)> = sqlx::query_as(
         "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value
@@ -676,7 +693,7 @@ async fn update_event_type(
     Path(slug): Path<String>,
     Form(form): Form<EventTypeForm>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let et: Option<(String, String)> = sqlx::query_as(
         "SELECT et.id, et.account_id
@@ -770,7 +787,7 @@ async fn toggle_event_type(
     auth_user: crate::auth::AuthUser,
     Path(slug): Path<String>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let _ = sqlx::query(
         "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
@@ -842,7 +859,7 @@ async fn create_source(
     auth_user: crate::auth::AuthUser,
     Form(form): Form<SourceForm>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let account_id: Option<String> = sqlx::query_scalar(
         "SELECT id FROM accounts WHERE user_id = ? LIMIT 1",
@@ -925,7 +942,7 @@ async fn remove_source(
     auth_user: crate::auth::AuthUser,
     Path(source_id): Path<String>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     // Verify source belongs to this user before deleting
     let _ = sqlx::query(
@@ -944,7 +961,7 @@ async fn test_source(
     auth_user: crate::auth::AuthUser,
     Path(source_id): Path<String>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let source: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT cs.url, cs.username, cs.password_enc, cs.name
@@ -993,7 +1010,7 @@ async fn sync_source(
     auth_user: crate::auth::AuthUser,
     Path(source_id): Path<String>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let source: Option<(String, String, String, String, String)> = sqlx::query_as(
         "SELECT cs.id, cs.url, cs.username, cs.password_enc, cs.name
@@ -1172,7 +1189,7 @@ async fn set_write_calendar(
     Path(source_id): Path<String>,
     Form(form): Form<WriteCalendarForm>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     // Verify source belongs to this user
     let owned: Option<(String,)> = sqlx::query_as(
@@ -1239,7 +1256,7 @@ async fn new_group_event_type_form(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let groups: Vec<(String, String)> = sqlx::query_as(
         "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
@@ -1293,7 +1310,7 @@ async fn create_group_event_type(
     auth_user: crate::auth::AuthUser,
     Form(form): Form<EventTypeForm>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
 
     let group_id = match form.group_id.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(gid) => gid.to_string(),
@@ -2951,7 +2968,7 @@ async fn troubleshoot(
     auth_user: crate::auth::AuthUser,
     Query(params): Query<TroubleshootQuery>,
 ) -> impl IntoResponse {
-    let user = &auth_user.0;
+    let user = &auth_user.user;
     let host_tz = get_host_tz(&state.pool, "").await;
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
 
@@ -3352,6 +3369,7 @@ async fn troubleshoot(
         Err(e) => return Html(format!("Template error: {}", e)),
     };
 
+    let (impersonating, impersonating_name, _impersonating_admin) = impersonation_ctx(&auth_user);
     Html(tmpl.render(context! {
         user_name => &user.name,
         no_event_types => false,
@@ -3370,6 +3388,8 @@ async fn troubleshoot(
         buf_before => buf_before,
         buf_after => buf_after,
         min_notice => min_notice,
+        impersonating => impersonating,
+        impersonating_name => impersonating_name,
     }).unwrap_or_default())
 }
 
@@ -3613,6 +3633,28 @@ async fn admin_update_oidc(
     }
 
     Redirect::to("/dashboard/admin")
+}
+
+// --- Impersonation ---
+
+async fn admin_impersonate(
+    State(_state): State<Arc<AppState>>,
+    _admin: crate::auth::AdminUser,
+    Path(user_id): Path<String>,
+) -> impl IntoResponse {
+    let cookie = format!(
+        "calrs_impersonate={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
+        user_id,
+        86400 // 24 hours
+    );
+    ([("Set-Cookie", cookie)], Redirect::to("/dashboard")).into_response()
+}
+
+async fn admin_stop_impersonate(
+    _admin: crate::auth::AdminUser,
+) -> impl IntoResponse {
+    let cookie = "calrs_impersonate=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0";
+    ([("Set-Cookie", cookie.to_string())], Redirect::to("/dashboard")).into_response()
 }
 
 // --- CalDAV write-back ---

@@ -17,6 +17,7 @@ use crate::models::{AuthConfig, Session, User};
 use crate::web::AppState;
 
 const SESSION_COOKIE: &str = "calrs_session";
+const IMPERSONATE_COOKIE: &str = "calrs_impersonate";
 const SESSION_DURATION_DAYS: i64 = 30;
 
 // --- Password hashing ---
@@ -83,6 +84,15 @@ pub async fn validate_session(pool: &SqlitePool, token: &str) -> Option<User> {
     .await
     .ok()
     .flatten()
+}
+
+pub async fn get_user_by_id(pool: &SqlitePool, user_id: &str) -> Option<User> {
+    sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ? AND enabled = 1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
 }
 
 pub async fn delete_session(pool: &SqlitePool, token: &str) -> Result<()> {
@@ -166,8 +176,20 @@ pub async fn generate_username(pool: &SqlitePool, email: &str) -> Result<String>
 
 // --- Axum extractors ---
 
+/// Info about an active impersonation session.
+#[derive(Clone)]
+pub struct ImpersonationInfo {
+    pub admin_name: String,
+    pub target_name: String,
+}
+
 /// Extractor that requires an authenticated user. Redirects to /auth/login if not authenticated.
-pub struct AuthUser(pub User);
+/// Supports admin impersonation: if the `calrs_impersonate` cookie is set and the real user is
+/// an admin, returns the impersonated user instead.
+pub struct AuthUser {
+    pub user: User,
+    pub impersonation: Option<ImpersonationInfo>,
+}
 
 impl FromRequestParts<Arc<AppState>> for AuthUser {
     type Rejection = Response;
@@ -181,17 +203,37 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             .get(SESSION_COOKIE)
             .map(|c| c.value().to_string());
 
-        if let Some(token) = token {
-            if let Some(user) = validate_session(&state.pool, &token).await {
-                return Ok(AuthUser(user));
+        let real_user = match token {
+            Some(ref token) => validate_session(&state.pool, token).await,
+            None => None,
+        };
+
+        let real_user = match real_user {
+            Some(u) => u,
+            None => return Err(Redirect::to("/auth/login").into_response()),
+        };
+
+        // Check for impersonation
+        if real_user.role == "admin" {
+            if let Some(target_id) = jar.get(IMPERSONATE_COOKIE).map(|c| c.value().to_string()) {
+                if target_id != real_user.id {
+                    if let Some(target_user) = get_user_by_id(&state.pool, &target_id).await {
+                        let info = ImpersonationInfo {
+                            admin_name: real_user.name.clone(),
+                            target_name: target_user.name.clone(),
+                        };
+                        return Ok(AuthUser { user: target_user, impersonation: Some(info) });
+                    }
+                }
             }
         }
 
-        Err(Redirect::to("/auth/login").into_response())
+        Ok(AuthUser { user: real_user, impersonation: None })
     }
 }
 
 /// Extractor that requires an admin user. Returns 403 if not admin.
+/// Always uses the real session user, ignoring impersonation.
 pub struct AdminUser(pub User);
 
 impl FromRequestParts<Arc<AppState>> for AdminUser {
@@ -201,13 +243,21 @@ impl FromRequestParts<Arc<AppState>> for AdminUser {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
+        let jar = CookieJar::from_headers(&parts.headers);
+        let token = jar
+            .get(SESSION_COOKIE)
+            .map(|c| c.value().to_string());
 
-        if user.role != "admin" {
-            return Err((StatusCode::FORBIDDEN, "Admin access required").into_response());
+        let real_user = match token {
+            Some(ref token) => validate_session(&state.pool, token).await,
+            None => None,
+        };
+
+        match real_user {
+            Some(user) if user.role == "admin" => Ok(AdminUser(user)),
+            Some(_) => Err((StatusCode::FORBIDDEN, "Admin access required").into_response()),
+            None => Err(Redirect::to("/auth/login").into_response()),
         }
-
-        Ok(AdminUser(user))
     }
 }
 

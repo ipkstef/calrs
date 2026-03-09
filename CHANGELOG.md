@@ -46,6 +46,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Availability troubleshoot | 0.7.0 | Visual timeline showing why slots are blocked |
 | Duplicate email fix | 0.7.0 | Guest emails use METHOD:PUBLISH to avoid mail server re-invites |
 | RECURRENCE-ID handling | 0.7.1 | Modified recurring event instances no longer cause phantom occurrences |
+| Admin impersonation | 0.8.0 | Admins can impersonate any user for troubleshooting |
+
+## [0.8.0] - 2026-03-09
+
+### Added
+
+- **Admin impersonation** — admins can impersonate any user from the admin dashboard to troubleshoot their configuration (Closes #7)
+  - "Impersonate" button on each user row in the admin dashboard
+  - Amber banner at the top of all pages while impersonating, showing who is being impersonated
+  - "Stop impersonating" button to return to the admin's own session
+  - Cookie-based implementation (`calrs_impersonate`), 24-hour expiry, HttpOnly + Secure
+  - Admin pages remain accessible while impersonating (uses real session, not impersonated user)
+  - Dashboard shows the impersonated user's event types, bookings, and calendar sources
 
 ## [0.7.2] - 2026-03-09
 
