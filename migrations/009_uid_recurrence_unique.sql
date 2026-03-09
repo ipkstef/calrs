@@ -4,25 +4,28 @@
 
 -- SQLite cannot ALTER a UNIQUE constraint, so we recreate the table.
 CREATE TABLE events_new (
-    id          TEXT PRIMARY KEY,
-    calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
-    uid         TEXT NOT NULL,
-    summary     TEXT,
-    start_at    TEXT NOT NULL,
-    end_at      TEXT NOT NULL,
-    location    TEXT,
-    description TEXT,
-    status      TEXT,
-    rrule       TEXT,
-    raw_ical    TEXT,
-    recurrence_id TEXT,
-    all_day     INTEGER NOT NULL DEFAULT 0,
-    timezone    TEXT,
-    synced_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    id              TEXT PRIMARY KEY,
+    calendar_id     TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+    uid             TEXT NOT NULL,
+    etag            TEXT,
+    summary         TEXT,
+    description     TEXT,
+    location        TEXT,
+    start_at        TEXT NOT NULL,
+    end_at          TEXT NOT NULL,
+    all_day         INTEGER NOT NULL DEFAULT 0,
+    timezone        TEXT,
+    rrule           TEXT,
+    status          TEXT DEFAULT 'confirmed',
+    raw_ical        TEXT,
+    synced_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    recurrence_id   TEXT,
     UNIQUE(uid, COALESCE(recurrence_id, ''))
 );
 
-INSERT INTO events_new SELECT * FROM events;
+INSERT INTO events_new (id, calendar_id, uid, etag, summary, description, location, start_at, end_at, all_day, timezone, rrule, status, raw_ical, synced_at, recurrence_id)
+    SELECT id, calendar_id, uid, etag, summary, description, location, start_at, end_at, all_day, timezone, rrule, status, raw_ical, synced_at, recurrence_id FROM events;
+
 DROP TABLE events;
 ALTER TABLE events_new RENAME TO events;
 

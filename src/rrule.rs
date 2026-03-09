@@ -452,6 +452,26 @@ mod tests {
     }
 
     #[test]
+    fn test_weekly_multi_byday_devops() {
+        // Real case: DevOps tools daily, WEEKLY on MO,TU,TH,FR
+        // Starts 2025-10-20 (Monday), UNTIL 2026-03-15
+        let start = dt(2025, 10, 20, 10, 30);
+        let end = dt(2025, 10, 20, 11, 0);
+        let window_start = dt(2026, 3, 10, 0, 0);
+        let window_end = dt(2026, 3, 10, 23, 59);
+
+        let results = expand_rrule(
+            start, end,
+            "FREQ=WEEKLY;UNTIL=20260315T093000;INTERVAL=1;BYDAY=MO,TU,TH,FR",
+            &[], window_start, window_end,
+        );
+        // March 10 is a Tuesday — should have one occurrence at 10:30
+        assert!(!results.is_empty(), "Expected occurrence on Tuesday March 10");
+        assert_eq!(results[0].0, dt(2026, 3, 10, 10, 30));
+        assert_eq!(results[0].1, dt(2026, 3, 10, 11, 0));
+    }
+
+    #[test]
     fn test_daily_count_pre_window() {
         // Daily event with COUNT=3 starting before the window
         let start = dt(2026, 3, 1, 9, 0);
