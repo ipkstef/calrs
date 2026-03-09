@@ -78,7 +78,11 @@
     {% endfor %}
   </div>
   {% else %}
+    {% if not has_rules %}
+  <p style="font-size: 0.85rem; color: var(--text-muted);">No availability rules for this day of the week. This event type is not bookable on {{ date_label }}.</p>
+    {% else %}
   <p style="font-size: 0.85rem; color: var(--text-muted);">No blocked slots during availability hours. All times are bookable.</p>
+    {% endif %}
   {% endif %}
 </div>
 {% endif %}

@@ -3438,6 +3438,7 @@ async fn troubleshoot(
         date_label => date_label,
         prev_date => prev_date,
         next_date => next_date,
+        has_rules => !rules.is_empty(),
         blocks => blocks_ctx,
         hour_markers => hour_markers,
         breakdown => breakdown_ctx,
