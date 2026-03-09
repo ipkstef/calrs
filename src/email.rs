@@ -769,3 +769,194 @@ async fn send_email(config: &SmtpConfig, email: Message) -> Result<()> {
     mailer.send(email).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- sanitize_ics ---
+
+    #[test]
+    fn sanitize_strips_cr_lf() {
+        assert_eq!(sanitize_ics("line1\r\nline2\nline3"), "line1 line2 line3");
+    }
+
+    #[test]
+    fn sanitize_escapes_semicolon_comma() {
+        assert_eq!(sanitize_ics("a;b,c"), "a\\;b\\,c");
+    }
+
+    #[test]
+    fn sanitize_combined() {
+        assert_eq!(sanitize_ics("Meeting; room A\nfloor 2"), "Meeting\\; room A floor 2");
+    }
+
+    #[test]
+    fn sanitize_preserves_normal_text() {
+        assert_eq!(sanitize_ics("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn sanitize_empty_string() {
+        assert_eq!(sanitize_ics(""), "");
+    }
+
+    #[test]
+    fn sanitize_prevents_ics_injection() {
+        // An attacker tries to inject a new ICS field via newline
+        let malicious = "Meeting\r\nATTENDEE:evil@hacker.com";
+        let sanitized = sanitize_ics(malicious);
+        assert!(!sanitized.contains('\n'));
+        assert!(!sanitized.contains('\r'));
+    }
+
+    // --- generate_ics ---
+
+    #[test]
+    fn generate_ics_basic_structure() {
+        let details = BookingDetails {
+            event_title: "Intro Call".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "14:00".to_string(),
+            end_time: "14:30".to_string(),
+            guest_name: "Jane Doe".to_string(),
+            guest_email: "jane@example.com".to_string(),
+            guest_timezone: "Europe/Paris".to_string(),
+            host_name: "Alice".to_string(),
+            host_email: "alice@cal.rs".to_string(),
+            uid: "test-uid-123".to_string(),
+            notes: None,
+            location: None,
+        };
+
+        let ics = generate_ics(&details, "PUBLISH");
+        assert!(ics.contains("BEGIN:VCALENDAR"));
+        assert!(ics.contains("END:VCALENDAR"));
+        assert!(ics.contains("METHOD:PUBLISH"));
+        assert!(ics.contains("BEGIN:VEVENT"));
+        assert!(ics.contains("END:VEVENT"));
+        assert!(ics.contains("UID:test-uid-123"));
+        assert!(ics.contains("DTSTART:20260310T140000"));
+        assert!(ics.contains("DTEND:20260310T143000"));
+        assert!(ics.contains("SUMMARY:Intro Call"));
+        assert!(ics.contains("ORGANIZER;CN=Alice:mailto:alice@cal.rs"));
+        assert!(ics.contains("ATTENDEE;CN=Jane Doe;RSVP=TRUE:mailto:jane@example.com"));
+        assert!(ics.contains("STATUS:CONFIRMED"));
+    }
+
+    #[test]
+    fn generate_ics_with_location() {
+        let details = BookingDetails {
+            event_title: "Meeting".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "09:00".to_string(),
+            end_time: "10:00".to_string(),
+            guest_name: "Bob".to_string(),
+            guest_email: "bob@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
+            host_name: "Alice".to_string(),
+            host_email: "alice@test.com".to_string(),
+            uid: "uid-456".to_string(),
+            notes: Some("Discuss roadmap".to_string()),
+            location: Some("https://meet.example.com/room".to_string()),
+        };
+
+        let ics = generate_ics(&details, "REQUEST");
+        assert!(ics.contains("METHOD:REQUEST"));
+        assert!(ics.contains("LOCATION:https://meet.example.com/room"));
+    }
+
+    #[test]
+    fn generate_ics_escapes_special_chars() {
+        let details = BookingDetails {
+            event_title: "Meet; discuss, plan".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "09:00".to_string(),
+            end_time: "10:00".to_string(),
+            guest_name: "O'Brien".to_string(),
+            guest_email: "ob@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
+            host_name: "Host".to_string(),
+            host_email: "host@test.com".to_string(),
+            uid: "uid-789".to_string(),
+            notes: None,
+            location: None,
+        };
+
+        let ics = generate_ics(&details, "PUBLISH");
+        assert!(ics.contains("SUMMARY:Meet\\; discuss\\, plan"));
+    }
+
+    // --- h (HTML escaping) ---
+
+    #[test]
+    fn html_escape_entities() {
+        assert_eq!(h("<script>alert('xss')</script>"), "&lt;script&gt;alert('xss')&lt;/script&gt;");
+        assert_eq!(h("a & b"), "a &amp; b");
+        assert_eq!(h("he said \"hello\""), "he said &quot;hello&quot;");
+    }
+
+    #[test]
+    fn html_escape_plain_text() {
+        assert_eq!(h("Hello World"), "Hello World");
+    }
+
+    // --- render_html_email ---
+
+    #[test]
+    fn html_email_contains_structure() {
+        let html = render_html_email(
+            "Hi Alice,",
+            "Your booking is confirmed!",
+            "#16a34a",
+            &[
+                EmailRow { label: "Event", value: "Intro Call".to_string() },
+                EmailRow { label: "Date", value: "2026-03-10".to_string() },
+            ],
+            Some("Calendar invite attached."),
+        );
+
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("Hi Alice,"));
+        assert!(html.contains("Your booking is confirmed!"));
+        assert!(html.contains("#16a34a")); // accent color
+        assert!(html.contains("Intro Call"));
+        assert!(html.contains("2026-03-10"));
+        assert!(html.contains("Calendar invite attached."));
+        assert!(html.contains("calrs")); // footer branding
+    }
+
+    #[test]
+    fn html_email_with_actions() {
+        let html = render_html_email_with_actions(
+            "Action required",
+            "Someone wants to book.",
+            "#f59e0b",
+            &[],
+            None,
+            &[
+                EmailAction { label: "Approve".to_string(), url: "https://cal.rs/approve/tok".to_string(), color: "#16a34a".to_string() },
+                EmailAction { label: "Decline".to_string(), url: "https://cal.rs/decline/tok".to_string(), color: "#dc2626".to_string() },
+            ],
+        );
+
+        assert!(html.contains("Approve"));
+        assert!(html.contains("Decline"));
+        assert!(html.contains("https://cal.rs/approve/tok"));
+        assert!(html.contains("https://cal.rs/decline/tok"));
+    }
+
+    #[test]
+    fn html_email_escapes_values() {
+        let html = render_html_email(
+            "Hi,",
+            "Test",
+            "#000",
+            &[EmailRow { label: "Notes", value: "<script>alert(1)</script>".to_string() }],
+            None,
+        );
+
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("&lt;script&gt;"));
+    }
+}

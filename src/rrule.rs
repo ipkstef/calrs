@@ -484,4 +484,200 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, dt(2026, 3, 3, 9, 0));
     }
+
+    // --- Additional edge case tests ---
+
+    #[test]
+    fn test_daily_interval_2() {
+        let start = dt(2026, 3, 1, 9, 0);
+        let end = dt(2026, 3, 1, 10, 0);
+        let window_start = dt(2026, 3, 1, 0, 0);
+        let window_end = dt(2026, 3, 8, 0, 0);
+
+        let results = expand_rrule(start, end, "FREQ=DAILY;INTERVAL=2", &[], window_start, window_end);
+        // Mar 1, 3, 5, 7
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0.date(), NaiveDate::from_ymd_opt(2026, 3, 1).unwrap());
+        assert_eq!(results[1].0.date(), NaiveDate::from_ymd_opt(2026, 3, 3).unwrap());
+        assert_eq!(results[2].0.date(), NaiveDate::from_ymd_opt(2026, 3, 5).unwrap());
+        assert_eq!(results[3].0.date(), NaiveDate::from_ymd_opt(2026, 3, 7).unwrap());
+    }
+
+    #[test]
+    fn test_weekly_interval_2() {
+        let start = dt(2026, 3, 2, 10, 0); // Monday
+        let end = dt(2026, 3, 2, 11, 0);
+        let window_start = dt(2026, 3, 1, 0, 0);
+        let window_end = dt(2026, 4, 1, 0, 0);
+
+        let results = expand_rrule(start, end, "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO", &[], window_start, window_end);
+        // Mar 2, Mar 16, Mar 30
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0.date(), NaiveDate::from_ymd_opt(2026, 3, 2).unwrap());
+        assert_eq!(results[1].0.date(), NaiveDate::from_ymd_opt(2026, 3, 16).unwrap());
+        assert_eq!(results[2].0.date(), NaiveDate::from_ymd_opt(2026, 3, 30).unwrap());
+    }
+
+    #[test]
+    fn test_monthly_last_friday() {
+        let start = dt(2026, 1, 30, 15, 0); // Last Friday of Jan
+        let end = dt(2026, 1, 30, 16, 0);
+        let window_start = dt(2026, 2, 1, 0, 0);
+        let window_end = dt(2026, 5, 1, 0, 0);
+
+        let results = expand_rrule(start, end, "FREQ=MONTHLY;BYDAY=-1FR", &[], window_start, window_end);
+        // Last Friday: Feb 27, Mar 27, Apr 24
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0.date(), NaiveDate::from_ymd_opt(2026, 2, 27).unwrap());
+        assert_eq!(results[1].0.date(), NaiveDate::from_ymd_opt(2026, 3, 27).unwrap());
+        assert_eq!(results[2].0.date(), NaiveDate::from_ymd_opt(2026, 4, 24).unwrap());
+    }
+
+    #[test]
+    fn test_monthly_same_day() {
+        // Monthly on the 15th
+        let start = dt(2026, 1, 15, 9, 0);
+        let end = dt(2026, 1, 15, 10, 0);
+        let window_start = dt(2026, 3, 1, 0, 0);
+        let window_end = dt(2026, 6, 1, 0, 0);
+
+        let results = expand_rrule(start, end, "FREQ=MONTHLY;INTERVAL=1", &[], window_start, window_end);
+        assert_eq!(results.len(), 3); // Mar 15, Apr 15, May 15
+        assert_eq!(results[0].0.date(), NaiveDate::from_ymd_opt(2026, 3, 15).unwrap());
+        assert_eq!(results[1].0.date(), NaiveDate::from_ymd_opt(2026, 4, 15).unwrap());
+        assert_eq!(results[2].0.date(), NaiveDate::from_ymd_opt(2026, 5, 15).unwrap());
+    }
+
+    #[test]
+    fn test_monthly_feb_30_skipped() {
+        // Monthly on the 31st — Feb has no 31st
+        let start = dt(2026, 1, 31, 9, 0);
+        let end = dt(2026, 1, 31, 10, 0);
+        let window_start = dt(2026, 2, 1, 0, 0);
+        let window_end = dt(2026, 4, 1, 0, 0);
+
+        let results = expand_rrule(start, end, "FREQ=MONTHLY;INTERVAL=1", &[], window_start, window_end);
+        // Feb 31 doesn't exist → skipped; Mar 31 exists
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0.date(), NaiveDate::from_ymd_opt(2026, 3, 31).unwrap());
+    }
+
+    #[test]
+    fn test_invalid_rrule() {
+        let start = dt(2026, 3, 1, 9, 0);
+        let end = dt(2026, 3, 1, 10, 0);
+        let results = expand_rrule(start, end, "FREQ=YEARLY", &[], start, end);
+        assert!(results.is_empty()); // YEARLY not supported
+    }
+
+    #[test]
+    fn test_empty_rrule() {
+        let start = dt(2026, 3, 1, 9, 0);
+        let end = dt(2026, 3, 1, 10, 0);
+        let results = expand_rrule(start, end, "", &[], start, end);
+        assert!(results.is_empty());
+    }
+
+    // --- parse_ical_datetime ---
+
+    #[test]
+    fn test_parse_compact_format() {
+        assert_eq!(parse_ical_datetime("20260310T140000"), Some(dt(2026, 3, 10, 14, 0)));
+    }
+
+    #[test]
+    fn test_parse_compact_with_z() {
+        assert_eq!(parse_ical_datetime("20260310T140000Z"), Some(dt(2026, 3, 10, 14, 0)));
+    }
+
+    #[test]
+    fn test_parse_iso_format() {
+        assert_eq!(parse_ical_datetime("2026-03-10T14:00:00"), Some(dt(2026, 3, 10, 14, 0)));
+    }
+
+    #[test]
+    fn test_parse_allday_format() {
+        let result = parse_ical_datetime("20260310");
+        assert_eq!(result, Some(dt(2026, 3, 10, 0, 0)));
+    }
+
+    #[test]
+    fn test_parse_invalid() {
+        assert_eq!(parse_ical_datetime("not-a-date"), None);
+        assert_eq!(parse_ical_datetime(""), None);
+    }
+
+    // --- nth_weekday_of_month ---
+
+    #[test]
+    fn test_first_monday_march_2026() {
+        assert_eq!(
+            nth_weekday_of_month(2026, 3, Weekday::Mon, 1),
+            Some(NaiveDate::from_ymd_opt(2026, 3, 2).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_second_monday_march_2026() {
+        assert_eq!(
+            nth_weekday_of_month(2026, 3, Weekday::Mon, 2),
+            Some(NaiveDate::from_ymd_opt(2026, 3, 9).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_last_friday_march_2026() {
+        assert_eq!(
+            nth_weekday_of_month(2026, 3, Weekday::Fri, -1),
+            Some(NaiveDate::from_ymd_opt(2026, 3, 27).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_fifth_monday_march_2026_none() {
+        // March 2026 has 5 Mondays (2,9,16,23,30) so 5th exists
+        assert_eq!(
+            nth_weekday_of_month(2026, 3, Weekday::Mon, 5),
+            Some(NaiveDate::from_ymd_opt(2026, 3, 30).unwrap())
+        );
+        // But 6th doesn't
+        assert_eq!(nth_weekday_of_month(2026, 3, Weekday::Mon, 6), None);
+    }
+
+    // --- extract_exdates with multiple formats ---
+
+    #[test]
+    fn test_extract_exdates_with_timezone() {
+        let ical = "BEGIN:VEVENT\nDTSTART:20260302T100000\nRRULE:FREQ=WEEKLY\nEXDATE;TZID=Europe/Paris:20260309T100000\nEND:VEVENT";
+        let exdates = extract_exdates(ical);
+        assert_eq!(exdates.len(), 1);
+        assert_eq!(exdates[0], dt(2026, 3, 9, 10, 0));
+    }
+
+    #[test]
+    fn test_extract_exdates_comma_separated() {
+        let ical = "BEGIN:VEVENT\nEXDATE:20260309T100000,20260316T100000,20260323T100000\nEND:VEVENT";
+        let exdates = extract_exdates(ical);
+        assert_eq!(exdates.len(), 3);
+    }
+
+    // --- week_start ---
+
+    #[test]
+    fn test_week_start_monday() {
+        let monday = NaiveDate::from_ymd_opt(2026, 3, 9).unwrap(); // Monday
+        assert_eq!(week_start(monday), monday);
+    }
+
+    #[test]
+    fn test_week_start_sunday() {
+        let sunday = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap(); // Sunday
+        assert_eq!(week_start(sunday), NaiveDate::from_ymd_opt(2026, 3, 9).unwrap());
+    }
+
+    #[test]
+    fn test_week_start_wednesday() {
+        let wed = NaiveDate::from_ymd_opt(2026, 3, 11).unwrap(); // Wednesday
+        assert_eq!(week_start(wed), NaiveDate::from_ymd_opt(2026, 3, 9).unwrap());
+    }
 }

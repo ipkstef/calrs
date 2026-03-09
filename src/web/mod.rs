@@ -4039,3 +4039,41 @@ async fn caldav_delete_booking(pool: &SqlitePool, user_id: &str, booking_uid: &s
         eprintln!("CalDAV delete failed: {}", e);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rate_limiter_allows_under_limit() {
+        let limiter = RateLimiter::new(3, 60);
+        assert!(!limiter.check_limited("ip1").await);
+        assert!(!limiter.check_limited("ip1").await);
+        assert!(!limiter.check_limited("ip1").await);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_blocks_over_limit() {
+        let limiter = RateLimiter::new(2, 60);
+        assert!(!limiter.check_limited("ip1").await); // 1
+        assert!(!limiter.check_limited("ip1").await); // 2
+        assert!(limiter.check_limited("ip1").await);  // 3 → blocked
+        assert!(limiter.check_limited("ip1").await);  // still blocked
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_independent_per_ip() {
+        let limiter = RateLimiter::new(1, 60);
+        assert!(!limiter.check_limited("ip1").await);
+        assert!(limiter.check_limited("ip1").await); // ip1 blocked
+        assert!(!limiter.check_limited("ip2").await); // ip2 still ok
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_resets_after_window() {
+        let limiter = RateLimiter::new(1, 0); // 0-second window = immediate expiry
+        assert!(!limiter.check_limited("ip1").await);
+        // Window has already expired (0 seconds)
+        assert!(!limiter.check_limited("ip1").await); // reset, allowed again
+    }
+}

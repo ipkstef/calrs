@@ -309,3 +309,213 @@ const REPORT_CALENDAR_DATA: &str = r#"<?xml version="1.0" encoding="utf-8"?>
     </c:comp-filter>
   </c:filter>
 </c:calendar-query>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- extract_tag ---
+
+    #[test]
+    fn extract_simple_tag() {
+        let xml = "<d:href>/principals/users/alice/</d:href>";
+        assert_eq!(extract_tag(xml, "d:href"), Some("/principals/users/alice/".to_string()));
+    }
+
+    #[test]
+    fn extract_tag_with_attributes() {
+        let xml = r#"<aic:calendar-color symbolic-color="custom">#1F6BFF</aic:calendar-color>"#;
+        assert_eq!(extract_tag(xml, "aic:calendar-color"), Some("#1F6BFF".to_string()));
+    }
+
+    #[test]
+    fn extract_tag_not_found() {
+        let xml = "<d:href>/path/</d:href>";
+        assert_eq!(extract_tag(xml, "d:displayname"), None);
+    }
+
+    #[test]
+    fn extract_tag_empty_content() {
+        let xml = "<d:displayname></d:displayname>";
+        assert_eq!(extract_tag(xml, "d:displayname"), None);
+    }
+
+    #[test]
+    fn extract_tag_whitespace_content() {
+        let xml = "<d:displayname>  My Calendar  </d:displayname>";
+        assert_eq!(extract_tag(xml, "d:displayname"), Some("My Calendar".to_string()));
+    }
+
+    #[test]
+    fn extract_tag_nested() {
+        let xml = "<d:current-user-principal><d:href>/principals/alice/</d:href></d:current-user-principal>";
+        // Searching for d:href within the principal block
+        assert_eq!(extract_tag(xml, "d:href"), Some("/principals/alice/".to_string()));
+    }
+
+    // --- resolve_url ---
+
+    #[test]
+    fn resolve_absolute_path() {
+        let client = CaldavClient::new("https://nextcloud.example.com/remote.php/dav", "user", "pass");
+        assert_eq!(
+            client.resolve_url("/principals/users/alice/"),
+            "https://nextcloud.example.com/principals/users/alice/"
+        );
+    }
+
+    #[test]
+    fn resolve_full_url_passthrough() {
+        let client = CaldavClient::new("https://nextcloud.example.com/remote.php/dav", "user", "pass");
+        assert_eq!(
+            client.resolve_url("https://other.server.com/calendars/"),
+            "https://other.server.com/calendars/"
+        );
+    }
+
+    #[test]
+    fn resolve_with_port() {
+        let client = CaldavClient::new("https://cal.example.com:8443/dav", "user", "pass");
+        // origin should include host but not port in the simple format
+        let resolved = client.resolve_url("/calendars/alice/");
+        assert!(resolved.starts_with("https://"));
+        assert!(resolved.ends_with("/calendars/alice/"));
+    }
+
+    // --- parse_calendar_list ---
+
+    #[test]
+    fn parse_calendars_filters_non_calendar() {
+        let xml = r#"
+<d:multistatus>
+  <d:response>
+    <d:href>/dav/calendars/alice/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/></d:resourcetype>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/calendars/alice/default/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+      <d:displayname>Personal</d:displayname>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/calendars/alice/work/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+      <d:displayname>Work</d:displayname>
+      <aic:calendar-color>#FF0000</aic:calendar-color>
+      <cso:getctag>ctag-123</cso:getctag>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let cals = parse_calendar_list(xml);
+        assert_eq!(cals.len(), 2);
+
+        assert_eq!(cals[0].href, "/dav/calendars/alice/default/");
+        assert_eq!(cals[0].display_name, Some("Personal".to_string()));
+        assert_eq!(cals[0].color, None);
+
+        assert_eq!(cals[1].href, "/dav/calendars/alice/work/");
+        assert_eq!(cals[1].display_name, Some("Work".to_string()));
+        assert_eq!(cals[1].color, Some("#FF0000".to_string()));
+        assert_eq!(cals[1].ctag, Some("ctag-123".to_string()));
+    }
+
+    #[test]
+    fn parse_calendars_alternative_namespaces() {
+        // BlueMind uses x1: for colors and cs: for ctags
+        let xml = r#"
+<d:multistatus>
+  <d:response>
+    <d:href>/dav/cal/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+      <d:displayname>BlueMind Cal</d:displayname>
+      <x1:calendar-color>#00FF00</x1:calendar-color>
+      <cs:getctag>ctag-bm</cs:getctag>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let cals = parse_calendar_list(xml);
+        assert_eq!(cals.len(), 1);
+        assert_eq!(cals[0].color, Some("#00FF00".to_string()));
+        assert_eq!(cals[0].ctag, Some("ctag-bm".to_string()));
+    }
+
+    #[test]
+    fn parse_calendars_empty_response() {
+        let xml = "<d:multistatus></d:multistatus>";
+        let cals = parse_calendar_list(xml);
+        assert!(cals.is_empty());
+    }
+
+    // --- parse_event_responses ---
+
+    #[test]
+    fn parse_events_extracts_ical() {
+        let xml = r#"
+<d:multistatus>
+  <d:response>
+    <d:href>/cal/event1.ics</d:href>
+    <d:propstat><d:prop>
+      <cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:ev1
+END:VEVENT
+END:VCALENDAR</cal:calendar-data>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/cal/event2.ics</d:href>
+    <d:propstat><d:prop>
+      <c:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:ev2
+END:VEVENT
+END:VCALENDAR</c:calendar-data>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let events = parse_event_responses(xml);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].href, "/cal/event1.ics");
+        assert!(events[0].ical_data.contains("UID:ev1"));
+        assert_eq!(events[1].href, "/cal/event2.ics");
+        assert!(events[1].ical_data.contains("UID:ev2"));
+    }
+
+    #[test]
+    fn parse_events_skips_empty_data() {
+        let xml = r#"
+<d:multistatus>
+  <d:response>
+    <d:href>/cal/no-data.ics</d:href>
+    <d:propstat><d:prop></d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let events = parse_event_responses(xml);
+        assert!(events.is_empty());
+    }
+
+    // --- CaldavClient::new origin parsing ---
+
+    #[test]
+    fn client_origin_parsing() {
+        let client = CaldavClient::new("https://cloud.example.com/remote.php/dav", "u", "p");
+        assert_eq!(client.origin, "https://cloud.example.com");
+        assert_eq!(client.base_url, "https://cloud.example.com/remote.php/dav");
+    }
+
+    #[test]
+    fn client_trims_trailing_slash() {
+        let client = CaldavClient::new("https://cloud.example.com/dav/", "u", "p");
+        assert_eq!(client.base_url, "https://cloud.example.com/dav");
+    }
+}

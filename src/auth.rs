@@ -1050,3 +1050,164 @@ pub fn generate_group_slug(name: &str) -> String {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- is_email_allowed ---
+
+    #[test]
+    fn email_allowed_no_restriction() {
+        assert!(is_email_allowed("alice@anything.com", &None));
+        assert!(is_email_allowed("alice@anything.com", &Some("".to_string())));
+        assert!(is_email_allowed("alice@anything.com", &Some("  ".to_string())));
+    }
+
+    #[test]
+    fn email_allowed_single_domain() {
+        let domains = Some("example.com".to_string());
+        assert!(is_email_allowed("alice@example.com", &domains));
+        assert!(!is_email_allowed("alice@other.com", &domains));
+    }
+
+    #[test]
+    fn email_allowed_multiple_domains() {
+        let domains = Some("example.com, company.org".to_string());
+        assert!(is_email_allowed("alice@example.com", &domains));
+        assert!(is_email_allowed("bob@company.org", &domains));
+        assert!(!is_email_allowed("eve@evil.com", &domains));
+    }
+
+    #[test]
+    fn email_allowed_case_insensitive() {
+        let domains = Some("Example.COM".to_string());
+        assert!(is_email_allowed("alice@example.com", &domains));
+        assert!(is_email_allowed("alice@EXAMPLE.COM", &domains));
+    }
+
+    #[test]
+    fn email_allowed_no_at_sign() {
+        let domains = Some("example.com".to_string());
+        assert!(!is_email_allowed("invalid-email", &domains));
+    }
+
+    #[test]
+    fn email_allowed_subdomain_not_matched() {
+        let domains = Some("example.com".to_string());
+        assert!(!is_email_allowed("alice@sub.example.com", &domains));
+    }
+
+    // --- generate_group_slug ---
+
+    #[test]
+    fn slug_basic() {
+        assert_eq!(generate_group_slug("Demo Team"), "demo-team");
+    }
+
+    #[test]
+    fn slug_with_slashes() {
+        assert_eq!(generate_group_slug("engineering/backend"), "engineering-backend");
+    }
+
+    #[test]
+    fn slug_collapses_dashes() {
+        assert_eq!(generate_group_slug("a - - b"), "a-b");
+    }
+
+    #[test]
+    fn slug_trims_leading_trailing() {
+        assert_eq!(generate_group_slug(" -hello- "), "hello");
+    }
+
+    #[test]
+    fn slug_special_chars() {
+        // Unicode alphanumeric chars are kept, non-alphanumeric become dashes
+        assert_eq!(generate_group_slug("café & más"), "café-más");
+        assert_eq!(generate_group_slug("test!@#$%"), "test");
+    }
+
+    #[test]
+    fn slug_empty_returns_group() {
+        assert_eq!(generate_group_slug(""), "group");
+        assert_eq!(generate_group_slug("---"), "group");
+        assert_eq!(generate_group_slug("///"), "group");
+    }
+
+    #[test]
+    fn slug_numeric() {
+        assert_eq!(generate_group_slug("team42"), "team42");
+    }
+
+    // --- extract_groups_from_id_token ---
+
+    #[test]
+    fn extract_groups_valid_token() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"RS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"sub":"user1","groups":["engineering","/admins","devops"]}"#);
+        let token = format!("{}.{}.fake-sig", header, payload);
+
+        let groups = extract_groups_from_id_token(&token);
+        assert_eq!(groups, Some(vec![
+            "engineering".to_string(),
+            "admins".to_string(),
+            "devops".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn extract_groups_no_groups_claim() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"RS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"sub":"user1","email":"alice@test.com"}"#);
+        let token = format!("{}.{}.fake-sig", header, payload);
+
+        assert_eq!(extract_groups_from_id_token(&token), None);
+    }
+
+    #[test]
+    fn extract_groups_empty_groups() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"RS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"sub":"user1","groups":[]}"#);
+        let token = format!("{}.{}.fake-sig", header, payload);
+
+        assert_eq!(extract_groups_from_id_token(&token), None);
+    }
+
+    #[test]
+    fn extract_groups_invalid_token() {
+        assert_eq!(extract_groups_from_id_token("not-a-jwt"), None);
+        assert_eq!(extract_groups_from_id_token("a.b"), None);
+        assert_eq!(extract_groups_from_id_token(""), None);
+    }
+
+    // --- hash_password / verify_password ---
+
+    #[test]
+    fn password_hash_roundtrip() {
+        let password = "SecureP@ss123";
+        let hash = hash_password(password).unwrap();
+        assert!(verify_password(password, &hash));
+        assert!(!verify_password("wrong-password", &hash));
+    }
+
+    #[test]
+    fn verify_password_invalid_hash() {
+        assert!(!verify_password("anything", "not-a-valid-hash"));
+        assert!(!verify_password("anything", ""));
+    }
+
+    #[test]
+    fn password_hashes_are_unique() {
+        let h1 = hash_password("same-password").unwrap();
+        let h2 = hash_password("same-password").unwrap();
+        assert_ne!(h1, h2); // different salts
+        assert!(verify_password("same-password", &h1));
+        assert!(verify_password("same-password", &h2));
+    }
+}

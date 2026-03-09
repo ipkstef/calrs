@@ -53,3 +53,90 @@ pub fn prompt_password(label: &str) -> String {
     io::stdin().read_line(&mut input).unwrap();
     input.trim().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- split_vevents ---
+
+    #[test]
+    fn split_single_vevent() {
+        let ical = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:abc\nEND:VEVENT\nEND:VCALENDAR";
+        let blocks = split_vevents(ical);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].starts_with("BEGIN:VEVENT"));
+        assert!(blocks[0].ends_with("END:VEVENT"));
+    }
+
+    #[test]
+    fn split_multiple_vevents() {
+        let ical = "\
+BEGIN:VCALENDAR\n\
+BEGIN:VEVENT\n\
+UID:abc\n\
+RRULE:FREQ=WEEKLY\n\
+END:VEVENT\n\
+BEGIN:VEVENT\n\
+UID:abc\n\
+RECURRENCE-ID:20260309T100000\n\
+END:VEVENT\n\
+END:VCALENDAR";
+        let blocks = split_vevents(ical);
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].contains("RRULE"));
+        assert!(blocks[1].contains("RECURRENCE-ID"));
+    }
+
+    #[test]
+    fn split_no_vevent_returns_whole() {
+        let ical = "BEGIN:VCALENDAR\nEND:VCALENDAR";
+        let blocks = split_vevents(ical);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0], ical);
+    }
+
+    #[test]
+    fn split_missing_end_vevent() {
+        let ical = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:abc\n";
+        let blocks = split_vevents(ical);
+        // No END:VEVENT → falls back to returning whole string
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0], ical);
+    }
+
+    // --- extract_vevent_field ---
+
+    #[test]
+    fn extract_existing_field() {
+        let vevent = "BEGIN:VEVENT\nUID:test-uid-123\nSUMMARY:Team meeting\nEND:VEVENT";
+        assert_eq!(extract_vevent_field(vevent, "UID"), Some("test-uid-123".to_string()));
+        assert_eq!(extract_vevent_field(vevent, "SUMMARY"), Some("Team meeting".to_string()));
+    }
+
+    #[test]
+    fn extract_field_with_params() {
+        // DTSTART has timezone parameters before the colon
+        let vevent = "BEGIN:VEVENT\nDTSTART;TZID=Europe/Paris:20260310T100000\nEND:VEVENT";
+        assert_eq!(extract_vevent_field(vevent, "DTSTART"), Some("20260310T100000".to_string()));
+    }
+
+    #[test]
+    fn extract_nonexistent_field() {
+        let vevent = "BEGIN:VEVENT\nUID:abc\nEND:VEVENT";
+        assert_eq!(extract_vevent_field(vevent, "SUMMARY"), None);
+    }
+
+    #[test]
+    fn extract_empty_value() {
+        let vevent = "BEGIN:VEVENT\nSUMMARY:\nEND:VEVENT";
+        assert_eq!(extract_vevent_field(vevent, "SUMMARY"), None);
+    }
+
+    #[test]
+    fn extract_does_not_match_substring() {
+        // DTSTART should not match DTSTART-EXTRA or other prefixed fields
+        let vevent = "BEGIN:VEVENT\nDTSTART:20260310T100000\nDTSTART-EXTRA:ignored\nEND:VEVENT";
+        assert_eq!(extract_vevent_field(vevent, "DTSTART"), Some("20260310T100000".to_string()));
+    }
+}
