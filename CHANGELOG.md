@@ -47,6 +47,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Duplicate email fix | 0.7.0 | Guest emails use METHOD:PUBLISH to avoid mail server re-invites |
 | RECURRENCE-ID handling | 0.7.1 | Modified recurring event instances no longer cause phantom occurrences |
 
+## [0.7.2] - 2026-03-09
+
+### Changed
+
+- **Internal refactoring** — extracted shared busy-time helpers (`fetch_busy_times_global`, `fetch_busy_times_for_user`, `has_conflict`, `BusySource`) eliminating ~300 lines of duplicated availability queries across booking handlers, slot computation, and group scheduling
+- **Unified slot computation** — `compute_slots` now serves both individual and group event types via a `BusySource` enum, replacing the separate `compute_group_slots` function
+- **Extracted `prompt()` utility** — consolidated 4 duplicate CLI prompt functions into `src/utils.rs`
+
 ## [0.7.1] - 2026-03-09
 
 ### Fixed

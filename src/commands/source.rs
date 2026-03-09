@@ -9,6 +9,8 @@ use crate::caldav::CaldavClient;
 
 use std::io::{self, Write};
 
+use crate::utils::prompt;
+
 #[derive(Debug, Subcommand)]
 pub enum SourceCommands {
     /// Connect a CalDAV calendar
@@ -38,14 +40,6 @@ pub enum SourceCommands {
         /// Source ID
         id: String,
     },
-}
-
-fn prompt(label: &str) -> String {
-    print!("{}: ", label);
-    io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
 }
 
 #[derive(Tabled)]

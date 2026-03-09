@@ -4,7 +4,7 @@ use colored::Colorize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use std::io::{self, Write};
+use crate::utils::prompt;
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommands {
@@ -60,14 +60,6 @@ pub enum ConfigCommands {
         #[arg(long)]
         auto_register: Option<bool>,
     },
-}
-
-fn prompt(label: &str) -> String {
-    print!("{}: ", label);
-    io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
 }
 
 pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {

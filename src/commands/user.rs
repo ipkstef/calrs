@@ -5,10 +5,9 @@ use sqlx::SqlitePool;
 use tabled::{Table, Tabled};
 use uuid::Uuid;
 
-use std::io::{self, Write};
-
 use crate::auth;
 use crate::models::User;
+use crate::utils::{prompt, prompt_password};
 
 #[derive(Debug, Subcommand)]
 pub enum UserCommands {
@@ -53,22 +52,6 @@ pub enum UserCommands {
     },
 }
 
-fn prompt(label: &str) -> String {
-    print!("{}: ", label);
-    io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
-}
-
-fn prompt_password(label: &str) -> String {
-    print!("{}: ", label);
-    io::stdout().flush().unwrap();
-    // TODO: use rpassword for hidden input
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
-}
 
 pub async fn run(pool: &SqlitePool, cmd: UserCommands) -> Result<()> {
     match cmd {

@@ -1481,8 +1481,29 @@ async fn show_group_slots(
     let week = query.week.unwrap_or(0).max(0);
     let days_per_page = 7;
     let start_offset = week * days_per_page;
-    let slot_days = compute_group_slots(
-        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz,
+
+    // Build group busy source: fetch busy times per member
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
+
+    let group_id: Option<String> = sqlx::query_scalar("SELECT group_id FROM event_types WHERE id = ?")
+        .bind(&et_id).fetch_optional(&state.pool).await.unwrap_or(None).flatten();
+    let busy = if let Some(ref gid) = group_id {
+        let members: Vec<(String,)> = sqlx::query_as(
+            "SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
+        ).bind(gid).fetch_all(&state.pool).await.unwrap_or_default();
+        let mut member_busy = HashMap::new();
+        for (uid,) in &members {
+            member_busy.insert(uid.clone(), fetch_busy_times_for_user(&state.pool, uid, now_host, window_end).await);
+        }
+        BusySource::Group(member_busy)
+    } else {
+        BusySource::Individual(fetch_busy_times_global(&state.pool, now_host, window_end).await)
+    };
+
+    let slot_days = compute_slots(
+        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
     .await;
     let prev_week = if week > 0 { Some(week - 1) } else { None };
@@ -1745,377 +1766,6 @@ async fn handle_group_booking(
 
 // --- Group slot computation ---
 
-/// Compute available slots for a group event type.
-/// A slot is available if ANY group member is free during that time.
-async fn compute_group_slots(
-    pool: &SqlitePool,
-    et_id: &str,
-    duration: i32,
-    buffer_before: i32,
-    buffer_after: i32,
-    min_notice: i32,
-    start_offset: i32,
-    days_ahead: i32,
-    host_tz: Tz,
-    guest_tz: Tz,
-) -> Vec<SlotDay> {
-    // Get availability rules for this event type
-    let rules: Vec<(i32, String, String)> = sqlx::query_as(
-        "SELECT day_of_week, start_time, end_time FROM availability_rules WHERE event_type_id = ?",
-    )
-    .bind(et_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    // Get the group_id for this event type
-    let group_id: Option<String> = sqlx::query_scalar(
-        "SELECT group_id FROM event_types WHERE id = ?",
-    )
-    .bind(et_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .flatten();
-
-    let group_id = match group_id {
-        Some(gid) => gid,
-        None => return Vec::new(),
-    };
-
-    // Get all enabled group members
-    let members: Vec<(String,)> = sqlx::query_as(
-        "SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
-    )
-    .bind(&group_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    if members.is_empty() {
-        return Vec::new();
-    }
-
-    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let now = now_host;
-    let min_start = now + Duration::minutes(min_notice as i64);
-    let end_date = now.date() + Duration::days((start_offset + days_ahead) as i64);
-
-    let end_compact = end_date.format("%Y%m%d").to_string();
-    let now_compact = now.format("%Y%m%dT%H%M%S").to_string();
-    let end_iso = end_date.format("%Y-%m-%dT23:59:59").to_string();
-    let now_iso = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-
-    // Pre-fetch busy times for all members
-    let mut member_busy: std::collections::HashMap<String, Vec<(NaiveDateTime, NaiveDateTime)>> = std::collections::HashMap::new();
-
-    for (user_id,) in &members {
-        let mut busy_times = Vec::new();
-
-        // Non-recurring events from their CalDAV calendars
-        let events: Vec<(String, String)> = sqlx::query_as(
-            "SELECT e.start_at, e.end_at FROM events e
-             JOIN calendars c ON c.id = e.calendar_id
-             JOIN caldav_sources cs ON cs.id = c.source_id
-             JOIN accounts a ON a.id = cs.account_id
-             WHERE a.user_id = ? AND c.is_busy = 1
-               AND (e.rrule IS NULL OR e.rrule = '')
-               AND (e.status IS NULL OR e.status != 'CANCELLED')
-               AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
-        )
-        .bind(user_id)
-        .bind(&end_compact)
-        .bind(&now_compact)
-        .bind(&end_iso)
-        .bind(&now_iso)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        for (s, e) in &events {
-            if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
-                busy_times.push((start, end));
-            }
-        }
-
-        // Recurring events from their CalDAV calendars
-        let end_compact_member = end_date.format("%Y%m%dT235959").to_string();
-        let recurring_events: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT e.start_at, e.end_at, e.rrule, e.raw_ical FROM events e
-             JOIN calendars c ON c.id = e.calendar_id
-             JOIN caldav_sources cs ON cs.id = c.source_id
-             JOIN accounts a ON a.id = cs.account_id
-             WHERE a.user_id = ? AND c.is_busy = 1
-               AND (e.status IS NULL OR e.status != 'CANCELLED')
-               AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
-        )
-        .bind(user_id)
-        .bind(&end_iso)
-        .bind(&end_compact_member)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        let window_end_dt = end_date.and_hms_opt(23, 59, 59).unwrap_or(now);
-        for (s, e, rrule_str, raw_ical) in &recurring_events {
-            if let (Some(ev_start), Some(ev_end)) = (parse_datetime(s), parse_datetime(e)) {
-                let exdates = raw_ical.as_deref().map(crate::rrule::extract_exdates).unwrap_or_default();
-                let occurrences = crate::rrule::expand_rrule(ev_start, ev_end, &rrule_str, &exdates, now, window_end_dt);
-                for (os, oe) in occurrences {
-                    busy_times.push((os, oe));
-                }
-            }
-        }
-
-        // Confirmed bookings assigned to or owned by this member
-        let bookings: Vec<(String, String)> = sqlx::query_as(
-            "SELECT b.start_at, b.end_at FROM bookings b
-             JOIN event_types et ON et.id = b.event_type_id
-             JOIN accounts a ON a.id = et.account_id
-             WHERE (a.user_id = ? OR b.assigned_user_id = ?) AND b.status = 'confirmed'
-               AND b.start_at <= ? AND b.end_at >= ?",
-        )
-        .bind(user_id)
-        .bind(user_id)
-        .bind(&end_iso)
-        .bind(&now_iso)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        for (s, e) in &bookings {
-            if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
-                busy_times.push((start, end));
-            }
-        }
-
-        member_busy.insert(user_id.clone(), busy_times);
-    }
-
-    let slot_duration = Duration::minutes(duration as i64);
-    let mut result = Vec::new();
-
-    for day_offset in start_offset..(start_offset + days_ahead) {
-        let date = now.date() + Duration::days(day_offset as i64);
-        let weekday = date.weekday().num_days_from_sunday() as i32;
-
-        let day_rules: Vec<&(i32, String, String)> = rules
-            .iter()
-            .filter(|(d, _, _)| *d == weekday)
-            .collect();
-
-        if day_rules.is_empty() {
-            continue;
-        }
-
-        let mut day_slots = Vec::new();
-
-        for (_, start_str, end_str) in &day_rules {
-            let window_start = match NaiveTime::parse_from_str(start_str, "%H:%M") {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let window_end = match NaiveTime::parse_from_str(end_str, "%H:%M") {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-
-            let mut cursor = window_start;
-            while cursor + slot_duration <= window_end {
-                let slot_start = date.and_time(cursor);
-                let slot_end = slot_start + slot_duration;
-
-                if slot_start < min_start {
-                    cursor = cursor + Duration::minutes(duration as i64);
-                    continue;
-                }
-
-                let buf_start = slot_start - Duration::minutes(buffer_before as i64);
-                let buf_end = slot_end + Duration::minutes(buffer_after as i64);
-
-                // A slot is available if ANY member is free
-                let any_member_free = member_busy.iter().any(|(_uid, busy_times)| {
-                    !busy_times.iter().any(|(s, e)| *s < buf_end && *e > buf_start)
-                });
-
-                if any_member_free {
-                    let slot_start_utc = host_tz.from_local_datetime(&slot_start).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_start)).with_timezone(&Utc);
-                    let slot_end_utc = host_tz.from_local_datetime(&slot_end).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_end)).with_timezone(&Utc);
-                    let guest_start = slot_start_utc.with_timezone(&guest_tz);
-                    let guest_end = slot_end_utc.with_timezone(&guest_tz);
-
-                    day_slots.push(SlotTime {
-                        start: guest_start.format("%H:%M").to_string(),
-                        end: guest_end.format("%H:%M").to_string(),
-                        host_date: date.format("%Y-%m-%d").to_string(),
-                        host_time: cursor.format("%H:%M").to_string(),
-                        guest_date: guest_start.format("%Y-%m-%d").to_string(),
-                    });
-                }
-
-                cursor = cursor + Duration::minutes(duration as i64);
-            }
-        }
-
-        if !day_slots.is_empty() {
-            let mut guest_days: std::collections::BTreeMap<String, Vec<SlotTime>> = std::collections::BTreeMap::new();
-            for slot in day_slots {
-                guest_days.entry(slot.guest_date.clone()).or_default().push(slot);
-            }
-            for (guest_date_str, slots) in guest_days {
-                if let Ok(gd) = NaiveDate::parse_from_str(&guest_date_str, "%Y-%m-%d") {
-                    if !result.iter().any(|d: &SlotDay| d.date == guest_date_str) {
-                        result.push(SlotDay {
-                            date: guest_date_str,
-                            label: gd.format("%A, %B %-d").to_string(),
-                            slots,
-                        });
-                    } else if let Some(existing) = result.iter_mut().find(|d: &&mut SlotDay| d.date == guest_date_str) {
-                        existing.slots.extend(slots);
-                    }
-                }
-            }
-        }
-    }
-
-    result.sort_by(|a, b| a.date.cmp(&b.date));
-    result
-}
-
-/// Pick an available group member for a booking slot.
-/// Returns (user_id, name, email) of the member with fewest recent bookings.
-async fn pick_group_member(
-    pool: &SqlitePool,
-    group_id: &str,
-    slot_start: NaiveDateTime,
-    slot_end: NaiveDateTime,
-    buffer_before: i32,
-    buffer_after: i32,
-) -> Option<(String, String, String)> {
-    let buf_start = slot_start - Duration::minutes(buffer_before as i64);
-    let buf_end = slot_end + Duration::minutes(buffer_after as i64);
-
-    // Get all enabled group members
-    let members: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.email FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
-    )
-    .bind(group_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    let mut available_members = Vec::new();
-
-    for (user_id, name, email) in &members {
-        // Check non-recurring CalDAV events
-        let event_conflict: Option<(String,)> = sqlx::query_as(
-            "SELECT e.id FROM events e
-             JOIN calendars c ON c.id = e.calendar_id
-             JOIN caldav_sources cs ON cs.id = c.source_id
-             JOIN accounts a ON a.id = cs.account_id
-             WHERE a.user_id = ? AND c.is_busy = 1
-               AND (e.rrule IS NULL OR e.rrule = '')
-               AND (e.status IS NULL OR e.status != 'CANCELLED')
-               AND ((e.start_at < ? AND e.end_at > ?) OR (e.start_at < ? AND e.end_at > ?))
-             LIMIT 1",
-        )
-        .bind(user_id)
-        .bind(&buf_end.format("%Y%m%dT%H%M%S").to_string())
-        .bind(&buf_start.format("%Y%m%dT%H%M%S").to_string())
-        .bind(&buf_end.format("%Y-%m-%dT%H:%M:%S").to_string())
-        .bind(&buf_start.format("%Y-%m-%dT%H:%M:%S").to_string())
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
-
-        if event_conflict.is_some() {
-            continue;
-        }
-
-        // Check recurring CalDAV events
-        let recurring_events: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT e.start_at, e.end_at, e.rrule, e.raw_ical FROM events e
-             JOIN calendars c ON c.id = e.calendar_id
-             JOIN caldav_sources cs ON cs.id = c.source_id
-             JOIN accounts a ON a.id = cs.account_id
-             WHERE a.user_id = ? AND c.is_busy = 1
-               AND (e.status IS NULL OR e.status != 'CANCELLED')
-               AND e.rrule IS NOT NULL AND e.rrule != ''",
-        )
-        .bind(user_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        let mut recurring_conflict = false;
-        for (s, e, rrule_str, raw_ical) in &recurring_events {
-            if let (Some(ev_start), Some(ev_end)) = (parse_datetime(s), parse_datetime(e)) {
-                let exdates = raw_ical.as_deref().map(crate::rrule::extract_exdates).unwrap_or_default();
-                let occurrences = crate::rrule::expand_rrule(ev_start, ev_end, &rrule_str, &exdates, buf_start, buf_end);
-                if occurrences.iter().any(|(os, oe)| *os < buf_end && *oe > buf_start) {
-                    recurring_conflict = true;
-                    break;
-                }
-            }
-        }
-
-        if recurring_conflict {
-            continue;
-        }
-
-        // Check booking conflicts
-        let booking_conflict: Option<(String,)> = sqlx::query_as(
-            "SELECT b.id FROM bookings b
-             JOIN event_types et ON et.id = b.event_type_id
-             JOIN accounts a ON a.id = et.account_id
-             WHERE (a.user_id = ? OR b.assigned_user_id = ?) AND b.status = 'confirmed'
-               AND b.start_at < ? AND b.end_at > ?
-             LIMIT 1",
-        )
-        .bind(user_id)
-        .bind(user_id)
-        .bind(&buf_end.format("%Y-%m-%dT%H:%M:%S").to_string())
-        .bind(&buf_start.format("%Y-%m-%dT%H:%M:%S").to_string())
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
-
-        if booking_conflict.is_some() {
-            continue;
-        }
-
-        available_members.push((user_id.clone(), name.clone(), email.clone()));
-    }
-
-    if available_members.is_empty() {
-        return None;
-    }
-
-    // Among available members, pick the one with fewest bookings in last 30 days
-    let thirty_days_ago = (Utc::now() - Duration::days(30)).format("%Y-%m-%dT%H:%M:%S").to_string();
-    let mut best: Option<(String, String, String, i64)> = None;
-
-    for (user_id, name, email) in &available_members {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM bookings WHERE assigned_user_id = ? AND created_at >= ?",
-        )
-        .bind(user_id)
-        .bind(&thirty_days_ago)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
-
-        match &best {
-            None => best = Some((user_id.clone(), name.clone(), email.clone(), count)),
-            Some((_, _, _, best_count)) if count < *best_count => {
-                best = Some((user_id.clone(), name.clone(), email.clone(), count));
-            }
-            _ => {}
-        }
-    }
-
-    best.map(|(uid, name, email, _)| (uid, name, email))
-}
 
 // --- User profile page ---
 
@@ -2212,8 +1862,12 @@ async fn show_slots_for_user(
     let week = query.week.unwrap_or(0).max(0);
     let days_per_page = 7;
     let start_offset = week * days_per_page;
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
+    let busy = BusySource::Individual(fetch_busy_times_global(&state.pool, now_host, window_end).await);
     let slot_days = compute_slots(
-        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz,
+        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
     .await;
     let prev_week = if week > 0 { Some(week - 1) } else { None };
@@ -2385,46 +2039,9 @@ async fn handle_booking_for_user(
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-    // Non-recurring events + bookings
-    let mut busy: Vec<(String, String)> = sqlx::query_as(
-        "SELECT start_at, end_at FROM events
-         WHERE (rrule IS NULL OR rrule = '')
-           AND (status IS NULL OR status != 'CANCELLED')
-         UNION ALL
-         SELECT start_at, end_at FROM bookings WHERE status = 'confirmed'",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    // Recurring events — expand and check
-    let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != ''
-           AND (status IS NULL OR status != 'CANCELLED')",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let window_start = buf_start;
-    let window_end = buf_end;
-    for (s, e, rrule_str, raw_ical) in &recurring {
-        if let (Some(ev_start), Some(ev_end)) = (parse_datetime(s), parse_datetime(e)) {
-            let exdates = raw_ical.as_deref().map(crate::rrule::extract_exdates).unwrap_or_default();
-            let occurrences = crate::rrule::expand_rrule(ev_start, ev_end, &rrule_str, &exdates, window_start, window_end);
-            for (os, oe) in occurrences {
-                busy.push((os.format("%Y-%m-%dT%H:%M:%S").to_string(), oe.format("%Y-%m-%dT%H:%M:%S").to_string()));
-            }
-        }
-    }
-
-    for (bs, be) in &busy {
-        if let (Some(s), Some(e)) = (parse_datetime(bs), parse_datetime(be)) {
-            if s < buf_end && e > buf_start {
-                return Html("This slot is no longer available.".to_string()).into_response();
-            }
-        }
+    let busy = fetch_busy_times_global(&state.pool, buf_start, buf_end).await;
+    if has_conflict(&busy, buf_start, buf_end) {
+        return Html("This slot is no longer available.".to_string()).into_response();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -2580,6 +2197,67 @@ fn extract_ical_field(ical: &str, field: &str) -> Option<String> {
     None
 }
 
+
+/// Pick an available group member for a booking slot.
+/// Returns (user_id, name, email) of the member with fewest recent bookings.
+async fn pick_group_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    slot_start: NaiveDateTime,
+    slot_end: NaiveDateTime,
+    buffer_before: i32,
+    buffer_after: i32,
+) -> Option<(String, String, String)> {
+    let buf_start = slot_start - Duration::minutes(buffer_before as i64);
+    let buf_end = slot_end + Duration::minutes(buffer_after as i64);
+
+    let members: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut available_members = Vec::new();
+
+    for (user_id, name, email) in &members {
+        let busy = fetch_busy_times_for_user(pool, user_id, buf_start, buf_end).await;
+        if !has_conflict(&busy, buf_start, buf_end) {
+            available_members.push((user_id.clone(), name.clone(), email.clone()));
+        }
+    }
+
+    if available_members.is_empty() {
+        return None;
+    }
+
+    // Among available members, pick the one with fewest bookings in last 30 days
+    let thirty_days_ago = (Utc::now() - Duration::days(30)).format("%Y-%m-%dT%H:%M:%S").to_string();
+    let mut best: Option<(String, String, String, i64)> = None;
+
+    for (user_id, name, email) in &available_members {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookings WHERE assigned_user_id = ? AND created_at >= ?",
+        )
+        .bind(user_id)
+        .bind(&thirty_days_ago)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+        match &best {
+            None => best = Some((user_id.clone(), name.clone(), email.clone(), count)),
+            Some((_, _, _, best_count)) if count < *best_count => {
+                best = Some((user_id.clone(), name.clone(), email.clone(), count));
+            }
+            _ => {}
+        }
+    }
+
+    best.map(|(uid, name, email, _)| (uid, name, email))
+}
+
 struct SlotDay {
     date: String,
     label: String,
@@ -2594,38 +2272,36 @@ struct SlotTime {
     guest_date: String, // YYYY-MM-DD in guest TZ (for grouping by day)
 }
 
-async fn compute_slots(
+// --- Shared busy-time helpers ---
+
+/// Expand recurring events into (start, end) pairs within a time window.
+fn expand_recurring_into_busy(
+    recurring: &[(String, String, String, Option<String>)],
+    window_start: NaiveDateTime,
+    window_end: NaiveDateTime,
+) -> Vec<(NaiveDateTime, NaiveDateTime)> {
+    let mut result = Vec::new();
+    for (s, e, rrule_str, raw_ical) in recurring {
+        if let (Some(ev_start), Some(ev_end)) = (parse_datetime(s), parse_datetime(e)) {
+            let exdates = raw_ical.as_deref().map(crate::rrule::extract_exdates).unwrap_or_default();
+            let occurrences = crate::rrule::expand_rrule(ev_start, ev_end, rrule_str, &exdates, window_start, window_end);
+            result.extend(occurrences);
+        }
+    }
+    result
+}
+
+/// Fetch all busy times (events + bookings) globally (not user-scoped).
+async fn fetch_busy_times_global(
     pool: &SqlitePool,
-    et_id: &str,
-    duration: i32,
-    buffer_before: i32,
-    buffer_after: i32,
-    min_notice: i32,
-    start_offset: i32,
-    days_ahead: i32,
-    host_tz: Tz,
-    guest_tz: Tz,
-) -> Vec<SlotDay> {
-    let rules: Vec<(i32, String, String)> = sqlx::query_as(
-        "SELECT day_of_week, start_time, end_time FROM availability_rules WHERE event_type_id = ?",
-    )
-    .bind(et_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    window_start: NaiveDateTime,
+    window_end: NaiveDateTime,
+) -> Vec<(NaiveDateTime, NaiveDateTime)> {
+    let end_compact = window_end.format("%Y%m%d").to_string();
+    let start_compact = window_start.format("%Y%m%dT%H%M%S").to_string();
+    let end_iso = window_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let start_iso = window_start.format("%Y-%m-%dT%H:%M:%S").to_string();
 
-    // Work in host timezone for availability rules
-    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let now = now_host;
-    let min_start = now + Duration::minutes(min_notice as i64);
-    let end_date = now.date() + Duration::days((start_offset + days_ahead) as i64);
-
-    let end_compact = end_date.format("%Y%m%d").to_string();
-    let now_compact = now.format("%Y%m%dT%H%M%S").to_string();
-    let end_iso = end_date.format("%Y-%m-%dT23:59:59").to_string();
-    let now_iso = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-
-    // Non-recurring events in range
     let non_recurring: Vec<(String, String)> = sqlx::query_as(
         "SELECT start_at, end_at FROM events
          WHERE (rrule IS NULL OR rrule = '')
@@ -2637,18 +2313,18 @@ async fn compute_slots(
            AND start_at <= ? AND end_at >= ?
          ORDER BY start_at",
     )
-    .bind(&end_compact)
-    .bind(&now_compact)
-    .bind(&end_iso)
-    .bind(&now_iso)
-    .bind(&end_iso)
-    .bind(&now_iso)
+    .bind(&end_compact).bind(&start_compact)
+    .bind(&end_iso).bind(&start_iso)
+    .bind(&end_iso).bind(&start_iso)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
-    // Recurring events — expand into the window
-    let end_compact = end_date.format("%Y%m%dT235959").to_string();
+    let mut busy: Vec<(NaiveDateTime, NaiveDateTime)> = non_recurring.iter()
+        .filter_map(|(s, e)| Some((parse_datetime(s)?, parse_datetime(e)?)))
+        .collect();
+
+    let end_compact_rrule = window_end.format("%Y%m%dT235959").to_string();
     let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT start_at, end_at, rrule, raw_ical FROM events
          WHERE rrule IS NOT NULL AND rrule != ''
@@ -2656,30 +2332,134 @@ async fn compute_slots(
            AND (start_at <= ? OR start_at <= ?)",
     )
     .bind(&end_iso)
-    .bind(&end_compact)
+    .bind(&end_compact_rrule)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
-    let window_start = now;
-    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now);
+    busy.extend(expand_recurring_into_busy(&recurring, window_start, window_end));
+    busy
+}
 
-    let mut busy: Vec<(String, String)> = non_recurring;
-    for (s, e, rrule_str, raw_ical) in &recurring {
-        if let (Some(ev_start), Some(ev_end)) = (parse_datetime(s), parse_datetime(e)) {
-            let exdates = raw_ical.as_deref().map(crate::rrule::extract_exdates).unwrap_or_default();
-            let occurrences = crate::rrule::expand_rrule(ev_start, ev_end, rrule_str, &exdates, window_start, window_end);
-            for (os, oe) in occurrences {
-                busy.push((os.format("%Y-%m-%dT%H:%M:%S").to_string(), oe.format("%Y-%m-%dT%H:%M:%S").to_string()));
-            }
+/// Fetch busy times for a specific user (events from their calendars + their bookings).
+async fn fetch_busy_times_for_user(
+    pool: &SqlitePool,
+    user_id: &str,
+    window_start: NaiveDateTime,
+    window_end: NaiveDateTime,
+) -> Vec<(NaiveDateTime, NaiveDateTime)> {
+    let end_compact = window_end.format("%Y%m%d").to_string();
+    let start_compact = window_start.format("%Y%m%dT%H%M%S").to_string();
+    let end_iso = window_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let start_iso = window_start.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    let events: Vec<(String, String)> = sqlx::query_as(
+        "SELECT e.start_at, e.end_at FROM events e
+         JOIN calendars c ON c.id = e.calendar_id
+         JOIN caldav_sources cs ON cs.id = c.source_id
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE a.user_id = ? AND c.is_busy = 1
+           AND (e.rrule IS NULL OR e.rrule = '')
+           AND (e.status IS NULL OR e.status != 'CANCELLED')
+           AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
+    )
+    .bind(user_id)
+    .bind(&end_compact).bind(&start_compact)
+    .bind(&end_iso).bind(&start_iso)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut busy: Vec<(NaiveDateTime, NaiveDateTime)> = events.iter()
+        .filter_map(|(s, e)| Some((parse_datetime(s)?, parse_datetime(e)?)))
+        .collect();
+
+    let end_compact_rrule = window_end.format("%Y%m%dT235959").to_string();
+    let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT e.start_at, e.end_at, e.rrule, e.raw_ical FROM events e
+         JOIN calendars c ON c.id = e.calendar_id
+         JOIN caldav_sources cs ON cs.id = c.source_id
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE a.user_id = ? AND c.is_busy = 1
+           AND (e.status IS NULL OR e.status != 'CANCELLED')
+           AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
+    )
+    .bind(user_id)
+    .bind(&end_iso)
+    .bind(&end_compact_rrule)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    busy.extend(expand_recurring_into_busy(&recurring, window_start, window_end));
+
+    let bookings: Vec<(String, String)> = sqlx::query_as(
+        "SELECT b.start_at, b.end_at FROM bookings b
+         JOIN event_types et ON et.id = b.event_type_id
+         JOIN accounts a ON a.id = et.account_id
+         WHERE (a.user_id = ? OR b.assigned_user_id = ?) AND b.status = 'confirmed'
+           AND b.start_at <= ? AND b.end_at >= ?",
+    )
+    .bind(user_id).bind(user_id)
+    .bind(&end_iso).bind(&start_iso)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (s, e) in &bookings {
+        if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
+            busy.push((start, end));
         }
     }
+
+    busy
+}
+
+/// Check if any busy period overlaps with [buf_start, buf_end).
+fn has_conflict(busy: &[(NaiveDateTime, NaiveDateTime)], buf_start: NaiveDateTime, buf_end: NaiveDateTime) -> bool {
+    busy.iter().any(|(s, e)| *s < buf_end && *e > buf_start)
+}
+
+// --- Busy source for unified slot computation ---
+
+enum BusySource {
+    /// Flat list of busy times (individual event type)
+    Individual(Vec<(NaiveDateTime, NaiveDateTime)>),
+    /// Per-member busy times; slot is available if ANY member is free
+    Group(HashMap<String, Vec<(NaiveDateTime, NaiveDateTime)>>),
+}
+
+/// Compute available slots for an event type.
+/// Caller provides pre-fetched busy times via BusySource.
+async fn compute_slots(
+    pool: &SqlitePool,
+    et_id: &str,
+    duration: i32,
+    buffer_before: i32,
+    buffer_after: i32,
+    min_notice: i32,
+    start_offset: i32,
+    days_ahead: i32,
+    host_tz: Tz,
+    guest_tz: Tz,
+    busy: BusySource,
+) -> Vec<SlotDay> {
+    let rules: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT day_of_week, start_time, end_time FROM availability_rules WHERE event_type_id = ?",
+    )
+    .bind(et_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let min_start = now_host + Duration::minutes(min_notice as i64);
 
     let slot_duration = Duration::minutes(duration as i64);
     let mut result = Vec::new();
 
     for day_offset in start_offset..(start_offset + days_ahead) {
-        let date = now.date() + Duration::days(day_offset as i64);
+        let date = now_host.date() + Duration::days(day_offset as i64);
         let weekday = date.weekday().num_days_from_sunday() as i32;
 
         let day_rules: Vec<&(i32, String, String)> = rules
@@ -2716,17 +2496,14 @@ async fn compute_slots(
                 let buf_start = slot_start - Duration::minutes(buffer_before as i64);
                 let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-                let has_conflict = busy.iter().any(|(bs, be)| {
-                    let ev_start = parse_datetime(bs);
-                    let ev_end = parse_datetime(be);
-                    match (ev_start, ev_end) {
-                        (Some(s), Some(e)) => s < buf_end && e > buf_start,
-                        _ => false,
+                let is_free = match &busy {
+                    BusySource::Individual(times) => !has_conflict(times, buf_start, buf_end),
+                    BusySource::Group(member_busy) => {
+                        member_busy.values().any(|times| !has_conflict(times, buf_start, buf_end))
                     }
-                });
+                };
 
-                if !has_conflict {
-                    // Convert from host TZ to guest TZ for display
+                if is_free {
                     let slot_start_utc = host_tz.from_local_datetime(&slot_start).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_start)).with_timezone(&Utc);
                     let slot_end_utc = host_tz.from_local_datetime(&slot_end).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_end)).with_timezone(&Utc);
                     let guest_start = slot_start_utc.with_timezone(&guest_tz);
@@ -2735,7 +2512,6 @@ async fn compute_slots(
                     day_slots.push(SlotTime {
                         start: guest_start.format("%H:%M").to_string(),
                         end: guest_end.format("%H:%M").to_string(),
-                        // Store host-TZ date/time for the booking form (the server works in host TZ)
                         host_date: date.format("%Y-%m-%d").to_string(),
                         host_time: cursor.format("%H:%M").to_string(),
                         guest_date: guest_start.format("%Y-%m-%d").to_string(),
@@ -2747,32 +2523,26 @@ async fn compute_slots(
         }
 
         if !day_slots.is_empty() {
-            // Group slots by guest date (may differ from host date due to TZ offset)
             let mut guest_days: std::collections::BTreeMap<String, Vec<SlotTime>> = std::collections::BTreeMap::new();
             for slot in day_slots {
                 guest_days.entry(slot.guest_date.clone()).or_default().push(slot);
             }
             for (guest_date_str, slots) in guest_days {
                 if let Ok(gd) = NaiveDate::parse_from_str(&guest_date_str, "%Y-%m-%d") {
-                    // Only add if we haven't already added this guest date
                     if !result.iter().any(|d: &SlotDay| d.date == guest_date_str) {
                         result.push(SlotDay {
                             date: guest_date_str,
                             label: gd.format("%A, %B %-d").to_string(),
                             slots,
                         });
-                    } else {
-                        // Merge slots into existing day
-                        if let Some(existing) = result.iter_mut().find(|d| d.date == guest_date_str) {
-                            existing.slots.extend(slots);
-                        }
+                    } else if let Some(existing) = result.iter_mut().find(|d| d.date == guest_date_str) {
+                        existing.slots.extend(slots);
                     }
                 }
             }
         }
     }
 
-    // Sort by date since guest TZ conversion may reorder
     result.sort_by(|a, b| a.date.cmp(&b.date));
     result
 }
@@ -2870,8 +2640,12 @@ async fn show_slots(
     let week = query.week.unwrap_or(0).max(0);
     let days_per_page = 7;
     let start_offset = week * days_per_page;
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
+    let busy = BusySource::Individual(fetch_busy_times_global(&state.pool, now_host, window_end).await);
     let slot_days = compute_slots(
-        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz,
+        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
     .await;
     let prev_week = if week > 0 { Some(week - 1) } else { None };
@@ -3050,44 +2824,9 @@ async fn handle_booking(
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-    // Non-recurring events + bookings
-    let mut busy: Vec<(String, String)> = sqlx::query_as(
-        "SELECT start_at, end_at FROM events
-         WHERE (rrule IS NULL OR rrule = '')
-           AND (status IS NULL OR status != 'CANCELLED')
-         UNION ALL
-         SELECT start_at, end_at FROM bookings WHERE status = 'confirmed'",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    // Recurring events — expand and check
-    let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != ''
-           AND (status IS NULL OR status != 'CANCELLED')",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    for (s, e, rrule_str, raw_ical) in &recurring {
-        if let (Some(ev_start), Some(ev_end)) = (parse_datetime(s), parse_datetime(e)) {
-            let exdates = raw_ical.as_deref().map(crate::rrule::extract_exdates).unwrap_or_default();
-            let occurrences = crate::rrule::expand_rrule(ev_start, ev_end, &rrule_str, &exdates, buf_start, buf_end);
-            for (os, oe) in occurrences {
-                busy.push((os.format("%Y-%m-%dT%H:%M:%S").to_string(), oe.format("%Y-%m-%dT%H:%M:%S").to_string()));
-            }
-        }
-    }
-
-    for (bs, be) in &busy {
-        if let (Some(s), Some(e)) = (parse_datetime(bs), parse_datetime(be)) {
-            if s < buf_end && e > buf_start {
-                return Html("This slot is no longer available.".to_string()).into_response();
-            }
-        }
+    let busy = fetch_busy_times_global(&state.pool, buf_start, buf_end).await;
+    if has_conflict(&busy, buf_start, buf_end) {
+        return Html("This slot is no longer available.".to_string()).into_response();
     }
 
     // Create booking

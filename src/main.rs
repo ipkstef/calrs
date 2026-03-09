@@ -5,6 +5,7 @@ mod db;
 mod email;
 mod models;
 mod rrule;
+mod utils;
 mod web;
 
 use anyhow::Result;

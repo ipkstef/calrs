@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use std::io::{self, Write};
 
+use crate::utils::prompt;
+
 #[derive(Debug, Subcommand)]
 pub enum BookingCommands {
     /// Book a slot on an event type
@@ -44,14 +46,6 @@ pub enum BookingCommands {
         /// Booking ID (prefix match)
         id: String,
     },
-}
-
-fn prompt(label: &str) -> String {
-    print!("{}: ", label);
-    io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
 }
 
 #[derive(Tabled)]
