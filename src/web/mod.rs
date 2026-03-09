@@ -806,7 +806,7 @@ async fn create_source(
 
     let account_id = match account_id {
         Some(id) => id,
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return render_source_form_error(&state, "No scheduling account found. Please contact an administrator.", &form).into_response(),
     };
 
     let url = form.url.trim().to_string();
