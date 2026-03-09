@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}Booking approved{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center;">
+  <div class="check">&#10003;</div>
+  <h1>Booking approved</h1>
+  <p class="subtitle">The booking has been confirmed and a confirmation email has been sent to {{ guest_email }}.</p>
+</div>
+
+<div class="card">
+  <div class="detail"><strong>Event:</strong> {{ event_title }}</div>
+  <div class="detail"><strong>Date:</strong> {{ date }}</div>
+  <div class="detail"><strong>Time:</strong> {{ start_time }} – {{ end_time }}</div>
+  <div class="detail"><strong>Guest:</strong> {{ guest_name }} &lt;{{ guest_email }}&gt;</div>
+</div>
+{% endblock %}

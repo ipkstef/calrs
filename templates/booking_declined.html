@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Booking declined{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center;">
+  <div class="check" style="background: var(--error-text);">&#10007;</div>
+  <h1>Booking declined</h1>
+  <p class="subtitle">The booking has been declined and the guest has been notified.</p>
+</div>
+
+<div class="card">
+  <div class="detail"><strong>Event:</strong> {{ event_title }}</div>
+  <div class="detail"><strong>Date:</strong> {{ date }}</div>
+  <div class="detail"><strong>Time:</strong> {{ start_time }} – {{ end_time }}</div>
+  <div class="detail"><strong>Guest:</strong> {{ guest_name }} &lt;{{ guest_email }}&gt;</div>
+  {% if reason %}
+    <div class="detail"><strong>Reason:</strong> {{ reason }}</div>
+  {% endif %}
+</div>
+{% endblock %}

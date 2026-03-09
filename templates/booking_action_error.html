@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}Booking action error{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center;">
+  <div class="check" style="background: var(--text-muted);">!</div>
+  <h1>{{ title }}</h1>
+  <p class="subtitle">{{ message }}</p>
+</div>
+{% endblock %}

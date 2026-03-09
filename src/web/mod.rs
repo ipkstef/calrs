@@ -104,6 +104,8 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/g/{group_slug}/{slug}", get(show_group_slots))
         .route("/g/{group_slug}/{slug}/book", get(show_group_book_form).post(handle_group_booking))
         // User-scoped public booking routes
+        .route("/booking/approve/{token}", get(approve_booking_by_token))
+        .route("/booking/decline/{token}", get(decline_booking_form).post(decline_booking_by_token))
         .route("/u/{username}", get(user_profile))
         .route("/u/{username}/{slug}", get(show_slots_for_user))
         .route("/u/{username}/{slug}/book", get(show_book_form_for_user).post(handle_booking_for_user))
@@ -1718,10 +1720,15 @@ async fn handle_group_booking(
     let guest_timezone = guest_tz.name().to_string();
 
     let initial_status = if needs_approval { "pending" } else { "confirmed" };
+    let confirm_token: Option<String> = if needs_approval {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    };
 
     sqlx::query(
-        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, assigned_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, assigned_user_id, confirm_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&et_id)
@@ -1736,6 +1743,7 @@ async fn handle_group_booking(
     .bind(&cancel_token)
     .bind(&reschedule_token)
     .bind(&assigned_user_id)
+    .bind(&confirm_token)
     .execute(&state.pool)
     .await
     .unwrap();
@@ -1763,7 +1771,8 @@ async fn handle_group_booking(
         };
 
         if needs_approval {
-            let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id).await;
+            let base_url = std::env::var("CALRS_BASE_URL").ok();
+            let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id, confirm_token.as_deref(), base_url.as_deref()).await;
             let _ = crate::email::send_guest_pending_notice(&smtp_config, &details).await;
         } else {
             let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
@@ -2076,10 +2085,15 @@ async fn handle_booking_for_user(
     let guest_timezone = guest_tz.name().to_string();
 
     let initial_status = if needs_approval { "pending" } else { "confirmed" };
+    let confirm_token: Option<String> = if needs_approval {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    };
 
     sqlx::query(
-        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, confirm_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&et_id)
@@ -2093,6 +2107,7 @@ async fn handle_booking_for_user(
     .bind(initial_status)
     .bind(&cancel_token)
     .bind(&reschedule_token)
+    .bind(&confirm_token)
     .execute(&state.pool)
     .await
     .unwrap();
@@ -2129,8 +2144,8 @@ async fn handle_booking_for_user(
             };
 
             if needs_approval {
-                // Send approval request to host, pending notice to guest
-                let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id).await;
+                let base_url = std::env::var("CALRS_BASE_URL").ok();
+                let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id, confirm_token.as_deref(), base_url.as_deref()).await;
                 let _ = crate::email::send_guest_pending_notice(&smtp_config, &details).await;
             } else {
                 let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
@@ -2804,10 +2819,15 @@ async fn handle_booking(
     let guest_timezone = guest_tz.name().to_string();
 
     let initial_status = if needs_approval { "pending" } else { "confirmed" };
+    let confirm_token: Option<String> = if needs_approval {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    };
 
     sqlx::query(
-        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, confirm_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&et_id)
@@ -2821,6 +2841,7 @@ async fn handle_booking(
     .bind(initial_status)
     .bind(&cancel_token)
     .bind(&reschedule_token)
+    .bind(&confirm_token)
     .execute(&state.pool)
     .await
     .unwrap();
@@ -2848,11 +2869,12 @@ async fn handle_booking(
                 host_email,
                 uid: uid.clone(),
                 notes: form.notes.clone(),
-                location: None, // Legacy route doesn't have location
+                location: None,
             };
 
             if needs_approval {
-                let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id).await;
+                let base_url = std::env::var("CALRS_BASE_URL").ok();
+                let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id, confirm_token.as_deref(), base_url.as_deref()).await;
                 let _ = crate::email::send_guest_pending_notice(&smtp_config, &details).await;
             } else {
                 let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
@@ -3602,6 +3624,244 @@ async fn admin_stop_impersonate(
 ) -> impl IntoResponse {
     let cookie = "calrs_impersonate=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0";
     ([("Set-Cookie", cookie.to_string())], Redirect::to("/dashboard")).into_response()
+}
+
+// --- Token-based approve/decline (from email) ---
+
+#[derive(Deserialize)]
+struct DeclineForm {
+    reason: Option<String>,
+}
+
+async fn approve_booking_by_token(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> impl IntoResponse {
+    // Look up booking by confirm_token
+    let booking: Option<(String, String, String, String, String, String, String, String, String, Option<String>)> =
+        sqlx::query_as(
+            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, a.user_id, u.name, et.location_value
+             FROM bookings b
+             JOIN event_types et ON et.id = b.event_type_id
+             JOIN accounts a ON a.id = et.account_id
+             JOIN users u ON u.id = a.user_id
+             WHERE b.confirm_token = ? AND b.status = 'pending'",
+        )
+        .bind(&token)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+
+    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, user_id, host_name, location_value) =
+        match booking {
+            Some(b) => b,
+            None => {
+                // Check if already confirmed
+                let already: Option<(String,)> = sqlx::query_as(
+                    "SELECT status FROM bookings WHERE confirm_token = ?",
+                )
+                .bind(&token)
+                .fetch_optional(&state.pool)
+                .await
+                .unwrap_or(None);
+
+                let (title, message) = match already {
+                    Some((status,)) if status == "confirmed" => (
+                        "Already approved",
+                        "This booking has already been approved.",
+                    ),
+                    Some((status,)) if status == "declined" => (
+                        "Already declined",
+                        "This booking has already been declined.",
+                    ),
+                    Some((status,)) if status == "cancelled" => (
+                        "Booking cancelled",
+                        "This booking was cancelled.",
+                    ),
+                    _ => (
+                        "Invalid link",
+                        "This approval link is invalid or has expired.",
+                    ),
+                };
+
+                let tmpl = state.templates.get_template("booking_action_error.html").unwrap();
+                let rendered = tmpl.render(context! { title, message })
+                    .unwrap_or_else(|e| format!("Template error: {}", e));
+                return Html(rendered).into_response();
+            }
+        };
+
+    // Confirm the booking
+    let _ = sqlx::query("UPDATE bookings SET status = 'confirmed' WHERE id = ?")
+        .bind(&bid)
+        .execute(&state.pool)
+        .await;
+
+    let date = if start_at.len() >= 10 { start_at[..10].to_string() } else { start_at.clone() };
+    let start_time = if start_at.len() >= 16 { start_at[11..16].to_string() } else { "00:00".to_string() };
+    let end_time = if end_at.len() >= 16 { end_at[11..16].to_string() } else { "00:00".to_string() };
+
+    // Get host email for BookingDetails
+    let host_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = ?")
+        .bind(&user_id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or_default();
+
+    let details = crate::email::BookingDetails {
+        event_title: event_title.clone(),
+        date: date.clone(),
+        start_time: start_time.clone(),
+        end_time: end_time.clone(),
+        guest_name: guest_name.clone(),
+        guest_email: guest_email.clone(),
+        guest_timezone: "UTC".to_string(),
+        host_name: host_name.clone(),
+        host_email,
+        uid: uid.clone(),
+        notes: None,
+        location: location_value,
+    };
+
+    // Push to CalDAV calendar
+    caldav_push_booking(&state.pool, &user_id, &uid, &details).await;
+
+    // Send confirmation email to guest
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+        let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
+    }
+
+    let tmpl = state.templates.get_template("booking_approved.html").unwrap();
+    let rendered = tmpl.render(context! {
+        event_title,
+        date,
+        start_time,
+        end_time,
+        guest_name,
+        guest_email,
+    }).unwrap_or_else(|e| format!("Template error: {}", e));
+
+    Html(rendered).into_response()
+}
+
+async fn decline_booking_form(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> impl IntoResponse {
+    let booking: Option<(String, String, String, String, String)> =
+        sqlx::query_as(
+            "SELECT b.guest_name, b.guest_email, b.start_at, b.end_at, et.title
+             FROM bookings b
+             JOIN event_types et ON et.id = b.event_type_id
+             WHERE b.confirm_token = ? AND b.status = 'pending'",
+        )
+        .bind(&token)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+
+    let (guest_name, guest_email, start_at, end_at, event_title) = match booking {
+        Some(b) => b,
+        None => {
+            let tmpl = state.templates.get_template("booking_action_error.html").unwrap();
+            let rendered = tmpl.render(context! {
+                title => "Invalid link",
+                message => "This decline link is invalid, has expired, or the booking has already been processed.",
+            }).unwrap_or_else(|e| format!("Template error: {}", e));
+            return Html(rendered).into_response();
+        }
+    };
+
+    let date = if start_at.len() >= 10 { start_at[..10].to_string() } else { start_at.clone() };
+    let start_time = if start_at.len() >= 16 { start_at[11..16].to_string() } else { "00:00".to_string() };
+    let end_time = if end_at.len() >= 16 { end_at[11..16].to_string() } else { "00:00".to_string() };
+
+    let tmpl = state.templates.get_template("booking_decline_form.html").unwrap();
+    let rendered = tmpl.render(context! {
+        event_title,
+        date,
+        start_time,
+        end_time,
+        guest_name,
+        guest_email,
+    }).unwrap_or_else(|e| format!("Template error: {}", e));
+
+    Html(rendered).into_response()
+}
+
+async fn decline_booking_by_token(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    Form(form): Form<DeclineForm>,
+) -> impl IntoResponse {
+    let booking: Option<(String, String, String, String, String, String, String, String)> =
+        sqlx::query_as(
+            "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, u.email
+             FROM bookings b
+             JOIN event_types et ON et.id = b.event_type_id
+             JOIN accounts a ON a.id = et.account_id
+             JOIN users u ON u.id = a.user_id
+             WHERE b.confirm_token = ? AND b.status = 'pending'",
+        )
+        .bind(&token)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+
+    let (bid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email) =
+        match booking {
+            Some(b) => b,
+            None => {
+                let tmpl = state.templates.get_template("booking_action_error.html").unwrap();
+                let rendered = tmpl.render(context! {
+                    title => "Invalid link",
+                    message => "This decline link is invalid, has expired, or the booking has already been processed.",
+                }).unwrap_or_else(|e| format!("Template error: {}", e));
+                return Html(rendered).into_response();
+            }
+        };
+
+    // Decline the booking
+    let _ = sqlx::query("UPDATE bookings SET status = 'declined' WHERE id = ?")
+        .bind(&bid)
+        .execute(&state.pool)
+        .await;
+
+    let date = if start_at.len() >= 10 { start_at[..10].to_string() } else { start_at.clone() };
+    let start_time = if start_at.len() >= 16 { start_at[11..16].to_string() } else { "00:00".to_string() };
+    let end_time = if end_at.len() >= 16 { end_at[11..16].to_string() } else { "00:00".to_string() };
+
+    let reason = form.reason.filter(|r| !r.trim().is_empty());
+
+    // Send decline notification to guest
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+        let details = crate::email::CancellationDetails {
+            event_title: event_title.clone(),
+            date: date.clone(),
+            start_time: start_time.clone(),
+            end_time: end_time.clone(),
+            guest_name: guest_name.clone(),
+            guest_email: guest_email.clone(),
+            host_name: host_name.clone(),
+            host_email,
+            uid: String::new(),
+            reason: reason.clone(),
+        };
+        let _ = crate::email::send_guest_decline_notice(&smtp_config, &details).await;
+    }
+
+    let tmpl = state.templates.get_template("booking_declined.html").unwrap();
+    let rendered = tmpl.render(context! {
+        event_title,
+        date,
+        start_time,
+        end_time,
+        guest_name,
+        guest_email,
+        reason,
+    }).unwrap_or_else(|e| format!("Template error: {}", e));
+
+    Html(rendered).into_response()
 }
 
 // --- CalDAV write-back ---

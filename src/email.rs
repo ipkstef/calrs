@@ -53,12 +53,29 @@ struct EmailRow {
     value: String,
 }
 
+struct EmailAction {
+    label: String,
+    url: String,
+    color: String,
+}
+
 fn render_html_email(
     greeting: &str,
     message: &str,
     accent: &str,
     rows: &[EmailRow],
     footer_note: Option<&str>,
+) -> String {
+    render_html_email_with_actions(greeting, message, accent, rows, footer_note, &[])
+}
+
+fn render_html_email_with_actions(
+    greeting: &str,
+    message: &str,
+    accent: &str,
+    rows: &[EmailRow],
+    footer_note: Option<&str>,
+    actions: &[EmailAction],
 ) -> String {
     let mut detail_rows = String::new();
     for (i, row) in rows.iter().enumerate() {
@@ -71,6 +88,21 @@ fn render_html_email(
             row.label, h(&row.value),
         ));
     }
+
+    let actions_html = if actions.is_empty() {
+        String::new()
+    } else {
+        let buttons: Vec<String> = actions.iter().map(|a| {
+            format!(
+                "<a href=\"{}\" style=\"display:inline-block;padding:12px 28px;background:{};color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;margin:0 6px;\">{}</a>",
+                h(&a.url), a.color, h(&a.label)
+            )
+        }).collect();
+        format!(
+            "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:20px 0 0;\"><tr><td align=\"center\">{}</td></tr></table>",
+            buttons.join(" ")
+        )
+    };
 
     let footer_html = footer_note
         .map(|n| format!("<p style=\"margin:16px 0 0;font-size:13px;color:#6b7280;\">{}</p>", h(n)))
@@ -94,6 +126,7 @@ r##"<!DOCTYPE html>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
         {detail_rows}
       </table>
+      {actions_html}
       {footer_html}
     </td></tr>
     <!-- Footer -->
@@ -526,13 +559,32 @@ pub async fn send_guest_pending_notice(config: &SmtpConfig, details: &BookingDet
     send_email(config, email).await
 }
 
-/// Send approval request to host
-pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDetails, booking_id: &str) -> Result<()> {
+/// Send approval request to host with approve/decline buttons
+pub async fn send_host_approval_request(
+    config: &SmtpConfig,
+    details: &BookingDetails,
+    _booking_id: &str,
+    confirm_token: Option<&str>,
+    base_url: Option<&str>,
+) -> Result<()> {
     let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
     let from = format!("{} <{}>", from_display, config.from_email).parse()?;
     let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
 
     let time_display = format!("{} \u{2013} {}", details.start_time, details.end_time);
+
+    let (approve_url, decline_url) = match (confirm_token, base_url) {
+        (Some(token), Some(url)) => (
+            Some(format!("{}/booking/approve/{}", url.trim_end_matches('/'), token)),
+            Some(format!("{}/booking/decline/{}", url.trim_end_matches('/'), token)),
+        ),
+        _ => (None, None),
+    };
+
+    let action_text = match (&approve_url, &decline_url) {
+        (Some(a), Some(d)) => format!("Approve: {}\nDecline: {}", a, d),
+        _ => "Log in to your dashboard to confirm or decline this booking.".to_string(),
+    };
 
     let plain = format!(
         "New booking request requiring your approval!\n\n\
@@ -541,8 +593,7 @@ pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDe
          Time: {}\n\
          Guest: {} <{}>\n\
          {}{}\n\
-         Log in to your dashboard to confirm or decline this booking.\n\
-         Booking ID: {}\n\n\
+         {}\n\n\
          \u{2014} calrs",
         details.event_title,
         details.date,
@@ -551,7 +602,7 @@ pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDe
         details.guest_email,
         details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
         details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
-        booking_id,
+        action_text,
     );
 
     let mut rows = vec![
@@ -567,12 +618,21 @@ pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDe
         rows.push(EmailRow { label: "Notes", value: notes.clone() });
     }
 
-    let html = render_html_email(
+    let actions: Vec<EmailAction> = match (approve_url, decline_url) {
+        (Some(a), Some(d)) => vec![
+            EmailAction { label: "Approve".to_string(), url: a, color: "#16a34a".to_string() },
+            EmailAction { label: "Decline".to_string(), url: d, color: "#dc2626".to_string() },
+        ],
+        _ => vec![],
+    };
+
+    let html = render_html_email_with_actions(
         "Action required",
         &format!("{} wants to book a slot with you.", h(&details.guest_name)),
         "#f59e0b",
         &rows,
-        Some("Log in to your dashboard to confirm or decline this booking."),
+        Some("You can also manage this from your dashboard."),
+        &actions,
     );
 
     let body = build_multipart_body(&plain, &html);
@@ -581,6 +641,63 @@ pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDe
         .from(from)
         .to(to)
         .subject(format!("Action required: {} \u{2014} {} ({})", details.event_title, details.guest_name, details.date))
+        .multipart(body)?;
+
+    send_email(config, email).await
+}
+
+/// Send decline notification to the guest
+pub async fn send_guest_decline_notice(config: &SmtpConfig, details: &CancellationDetails) -> Result<()> {
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {}", details.start_time, details.end_time);
+    let reason_text = details.reason.as_ref()
+        .map(|r| format!("Reason: {}\n\n", r))
+        .unwrap_or_default();
+
+    let plain = format!(
+        "Hi {},\n\n\
+         Your booking request has been declined.\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         With: {}\n\n\
+         {}\
+         \u{2014} calrs",
+        details.guest_name,
+        details.event_title,
+        details.date,
+        time_display,
+        details.host_name,
+        reason_text,
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "With", value: details.host_name.clone() },
+    ];
+    if let Some(reason) = &details.reason {
+        rows.push(EmailRow { label: "Reason", value: reason.clone() });
+    }
+
+    let html = render_html_email(
+        &format!("Hi {},", h(&details.guest_name)),
+        "Your booking request has been declined.",
+        "#dc2626",
+        &rows,
+        None,
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("Declined: {} \u{2014} {}", details.event_title, details.date))
         .multipart(body)?;
 
     send_email(config, email).await

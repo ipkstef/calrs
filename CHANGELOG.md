@@ -49,6 +49,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Admin impersonation | 0.8.0 | Admins can impersonate any user for troubleshooting |
 | HTML emails | 0.8.3 | Clean, responsive HTML email notifications with plain text fallback |
 | Multi-VEVENT sync | 0.8.4 | Recurring events with modified instances properly synced from CalDAV |
+| Email approve/decline | 0.8.5 | Approve or decline pending bookings directly from the notification email |
+
+## [0.8.5] - 2026-03-09
+
+### Added
+
+- **Email approve/decline for pending bookings** — host notification emails now include "Approve" and "Decline" buttons that work without logging in
+  - Token-based authentication via `confirm_token` on each booking
+  - Approve: confirms the booking, pushes to CalDAV, sends guest confirmation email
+  - Decline: shows a form for an optional reason, notifies the guest by email
+  - Requires `CALRS_BASE_URL` environment variable to generate action URLs
+  - Graceful handling of already-processed bookings (already approved, declined, or cancelled)
 
 ## [0.8.4] - 2026-03-09
 
