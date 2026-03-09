@@ -120,7 +120,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now calrs
 ```
 
-Edit `/etc/systemd/system/calrs.service` to set `CALRS_BASE_URL` to your public URL. The service runs on port 3000 by default — put nginx or caddy in front for TLS.
+Edit `/etc/systemd/system/calrs.service` to set `CALRS_BASE_URL` to your public URL. The service runs on port 3000 by default — put a reverse proxy in front for TLS (see [Reverse proxy](#reverse-proxy) below).
 
 ### From source (development)
 
@@ -199,6 +199,52 @@ calrs serve --port 3000
 ```
 
 The login page will show a "Sign in with SSO" button. With `--auto-register true`, users are created automatically on first OIDC login. Existing local users are linked by email.
+
+## Reverse proxy
+
+calrs listens on HTTP (port 3000 by default). Use a reverse proxy for TLS termination.
+
+### Caddy
+
+The simplest option — automatic HTTPS with Let's Encrypt:
+
+```
+cal.example.com {
+    reverse_proxy localhost:3000
+}
+```
+
+Save as `/etc/caddy/Caddyfile` and reload: `sudo systemctl reload caddy`.
+
+### Nginx
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name cal.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/cal.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cal.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 80;
+    server_name cal.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+Get certificates with certbot: `sudo certbot --nginx -d cal.example.com`.
+
+> **Important:** Set `CALRS_BASE_URL` to your public URL (e.g. `https://cal.example.com`) so that OIDC redirect URIs and email links point to the right host.
 
 ## CLI reference
 

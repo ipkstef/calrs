@@ -198,10 +198,19 @@ File: `src/web/mod.rs`, templates in `templates/`
 - **Recurrence rules (RRULE) not expanded.** Recurring events won't block availability correctly yet.
 
 ### Features not yet implemented
-- CalDAV write-back (push bookings to user's calendar)
 - Delta sync using CalDAV `sync-token` and `ctag`
 - Recurrence rule expansion
-- Docker image / systemd unit file
+
+---
+
+## Deployment
+
+calrs listens on HTTP (port 3000 by default). In production, use a reverse proxy for TLS:
+
+- **Caddy** — simplest: `cal.example.com { reverse_proxy localhost:3000 }` (automatic HTTPS)
+- **Nginx** — `proxy_pass http://127.0.0.1:3000` with `X-Forwarded-For`, `X-Forwarded-Proto`, `Host` headers
+
+`CALRS_BASE_URL` must be set to the public URL (e.g. `https://cal.example.com`) for OIDC redirects and email links.
 
 ---
 
