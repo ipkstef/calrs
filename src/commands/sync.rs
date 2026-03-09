@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::caldav::CaldavClient;
+use crate::utils::{split_vevents, extract_vevent_field};
 
 pub async fn run(pool: &SqlitePool, _full: bool) -> Result<()> {
     let sources: Vec<(String, String, String, String, String)> = sqlx::query_as(
@@ -165,45 +166,4 @@ pub async fn run(pool: &SqlitePool, _full: bool) -> Result<()> {
 
     println!("{} Sync complete.", "✓".green());
     Ok(())
-}
-
-/// Extract a field from the VEVENT block only (ignores VTIMEZONE etc.)
-/// Split an iCal blob into individual VEVENT blocks.
-/// A single CalDAV resource can contain multiple VEVENTs when a recurring
-/// event has modified instances (RECURRENCE-ID). Each block is returned as
-/// the text between BEGIN:VEVENT and END:VEVENT (inclusive).
-fn split_vevents(ical: &str) -> Vec<String> {
-    let mut blocks = Vec::new();
-    let mut search_from = 0;
-    while let Some(start) = ical[search_from..].find("BEGIN:VEVENT") {
-        let abs_start = search_from + start;
-        if let Some(end) = ical[abs_start..].find("END:VEVENT") {
-            let abs_end = abs_start + end + "END:VEVENT".len();
-            blocks.push(ical[abs_start..abs_end].to_string());
-            search_from = abs_end;
-        } else {
-            break;
-        }
-    }
-    // Fallback: if no VEVENT found, treat the whole blob as one block
-    // so the old extract logic still works
-    if blocks.is_empty() {
-        blocks.push(ical.to_string());
-    }
-    blocks
-}
-
-/// Extract a field value from a single VEVENT block.
-fn extract_vevent_field(vevent: &str, field: &str) -> Option<String> {
-    for line in vevent.lines() {
-        if line.starts_with(field) {
-            if let Some(colon_pos) = line.find(':') {
-                let value = line[colon_pos + 1..].trim().to_string();
-                if !value.is_empty() {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    None
 }

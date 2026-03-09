@@ -11,6 +11,7 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::utils::{split_vevents, extract_vevent_field};
 
 /// Simple per-IP rate limiter for login attempts.
 /// Tracks (attempt_count, window_start) per IP.
@@ -1100,49 +1101,53 @@ async fn sync_source(
             Ok(raw_events) => {
                 let mut count = 0;
                 for raw in &raw_events {
-                    let uid = extract_ical_field(&raw.ical_data, "UID")
-                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                    let summary = extract_ical_field(&raw.ical_data, "SUMMARY");
-                    let start_at = extract_ical_field(&raw.ical_data, "DTSTART").unwrap_or_default();
-                    let end_at = extract_ical_field(&raw.ical_data, "DTEND").unwrap_or_default();
-                    let location = extract_ical_field(&raw.ical_data, "LOCATION");
-                    let description = extract_ical_field(&raw.ical_data, "DESCRIPTION");
-                    let status = extract_ical_field(&raw.ical_data, "STATUS");
-                    let rrule = extract_ical_field(&raw.ical_data, "RRULE");
-                    let recurrence_id = extract_ical_field(&raw.ical_data, "RECURRENCE-ID");
+                    // Split multi-VEVENT blobs (parent + modified instances)
+                    let vevent_blocks = split_vevents(&raw.ical_data);
+                    for vevent in &vevent_blocks {
+                        let uid = extract_vevent_field(vevent, "UID")
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                        let summary = extract_vevent_field(vevent, "SUMMARY");
+                        let start_at = extract_vevent_field(vevent, "DTSTART").unwrap_or_default();
+                        let end_at = extract_vevent_field(vevent, "DTEND").unwrap_or_default();
+                        let location = extract_vevent_field(vevent, "LOCATION");
+                        let description = extract_vevent_field(vevent, "DESCRIPTION");
+                        let status = extract_vevent_field(vevent, "STATUS");
+                        let rrule = extract_vevent_field(vevent, "RRULE");
+                        let recurrence_id = extract_vevent_field(vevent, "RECURRENCE-ID");
 
-                    let event_id = uuid::Uuid::new_v4().to_string();
-                    let _ = sqlx::query(
-                        "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                         ON CONFLICT(uid) DO UPDATE SET
-                           summary = excluded.summary,
-                           start_at = excluded.start_at,
-                           end_at = excluded.end_at,
-                           location = excluded.location,
-                           description = excluded.description,
-                           status = excluded.status,
-                           rrule = excluded.rrule,
-                           raw_ical = excluded.raw_ical,
-                           recurrence_id = excluded.recurrence_id,
-                           synced_at = datetime('now')",
-                    )
-                    .bind(&event_id)
-                    .bind(&cal_id)
-                    .bind(&uid)
-                    .bind(&summary)
-                    .bind(&start_at)
-                    .bind(&end_at)
-                    .bind(&location)
-                    .bind(&description)
-                    .bind(&status)
-                    .bind(&rrule)
-                    .bind(&raw.ical_data)
-                    .bind(&recurrence_id)
-                    .execute(&state.pool)
-                    .await;
+                        let event_id = uuid::Uuid::new_v4().to_string();
+                        let _ = sqlx::query(
+                            "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             ON CONFLICT(uid, COALESCE(recurrence_id, '')) DO UPDATE SET
+                               summary = excluded.summary,
+                               start_at = excluded.start_at,
+                               end_at = excluded.end_at,
+                               location = excluded.location,
+                               description = excluded.description,
+                               status = excluded.status,
+                               rrule = excluded.rrule,
+                               raw_ical = excluded.raw_ical,
+                               recurrence_id = excluded.recurrence_id,
+                               synced_at = datetime('now')",
+                        )
+                        .bind(&event_id)
+                        .bind(&cal_id)
+                        .bind(&uid)
+                        .bind(&summary)
+                        .bind(&start_at)
+                        .bind(&end_at)
+                        .bind(&location)
+                        .bind(&description)
+                        .bind(&status)
+                        .bind(&rrule)
+                        .bind(&raw.ical_data)
+                        .bind(&recurrence_id)
+                        .execute(&state.pool)
+                        .await;
 
-                    count += 1;
+                        count += 1;
+                    }
                 }
                 total_events += count;
                 messages.push(format!("{} — {} event(s)", display, count));
@@ -2194,25 +2199,6 @@ fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
     None
 }
 
-fn extract_ical_field(ical: &str, field: &str) -> Option<String> {
-    let vevent_start = ical.find("BEGIN:VEVENT")?;
-    let vevent_end = ical[vevent_start..].find("END:VEVENT")
-        .map(|i| vevent_start + i)
-        .unwrap_or(ical.len());
-    let vevent = &ical[vevent_start..vevent_end];
-
-    for line in vevent.lines() {
-        if line.starts_with(field) {
-            if let Some(colon_pos) = line.find(':') {
-                let value = line[colon_pos + 1..].trim().to_string();
-                if !value.is_empty() {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    None
-}
 
 
 /// Pick an available group member for a booking slot.
