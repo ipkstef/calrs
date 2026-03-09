@@ -14,8 +14,8 @@ pub enum ConfigCommands {
         #[arg(long)]
         host: Option<String>,
         /// SMTP port (default: 587)
-        #[arg(long, default_value = "587")]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         /// SMTP username
         #[arg(long)]
         username: Option<String>,
@@ -86,6 +86,10 @@ pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("No account found. Run `calrs init` first."))?;
 
             let host = host.unwrap_or_else(|| prompt("SMTP host"));
+            let port = port.unwrap_or_else(|| {
+                let p = prompt("SMTP port (default 587)");
+                if p.is_empty() { 587 } else { p.parse().unwrap_or(587) }
+            });
             let username = username.unwrap_or_else(|| prompt("SMTP username"));
             let password = prompt("SMTP password");
             let from_email = from_email.unwrap_or_else(|| prompt("From email"));
