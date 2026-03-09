@@ -29,6 +29,98 @@ pub struct BookingDetails {
     pub location: Option<String>,
 }
 
+pub struct CancellationDetails {
+    pub event_title: String,
+    pub date: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub guest_name: String,
+    pub guest_email: String,
+    pub host_name: String,
+    pub host_email: String,
+    pub uid: String,
+    pub reason: Option<String>,
+}
+
+// --- HTML email template helpers ---
+
+fn h(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+struct EmailRow {
+    label: &'static str,
+    value: String,
+}
+
+fn render_html_email(
+    greeting: &str,
+    message: &str,
+    accent: &str,
+    rows: &[EmailRow],
+    footer_note: Option<&str>,
+) -> String {
+    let mut detail_rows = String::new();
+    for (i, row) in rows.iter().enumerate() {
+        let bg = if i % 2 == 0 { "#f8f9fa" } else { "#ffffff" };
+        detail_rows.push_str(&format!(
+            "<tr>\
+               <td style=\"padding:8px 12px;color:#6b7280;font-size:13px;white-space:nowrap;vertical-align:top;\">{}</td>\
+               <td style=\"padding:8px 12px;color:#111827;font-size:14px;background:{bg};\">{}</td>\
+             </tr>",
+            row.label, h(&row.value),
+        ));
+    }
+
+    let footer_html = footer_note
+        .map(|n| format!("<p style=\"margin:16px 0 0;font-size:13px;color:#6b7280;\">{}</p>", h(n)))
+        .unwrap_or_default();
+
+    format!(
+r##"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;">
+<tr><td align="center" style="padding:32px 16px;">
+  <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;max-width:520px;width:100%;">
+    <!-- Accent bar -->
+    <tr><td style="height:4px;background:{accent};border-radius:8px 8px 0 0;"></td></tr>
+    <!-- Content -->
+    <tr><td style="padding:32px 28px;">
+      <p style="margin:0 0 4px;font-size:15px;color:#374151;">{greeting}</p>
+      <p style="margin:0 0 20px;font-size:15px;color:#111827;font-weight:500;">{message}</p>
+      <!-- Details table -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+        {detail_rows}
+      </table>
+      {footer_html}
+    </td></tr>
+    <!-- Footer -->
+    <tr><td style="padding:16px 28px;border-top:1px solid #f0f0f3;text-align:center;">
+      <span style="font-size:12px;color:#9ca3af;">Sent by </span>
+      <span style="font-size:12px;color:#6b7280;font-weight:600;">calrs</span>
+    </td></tr>
+  </table>
+</td></tr>
+</table>
+</body>
+</html>"##
+    )
+}
+
+fn build_multipart_body(plain: &str, html: &str) -> MultiPart {
+    MultiPart::alternative()
+        .singlepart(SinglePart::plain(plain.to_string()))
+        .singlepart(
+            SinglePart::builder()
+                .header(ContentType::parse("text/html; charset=UTF-8").unwrap())
+                .body(html.to_string()),
+        )
+}
+
+// --- ICS generation ---
+
 /// Sanitize a value for use in an ICS field.
 /// Strips CR/LF to prevent ICS injection (RFC 5545 field breakout).
 fn sanitize_ics(value: &str) -> String {
@@ -73,273 +165,6 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
     )
 }
 
-/// Send booking confirmation to the guest
-pub async fn send_guest_confirmation(config: &SmtpConfig, details: &BookingDetails) -> Result<()> {
-    // Use PUBLISH (not REQUEST) so mail servers like BlueMind don't generate
-    // a duplicate calendar invitation — calrs handles the invite directly.
-    let ics = generate_ics(details, "PUBLISH");
-
-    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
-    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
-    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
-
-    let body = format!(
-        "Hi {},\n\n\
-         Your booking has been confirmed!\n\n\
-         Event: {}\n\
-         Date: {}\n\
-         Time: {} – {} ({})\n\
-         With: {}\n\
-         {}{}\n\
-         You should find a calendar invite attached to this email.\n\n\
-         — calrs",
-        details.guest_name,
-        details.event_title,
-        details.date,
-        details.start_time,
-        details.end_time,
-        details.guest_timezone,
-        details.host_name,
-        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
-        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
-    );
-
-    let ics_attachment = Attachment::new("invite.ics".to_string())
-        .body(ics, ContentType::parse("text/calendar; method=PUBLISH; charset=UTF-8")?);
-
-    let email = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(format!("Confirmed: {} — {}", details.event_title, details.date))
-        .multipart(
-            MultiPart::mixed()
-                .singlepart(SinglePart::plain(body))
-                .singlepart(ics_attachment),
-        )?;
-
-    send_email(config, email).await
-}
-
-/// Send booking notification to the host
-pub async fn send_host_notification(config: &SmtpConfig, details: &BookingDetails) -> Result<()> {
-    let ics = generate_ics(details, "REQUEST");
-
-    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
-    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
-    let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
-
-    let body = format!(
-        "New booking!\n\n\
-         Event: {}\n\
-         Date: {}\n\
-         Time: {} – {}\n\
-         Guest: {} <{}>\n\
-         {}{}\n\
-         A calendar invite is attached.\n\n\
-         — calrs",
-        details.event_title,
-        details.date,
-        details.start_time,
-        details.end_time,
-        details.guest_name,
-        details.guest_email,
-        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
-        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
-    );
-
-    let ics_attachment = Attachment::new("invite.ics".to_string())
-        .body(ics, ContentType::parse("text/calendar; method=REQUEST; charset=UTF-8")?);
-
-    let email = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(format!("New booking: {} — {} ({})", details.event_title, details.guest_name, details.date))
-        .multipart(
-            MultiPart::mixed()
-                .singlepart(SinglePart::plain(body))
-                .singlepart(ics_attachment),
-        )?;
-
-    send_email(config, email).await
-}
-
-pub struct CancellationDetails {
-    pub event_title: String,
-    pub date: String,
-    pub start_time: String,
-    pub end_time: String,
-    pub guest_name: String,
-    pub guest_email: String,
-    pub host_name: String,
-    pub host_email: String,
-    pub uid: String,
-    pub reason: Option<String>,
-}
-
-/// Send cancellation notification to the guest
-pub async fn send_guest_cancellation(config: &SmtpConfig, details: &CancellationDetails) -> Result<()> {
-    let ics = generate_cancel_ics(details);
-
-    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
-    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
-    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
-
-    let reason_text = details.reason.as_ref()
-        .map(|r| format!("Reason: {}\n\n", r))
-        .unwrap_or_default();
-
-    let body = format!(
-        "Hi {},\n\n\
-         Your booking has been cancelled.\n\n\
-         Event: {}\n\
-         Date: {}\n\
-         Time: {} – {}\n\
-         With: {}\n\n\
-         {}\
-         A calendar cancellation is attached.\n\n\
-         — calrs",
-        details.guest_name,
-        details.event_title,
-        details.date,
-        details.start_time,
-        details.end_time,
-        details.host_name,
-        reason_text,
-    );
-
-    let ics_attachment = Attachment::new("cancel.ics".to_string())
-        .body(ics, ContentType::parse("text/calendar; method=CANCEL; charset=UTF-8")?);
-
-    let email = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(format!("Cancelled: {} — {}", details.event_title, details.date))
-        .multipart(
-            MultiPart::mixed()
-                .singlepart(SinglePart::plain(body))
-                .singlepart(ics_attachment),
-        )?;
-
-    send_email(config, email).await
-}
-
-/// Send cancellation notification to the host
-pub async fn send_host_cancellation(config: &SmtpConfig, details: &CancellationDetails) -> Result<()> {
-    let ics = generate_cancel_ics(details);
-
-    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
-    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
-    let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
-
-    let reason_text = details.reason.as_ref()
-        .map(|r| format!("Reason: {}\n\n", r))
-        .unwrap_or_default();
-
-    let body = format!(
-        "Booking cancelled.\n\n\
-         Event: {}\n\
-         Date: {}\n\
-         Time: {} – {}\n\
-         Guest: {} <{}>\n\n\
-         {}\
-         A calendar cancellation is attached.\n\n\
-         — calrs",
-        details.event_title,
-        details.date,
-        details.start_time,
-        details.end_time,
-        details.guest_name,
-        details.guest_email,
-        reason_text,
-    );
-
-    let ics_attachment = Attachment::new("cancel.ics".to_string())
-        .body(ics, ContentType::parse("text/calendar; method=CANCEL; charset=UTF-8")?);
-
-    let email = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(format!("Cancelled: {} — {} ({})", details.event_title, details.guest_name, details.date))
-        .multipart(
-            MultiPart::mixed()
-                .singlepart(SinglePart::plain(body))
-                .singlepart(ics_attachment),
-        )?;
-
-    send_email(config, email).await
-}
-
-/// Send pending notice to guest (booking awaits host approval)
-pub async fn send_guest_pending_notice(config: &SmtpConfig, details: &BookingDetails) -> Result<()> {
-    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
-    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
-    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
-
-    let body = format!(
-        "Hi {},\n\n\
-         Your booking request has been received and is awaiting confirmation from {}.\n\n\
-         Event: {}\n\
-         Date: {}\n\
-         Time: {} – {} ({})\n\
-         {}{}\n\
-         You'll receive another email once it's confirmed.\n\n\
-         — calrs",
-        details.guest_name,
-        details.host_name,
-        details.event_title,
-        details.date,
-        details.start_time,
-        details.end_time,
-        details.guest_timezone,
-        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
-        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
-    );
-
-    let email = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(format!("Pending: {} — {}", details.event_title, details.date))
-        .singlepart(SinglePart::plain(body))?;
-
-    send_email(config, email).await
-}
-
-/// Send approval request to host
-pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDetails, booking_id: &str) -> Result<()> {
-    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
-    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
-    let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
-
-    let body = format!(
-        "New booking request requiring your approval!\n\n\
-         Event: {}\n\
-         Date: {}\n\
-         Time: {} – {}\n\
-         Guest: {} <{}>\n\
-         {}{}\n\
-         Log in to your dashboard to confirm or decline this booking.\n\
-         Booking ID: {}\n\n\
-         — calrs",
-        details.event_title,
-        details.date,
-        details.start_time,
-        details.end_time,
-        details.guest_name,
-        details.guest_email,
-        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
-        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
-        booking_id,
-    );
-
-    let email = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(format!("Action required: {} — {} ({})", details.event_title, details.guest_name, details.date))
-        .singlepart(SinglePart::plain(body))?;
-
-    send_email(config, email).await
-}
-
 /// Generate an .ics VCALENDAR for cancellation (METHOD:CANCEL)
 fn generate_cancel_ics(details: &CancellationDetails) -> String {
     let summary = sanitize_ics(&details.event_title);
@@ -373,6 +198,396 @@ fn generate_cancel_ics(details: &CancellationDetails) -> String {
     )
 }
 
+// --- Email senders ---
+
+/// Send booking confirmation to the guest
+pub async fn send_guest_confirmation(config: &SmtpConfig, details: &BookingDetails) -> Result<()> {
+    let ics = generate_ics(details, "PUBLISH");
+
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {} ({})", details.start_time, details.end_time, details.guest_timezone);
+
+    let plain = format!(
+        "Hi {},\n\n\
+         Your booking has been confirmed!\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         With: {}\n\
+         {}{}\n\
+         A calendar invite is attached.\n\n\
+         \u{2014} calrs",
+        details.guest_name,
+        details.event_title,
+        details.date,
+        time_display,
+        details.host_name,
+        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
+        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "With", value: details.host_name.clone() },
+    ];
+    if let Some(loc) = &details.location {
+        rows.push(EmailRow { label: "Location", value: loc.clone() });
+    }
+    if let Some(notes) = &details.notes {
+        rows.push(EmailRow { label: "Notes", value: notes.clone() });
+    }
+
+    let html = render_html_email(
+        &format!("Hi {},", h(&details.guest_name)),
+        "Your booking has been confirmed!",
+        "#16a34a",
+        &rows,
+        Some("A calendar invite is attached to this email."),
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let ics_attachment = Attachment::new("invite.ics".to_string())
+        .body(ics, ContentType::parse("text/calendar; method=PUBLISH; charset=UTF-8")?);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("Confirmed: {} \u{2014} {}", details.event_title, details.date))
+        .multipart(
+            MultiPart::mixed()
+                .multipart(body)
+                .singlepart(ics_attachment),
+        )?;
+
+    send_email(config, email).await
+}
+
+/// Send booking notification to the host
+pub async fn send_host_notification(config: &SmtpConfig, details: &BookingDetails) -> Result<()> {
+    let ics = generate_ics(details, "REQUEST");
+
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {}", details.start_time, details.end_time);
+
+    let plain = format!(
+        "New booking!\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         Guest: {} <{}>\n\
+         {}{}\n\
+         A calendar invite is attached.\n\n\
+         \u{2014} calrs",
+        details.event_title,
+        details.date,
+        time_display,
+        details.guest_name,
+        details.guest_email,
+        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
+        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "Guest", value: format!("{} <{}>", details.guest_name, details.guest_email) },
+    ];
+    if let Some(loc) = &details.location {
+        rows.push(EmailRow { label: "Location", value: loc.clone() });
+    }
+    if let Some(notes) = &details.notes {
+        rows.push(EmailRow { label: "Notes", value: notes.clone() });
+    }
+
+    let html = render_html_email(
+        "New booking!",
+        &format!("{} booked a slot with you.", h(&details.guest_name)),
+        "#16a34a",
+        &rows,
+        Some("A calendar invite is attached to this email."),
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let ics_attachment = Attachment::new("invite.ics".to_string())
+        .body(ics, ContentType::parse("text/calendar; method=REQUEST; charset=UTF-8")?);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("New booking: {} \u{2014} {} ({})", details.event_title, details.guest_name, details.date))
+        .multipart(
+            MultiPart::mixed()
+                .multipart(body)
+                .singlepart(ics_attachment),
+        )?;
+
+    send_email(config, email).await
+}
+
+/// Send cancellation notification to the guest
+pub async fn send_guest_cancellation(config: &SmtpConfig, details: &CancellationDetails) -> Result<()> {
+    let ics = generate_cancel_ics(details);
+
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {}", details.start_time, details.end_time);
+    let reason_text = details.reason.as_ref()
+        .map(|r| format!("Reason: {}\n\n", r))
+        .unwrap_or_default();
+
+    let plain = format!(
+        "Hi {},\n\n\
+         Your booking has been cancelled.\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         With: {}\n\n\
+         {}\
+         A calendar cancellation is attached.\n\n\
+         \u{2014} calrs",
+        details.guest_name,
+        details.event_title,
+        details.date,
+        time_display,
+        details.host_name,
+        reason_text,
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "With", value: details.host_name.clone() },
+    ];
+    if let Some(reason) = &details.reason {
+        rows.push(EmailRow { label: "Reason", value: reason.clone() });
+    }
+
+    let html = render_html_email(
+        &format!("Hi {},", h(&details.guest_name)),
+        "Your booking has been cancelled.",
+        "#dc2626",
+        &rows,
+        Some("A calendar cancellation is attached to this email."),
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let ics_attachment = Attachment::new("cancel.ics".to_string())
+        .body(ics, ContentType::parse("text/calendar; method=CANCEL; charset=UTF-8")?);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("Cancelled: {} \u{2014} {}", details.event_title, details.date))
+        .multipart(
+            MultiPart::mixed()
+                .multipart(body)
+                .singlepart(ics_attachment),
+        )?;
+
+    send_email(config, email).await
+}
+
+/// Send cancellation notification to the host
+pub async fn send_host_cancellation(config: &SmtpConfig, details: &CancellationDetails) -> Result<()> {
+    let ics = generate_cancel_ics(details);
+
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {}", details.start_time, details.end_time);
+    let reason_text = details.reason.as_ref()
+        .map(|r| format!("Reason: {}\n\n", r))
+        .unwrap_or_default();
+
+    let plain = format!(
+        "Booking cancelled.\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         Guest: {} <{}>\n\n\
+         {}\
+         A calendar cancellation is attached.\n\n\
+         \u{2014} calrs",
+        details.event_title,
+        details.date,
+        time_display,
+        details.guest_name,
+        details.guest_email,
+        reason_text,
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "Guest", value: format!("{} <{}>", details.guest_name, details.guest_email) },
+    ];
+    if let Some(reason) = &details.reason {
+        rows.push(EmailRow { label: "Reason", value: reason.clone() });
+    }
+
+    let html = render_html_email(
+        "Booking cancelled.",
+        &format!("{} cancelled their booking.", h(&details.guest_name)),
+        "#dc2626",
+        &rows,
+        Some("A calendar cancellation is attached to this email."),
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let ics_attachment = Attachment::new("cancel.ics".to_string())
+        .body(ics, ContentType::parse("text/calendar; method=CANCEL; charset=UTF-8")?);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("Cancelled: {} \u{2014} {} ({})", details.event_title, details.guest_name, details.date))
+        .multipart(
+            MultiPart::mixed()
+                .multipart(body)
+                .singlepart(ics_attachment),
+        )?;
+
+    send_email(config, email).await
+}
+
+/// Send pending notice to guest (booking awaits host approval)
+pub async fn send_guest_pending_notice(config: &SmtpConfig, details: &BookingDetails) -> Result<()> {
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {} ({})", details.start_time, details.end_time, details.guest_timezone);
+
+    let plain = format!(
+        "Hi {},\n\n\
+         Your booking request has been received and is awaiting confirmation from {}.\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         {}{}\n\
+         You'll receive another email once it's confirmed.\n\n\
+         \u{2014} calrs",
+        details.guest_name,
+        details.host_name,
+        details.event_title,
+        details.date,
+        time_display,
+        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
+        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "Host", value: details.host_name.clone() },
+    ];
+    if let Some(loc) = &details.location {
+        rows.push(EmailRow { label: "Location", value: loc.clone() });
+    }
+    if let Some(notes) = &details.notes {
+        rows.push(EmailRow { label: "Notes", value: notes.clone() });
+    }
+
+    let html = render_html_email(
+        &format!("Hi {},", h(&details.guest_name)),
+        &format!("Your booking request is awaiting confirmation from {}.", h(&details.host_name)),
+        "#f59e0b",
+        &rows,
+        Some("You\u{2019}ll receive another email once it\u{2019}s confirmed."),
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("Pending: {} \u{2014} {}", details.event_title, details.date))
+        .multipart(body)?;
+
+    send_email(config, email).await
+}
+
+/// Send approval request to host
+pub async fn send_host_approval_request(config: &SmtpConfig, details: &BookingDetails, booking_id: &str) -> Result<()> {
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.host_name, details.host_email).parse()?;
+
+    let time_display = format!("{} \u{2013} {}", details.start_time, details.end_time);
+
+    let plain = format!(
+        "New booking request requiring your approval!\n\n\
+         Event: {}\n\
+         Date: {}\n\
+         Time: {}\n\
+         Guest: {} <{}>\n\
+         {}{}\n\
+         Log in to your dashboard to confirm or decline this booking.\n\
+         Booking ID: {}\n\n\
+         \u{2014} calrs",
+        details.event_title,
+        details.date,
+        time_display,
+        details.guest_name,
+        details.guest_email,
+        details.location.as_ref().map(|l| format!("Location: {}\n", l)).unwrap_or_default(),
+        details.notes.as_ref().map(|n| format!("Notes: {}\n", n)).unwrap_or_default(),
+        booking_id,
+    );
+
+    let mut rows = vec![
+        EmailRow { label: "Event", value: details.event_title.clone() },
+        EmailRow { label: "Date", value: details.date.clone() },
+        EmailRow { label: "Time", value: time_display },
+        EmailRow { label: "Guest", value: format!("{} <{}>", details.guest_name, details.guest_email) },
+    ];
+    if let Some(loc) = &details.location {
+        rows.push(EmailRow { label: "Location", value: loc.clone() });
+    }
+    if let Some(notes) = &details.notes {
+        rows.push(EmailRow { label: "Notes", value: notes.clone() });
+    }
+
+    let html = render_html_email(
+        "Action required",
+        &format!("{} wants to book a slot with you.", h(&details.guest_name)),
+        "#f59e0b",
+        &rows,
+        Some("Log in to your dashboard to confirm or decline this booking."),
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("Action required: {} \u{2014} {} ({})", details.event_title, details.guest_name, details.date))
+        .multipart(body)?;
+
+    send_email(config, email).await
+}
+
+// --- Utility ---
+
 /// Load SMTP config from database
 pub async fn load_smtp_config(pool: &SqlitePool) -> Result<Option<SmtpConfig>> {
     let row: Option<(String, i32, String, String, String, Option<String>)> = sqlx::query_as(
@@ -405,11 +620,23 @@ pub async fn send_test_email(config: &SmtpConfig, to_email: &str) -> Result<()> 
     let from = format!("{} <{}>", from_display, config.from_email).parse()?;
     let to = to_email.parse()?;
 
+    let plain = "This is a test email from calrs. SMTP is working!".to_string();
+
+    let html = render_html_email(
+        "SMTP test",
+        "This is a test email from calrs. SMTP is working!",
+        "#6366f1",
+        &[],
+        None,
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
     let email = Message::builder()
         .from(from)
         .to(to)
-        .subject("calrs — SMTP test")
-        .singlepart(SinglePart::plain("This is a test email from calrs. SMTP is working!".to_string()))?;
+        .subject("calrs \u{2014} SMTP test")
+        .multipart(body)?;
 
     send_email(config, email).await
 }

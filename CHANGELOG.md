@@ -47,6 +47,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Duplicate email fix | 0.7.0 | Guest emails use METHOD:PUBLISH to avoid mail server re-invites |
 | RECURRENCE-ID handling | 0.7.1 | Modified recurring event instances no longer cause phantom occurrences |
 | Admin impersonation | 0.8.0 | Admins can impersonate any user for troubleshooting |
+| HTML emails | 0.8.3 | Clean, responsive HTML email notifications with plain text fallback |
+
+## [0.8.3] - 2026-03-09
+
+### Changed
+
+- **HTML email notifications** — all booking emails now use a clean, responsive HTML design with a plain text fallback
+  - Color-coded accent bar: green (confirmed), amber (pending/approval), red (cancelled)
+  - Structured detail table with event, date, time, guest/host info
+  - Proper HTML escaping for all user-supplied values
+  - `MultiPart::alternative` ensures clients without HTML support get the plain text version
 
 ## [0.8.1] - 2026-03-09
 
