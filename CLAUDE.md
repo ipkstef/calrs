@@ -48,7 +48,8 @@ calrs/
 │   ├── 002_auth.sql              ← users, sessions, auth_config, groups
 │   ├── 003_username.sql          ← username column on users
 │   ├── 004_oidc.sql              ← OIDC columns on auth_config
-│   └── 005_requires_confirmation.sql ← requires_confirmation on event_types
+│   ├── 005_requires_confirmation.sql ← requires_confirmation on event_types
+│   └── 006_group_event_types.sql    ← slug on groups, group_id on event_types, assigned_user_id on bookings
 ├── templates/
 │   ├── base.html                 ← base layout + CSS
 │   ├── auth/
@@ -56,9 +57,10 @@ calrs/
 │   │   └── register.html         ← registration page
 │   ├── dashboard.html            ← user dashboard (event types, bookings)
 │   ├── admin.html                ← admin dashboard (users, auth, OIDC, SMTP)
-│   ├── event_type_form.html      ← create/edit event types
+│   ├── event_type_form.html      ← create/edit event types (with group selector)
 │   ├── profile.html              ← public user profile
-│   ├── slots.html                ← available time slots
+│   ├── group_profile.html        ← public group page
+│   ├── slots.html                ← available time slots (with timezone picker)
 │   ├── book.html                 ← booking form
 │   └── confirmed.html            ← confirmation page
 └── src/
@@ -100,12 +102,12 @@ Key tables:
 - **`caldav_sources`** — CalDAV server connections (URL, credentials, sync state). `enabled` flag, `ON DELETE CASCADE`
 - **`calendars`** — calendar collections discovered under a source; `is_busy=1` means events block availability
 - **`events`** — cached remote events from CalDAV sync; `uid` is UNIQUE, stores `raw_ical`, `etag`, `rrule`, `all_day`, `timezone`
-- **`event_types`** — bookable meeting templates (slug unique per account, `duration_min`, `buffer_before`/`buffer_after`, `min_notice_min`, `location_type`/`location_value`, `requires_confirmation`)
+- **`event_types`** — bookable meeting templates (slug unique per account, `duration_min`, `buffer_before`/`buffer_after`, `min_notice_min`, `location_type`/`location_value`, `requires_confirmation`, `group_id`, `created_by_user_id`)
 - **`availability_rules`** — weekly recurring windows per event type (day_of_week 0=Sun…6=Sat, HH:MM times)
 - **`availability_overrides`** — date-specific exceptions (day off, special hours). `is_blocked` flag
-- **`bookings`** — bookings with `uid` (iCal), guest info, status (confirmed/pending/cancelled), `cancel_token`/`reschedule_token`
+- **`bookings`** — bookings with `uid` (iCal), guest info, status (confirmed/pending/cancelled), `cancel_token`/`reschedule_token`, `assigned_user_id` (for group round-robin)
 - **`smtp_config`** — SMTP server settings (host, port, credentials, sender), one per account
-- **`groups`** / **`user_groups`** — group system (schema exists, not yet wired up)
+- **`groups`** / **`user_groups`** — group system synced from Keycloak OIDC; groups have `slug` for public URLs
 
 All primary keys are UUID v4 strings. Datetimes are ISO8601 strings.
 
@@ -160,11 +162,15 @@ File: `src/auth.rs`
 
 File: `src/web/mod.rs`, templates in `templates/`
 
-**Dashboard** (`/dashboard`): Lists event types (create/edit/toggle/view), pending bookings (confirm/decline), upcoming bookings (cancel with optional reason).
+**Dashboard** (`/dashboard`): Lists personal and group event types (create/edit/toggle/view), pending bookings (confirm/decline), upcoming bookings (cancel with optional reason).
 
-**Admin panel** (`/dashboard/admin`): User management (promote/demote, enable/disable), auth settings (registration toggle, allowed domains), OIDC config, SMTP status. Requires `AdminUser`.
+**Admin panel** (`/dashboard/admin`): User management (promote/demote, enable/disable), auth settings (registration toggle, allowed domains), OIDC config, SMTP status, groups overview. Requires `AdminUser`.
 
-**Public pages:** User profile (`/u/{username}`), time slot picker, booking form, confirmation page. Event types support location (video link, phone, in-person, custom).
+**Public pages:** User profile (`/u/{username}`), group profile (`/g/{group-slug}`), time slot picker (with timezone selector), booking form, confirmation page. Event types support location (video link, phone, in-person, custom).
+
+**Group event types:** Created under a group from the dashboard. Combined availability shows slots where ANY group member is free. Round-robin assignment picks the least-busy available member. Public URLs: `/g/{group-slug}/{slug}`.
+
+**Timezone support:** Guest timezone picker on slot pages. Browser timezone auto-detected via `Intl.DateTimeFormat`. Times displayed and booked in the guest's selected timezone.
 
 **Email notifications:** Booking confirmation, cancellation, pending notice, approval request — all with `.ics` calendar invite attachments. Location included in emails and ICS.
 
@@ -190,10 +196,9 @@ File: `src/web/mod.rs`, templates in `templates/`
 - **Recurrence rules (RRULE) not expanded.** Recurring events won't block availability correctly yet.
 
 ### Features not yet implemented
-- Group sync from OIDC provider (Keycloak)
-- Group-based event type permissions
 - CalDAV write-back (push bookings to user's calendar)
 - Delta sync using CalDAV `sync-token` and `ctag`
+- Recurrence rule expansion
 - Docker image / systemd unit file
 
 ---

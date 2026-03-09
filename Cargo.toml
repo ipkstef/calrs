@@ -1,6 +1,6 @@
 [package]
 name = "calrs"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 description = "A fast, self-hostable scheduling platform. Like Cal.com, but written in Rust."
 license = "AGPL-3.0"
@@ -68,6 +68,7 @@ password-hash = { version = "0.5", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
+iana-time-zone = "0.1.65"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -3,8 +3,10 @@
 {% block title %}Book {{ event_type.title }}{% endblock %}
 
 {% block content %}
-{# Compute base path: /u/username/slug or /slug #}
-{% if username is defined and username %}
+{# Compute base path: /g/group_slug/slug, /u/username/slug, or /slug #}
+{% if group_slug is defined and group_slug %}
+  {% set base = "/g/" ~ group_slug ~ "/" ~ event_type.slug %}
+{% elif username is defined and username %}
   {% set base = "/u/" ~ username ~ "/" ~ event_type.slug %}
 {% else %}
   {% set base = "/" ~ event_type.slug %}
@@ -33,6 +35,7 @@
   <form method="POST" action="{{ base }}/book">
     <input type="hidden" name="date" value="{{ date }}">
     <input type="hidden" name="time" value="{{ time_start }}">
+    {% if guest_tz is defined and guest_tz %}<input type="hidden" name="tz" value="{{ guest_tz }}">{% endif %}
 
     <div class="form-group">
       <label for="name">Your name</label>

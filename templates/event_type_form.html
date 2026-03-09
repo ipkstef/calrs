@@ -13,6 +13,18 @@
   {% endif %}
 
   <form method="POST" style="margin-top: 1.25rem;">
+    {% if not editing and groups is defined and groups %}
+    <div class="form-group">
+      <label for="group_id">Group <span class="hint">(optional — leave empty for personal event type)</span></label>
+      <select id="group_id" name="group_id" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        <option value="">Personal</option>
+        {% for g in groups %}
+        <option value="{{ g.id }}" {% if form_group_id is defined and form_group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
     <div class="form-group">
       <label for="title">Title</label>
       <input type="text" id="title" name="title" required value="{{ form_title }}" placeholder="30min intro call">

@@ -857,16 +857,18 @@ pub async fn sync_user_groups(
 
     for group_path in groups {
         let group_id = uuid::Uuid::new_v4().to_string();
+        let slug = generate_group_slug(group_path);
 
         // Upsert group: insert if not exists (keyed on name + source=oidc)
         sqlx::query(
-            "INSERT INTO groups (id, name, source, oidc_id, created_at) \
-             VALUES (?, ?, 'oidc', ?, datetime('now')) \
-             ON CONFLICT(name) DO UPDATE SET oidc_id = excluded.oidc_id",
+            "INSERT INTO groups (id, name, source, oidc_id, slug, created_at) \
+             VALUES (?, ?, 'oidc', ?, ?, datetime('now')) \
+             ON CONFLICT(name) DO UPDATE SET oidc_id = excluded.oidc_id, slug = excluded.slug",
         )
         .bind(&group_id)
         .bind(group_path)
         .bind(group_path)
+        .bind(&slug)
         .execute(pool)
         .await
         .context("Failed to upsert group")?;
@@ -891,4 +893,43 @@ pub async fn sync_user_groups(
     }
 
     Ok(())
+}
+
+/// Generate a URL-friendly slug from a group name.
+/// "Demo Team" -> "demo-team", "engineering/backend" -> "engineering-backend"
+pub fn generate_group_slug(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse multiple dashes and trim leading/trailing dashes
+    let mut result = String::new();
+    let mut prev_dash = true; // start true to skip leading dashes
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_dash {
+                result.push('-');
+            }
+            prev_dash = true;
+        } else {
+            result.push(c);
+            prev_dash = false;
+        }
+    }
+    // Trim trailing dash
+    if result.ends_with('-') {
+        result.pop();
+    }
+    if result.is_empty() {
+        "group".to_string()
+    } else {
+        result
+    }
 }

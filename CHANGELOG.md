@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-03-09
+
+### Added
+
+- **Group event types** — create event types owned by a group (synced from Keycloak)
+  - Combined availability: slot picker shows times where any group member is free
+  - Round-robin assignment: bookings assigned to the least-busy available member
+  - Public group pages at `/g/{group-slug}` and `/g/{group-slug}/{slug}`
+  - Group selector when creating event types from the dashboard
+- **Timezone support** — guest timezone picker on slot pages
+  - Browser timezone auto-detected via `Intl.DateTimeFormat`
+  - Times displayed and booked in the guest's selected timezone
+  - Timezone preserved across navigation (week picker, booking form)
+- Project logo
+
+## [0.3.2] - 2026-03-09
+
+### Added
+
+- **OIDC group sync** — groups synced from Keycloak `groups` JWT claim on each SSO login
+- **Groups in admin dashboard** — group names, member counts, and per-user group badges
+- Leading `/` stripped from Keycloak group paths for cleaner display
+
+## [0.3.1] - 2026-03-09
+
+### Added
+
+- **OIDC authentication** — OpenID Connect SSO via Keycloak (authorization code flow with PKCE, auto-discovery, user linking by email, auto-registration)
+- **Admin dashboard** at `/dashboard/admin` — user management (promote/demote, enable/disable), auth settings (registration, domain restrictions), OIDC config, SMTP status
+- **Event type management UI** — create/edit event types from the web dashboard with availability schedule, location, and confirmation toggle
+- **Location support** — video link, phone, in-person, or custom location on event types; displayed on public pages, emails, and `.ics` invites
+- **OIDC CLI configuration** — `calrs config oidc` with interactive and flag-based modes
+
+### Fixed
+
+- Multiple `Set-Cookie` headers in OIDC flow (using `HeaderMap::append` instead of array tuples)
+
+## [0.3.0] - 2026-03-09
+
+### Added
+
+- **Local authentication** — email/password login with Argon2 hashing, server-side sessions (30-day TTL, HttpOnly cookies)
+- **User roles** — admin/user with extractors (`AuthUser`, `AdminUser`)
+- **User management CLI** — `calrs user create/list/promote/demote/set-password`
+- **Registration controls** — `calrs config auth` to enable/disable registration and restrict by email domain
+- **User-scoped URLs** — public booking pages at `/u/{username}/{slug}`, profile pages at `/u/{username}`
+- **Booking cancellation** — cancel from dashboard with optional reason, email notifications with `.ics` METHOD:CANCEL
+- **Pending bookings** — event types with `requires_confirmation`; host approves/declines from dashboard
+- **Web dashboard** — event types, pending approvals, upcoming bookings
+
 ## [0.2.0] - 2026-03-09
 
 ### Added

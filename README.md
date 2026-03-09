@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/calrs.png" alt="calrs logo" width="200">
+</p>
+
 # calrs
 
 **Fast, self-hostable scheduling. Like Cal.com, but written in Rust.**

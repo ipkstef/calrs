@@ -3,7 +3,8 @@ use axum::response::{Html, IntoResponse};
 use axum::response::Redirect;
 use axum::routing::{get, post};
 use axum::Router;
-use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use minijinja::{context, Environment};
 use serde::Deserialize;
 use sqlx::SqlitePool;
@@ -37,6 +38,12 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/dashboard/admin/users/{id}/toggle-enabled", post(admin_toggle_enabled))
         .route("/dashboard/admin/auth", post(admin_update_auth))
         .route("/dashboard/admin/oidc", post(admin_update_oidc))
+        // Group event type management
+        .route("/dashboard/group-event-types/new", get(new_group_event_type_form).post(create_group_event_type))
+        // Group public routes (before the catch-all)
+        .route("/g/{group_slug}", get(group_profile))
+        .route("/g/{group_slug}/{slug}", get(show_group_slots))
+        .route("/g/{group_slug}/{slug}/book", get(show_group_book_form).post(handle_group_booking))
         // User-scoped public booking routes
         .route("/u/{username}", get(user_profile))
         .route("/u/{username}/{slug}", get(show_slots_for_user))
@@ -59,13 +66,36 @@ async fn dashboard(
         "SELECT et.slug, et.title, et.duration_min, et.enabled, et.requires_confirmation
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
-         WHERE a.user_id = ?
+         WHERE a.user_id = ? AND et.group_id IS NULL
          ORDER BY et.created_at",
     )
     .bind(&user.id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
+
+    // Query group event types the user can manage
+    let group_event_types: Vec<(String, String, i32, bool, String, String)> = sqlx::query_as(
+        "SELECT et.slug, et.title, et.duration_min, et.enabled, g.name, g.slug
+         FROM event_types et
+         JOIN groups g ON g.id = et.group_id
+         JOIN user_groups ug ON ug.group_id = g.id
+         WHERE ug.user_id = ?
+         ORDER BY g.name, et.created_at",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    // Check if user belongs to any groups (for showing "+ New" link)
+    let user_has_groups: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM user_groups WHERE user_id = ?",
+    )
+    .bind(&user.id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0) > 0;
 
     let pending_bookings: Vec<(String, String, String, String, String, String)> = sqlx::query_as(
         "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title
@@ -106,6 +136,13 @@ async fn dashboard(
         })
         .collect();
 
+    let group_et_ctx: Vec<minijinja::Value> = group_event_types
+        .iter()
+        .map(|(slug, title, duration, enabled, group_name, group_slug)| {
+            context! { slug => slug, title => title, duration_min => duration, enabled => enabled, group_name => group_name, group_slug => group_slug }
+        })
+        .collect();
+
     let pending_ctx: Vec<minijinja::Value> = pending_bookings
         .iter()
         .map(|(id, name, email, start, end, title)| {
@@ -127,6 +164,8 @@ async fn dashboard(
             user_role => user.role,
             username => user.username,
             event_types => et_ctx,
+            group_event_types => group_et_ctx,
+            user_has_groups => user_has_groups,
             pending_bookings => pending_ctx,
             bookings => bookings_ctx,
         })
@@ -286,12 +325,30 @@ struct EventTypeForm {
     avail_days: Option<String>, // comma-separated: "1,2,3,4,5"
     avail_start: Option<String>, // "09:00"
     avail_end: Option<String>, // "17:00"
+    // Group (optional)
+    group_id: Option<String>,
 }
 
 async fn new_event_type_form(
     State(state): State<Arc<AppState>>,
-    _auth_user: crate::auth::AuthUser,
+    auth_user: crate::auth::AuthUser,
 ) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    // Get groups the user belongs to
+    let groups: Vec<(String, String)> = sqlx::query_as(
+        "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let groups_ctx: Vec<minijinja::Value> = groups
+        .iter()
+        .map(|(id, name)| context! { id => id, name => name })
+        .collect();
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -300,6 +357,7 @@ async fn new_event_type_form(
     Html(
         tmpl.render(context! {
             editing => false,
+            groups => groups_ctx,
             form_title => "",
             form_slug => "",
             form_description => "",
@@ -366,9 +424,12 @@ async fn create_event_type(
     let location_type = form.location_type.as_deref().unwrap_or("link");
     let location_value = form.location_value.as_deref().filter(|s| !s.trim().is_empty());
 
+    // Check if a group_id was provided and it's non-empty
+    let group_id = form.group_id.as_deref().filter(|s| !s.trim().is_empty());
+
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, group_id, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
     .bind(&account_id)
@@ -382,6 +443,8 @@ async fn create_event_type(
     .bind(requires_confirmation as i32)
     .bind(location_type)
     .bind(location_value)
+    .bind(group_id)
+    .bind(if group_id.is_some() { Some(&user.id) } else { None })
     .execute(&state.pool)
     .await;
 
@@ -627,6 +690,824 @@ fn render_event_type_form_error(state: &AppState, error: &str, form: &EventTypeF
     )
 }
 
+// --- Group event type handlers ---
+
+async fn new_group_event_type_form(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    let groups: Vec<(String, String)> = sqlx::query_as(
+        "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    if groups.is_empty() {
+        return Html("You don't belong to any groups.".to_string());
+    }
+
+    let groups_ctx: Vec<minijinja::Value> = groups
+        .iter()
+        .map(|(id, name)| context! { id => id, name => name })
+        .collect();
+
+    let tmpl = match state.templates.get_template("event_type_form.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    Html(
+        tmpl.render(context! {
+            editing => false,
+            is_group => true,
+            groups => groups_ctx,
+            form_group_id => groups.first().map(|(id, _)| id.as_str()).unwrap_or(""),
+            form_title => "",
+            form_slug => "",
+            form_description => "",
+            form_duration => 30,
+            form_buffer_before => 0,
+            form_buffer_after => 0,
+            form_min_notice => 60,
+            form_requires_confirmation => false,
+            form_location_type => "link",
+            form_location_value => "",
+            form_avail_days => "1,2,3,4,5",
+            form_avail_start => "09:00",
+            form_avail_end => "17:00",
+            error => "",
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn create_group_event_type(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Form(form): Form<EventTypeForm>,
+) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    let group_id = match form.group_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(gid) => gid.to_string(),
+        None => return Redirect::to("/dashboard").into_response(),
+    };
+
+    // Verify user belongs to this group
+    let membership: Option<(String,)> = sqlx::query_as(
+        "SELECT group_id FROM user_groups WHERE user_id = ? AND group_id = ?",
+    )
+    .bind(&user.id)
+    .bind(&group_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    if membership.is_none() {
+        return Html("You don't belong to this group.".to_string()).into_response();
+    }
+
+    // Find the user's account
+    let account_id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE user_id = ? LIMIT 1",
+    )
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let account_id = match account_id {
+        Some(id) => id,
+        None => return Redirect::to("/dashboard").into_response(),
+    };
+
+    let slug = form.slug.trim().to_lowercase().replace(' ', "-");
+    if slug.is_empty() {
+        return Html("Slug is required.".to_string()).into_response();
+    }
+
+    // Check uniqueness within the group
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM event_types WHERE group_id = ? AND slug = ?",
+    )
+    .bind(&group_id)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    if existing.is_some() {
+        return Html("An event type with this slug already exists in this group.".to_string()).into_response();
+    }
+
+    let et_id = uuid::Uuid::new_v4().to_string();
+    let requires_confirmation = form.requires_confirmation.as_deref() == Some("on");
+    let location_type = form.location_type.as_deref().unwrap_or("link");
+    let location_value = form.location_value.as_deref().filter(|s| !s.trim().is_empty());
+
+    let _ = sqlx::query(
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, group_id, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&et_id)
+    .bind(&account_id)
+    .bind(&slug)
+    .bind(form.title.trim())
+    .bind(form.description.as_deref().filter(|s| !s.trim().is_empty()))
+    .bind(form.duration_min)
+    .bind(form.buffer_before.unwrap_or(0))
+    .bind(form.buffer_after.unwrap_or(0))
+    .bind(form.min_notice_min.unwrap_or(60))
+    .bind(requires_confirmation as i32)
+    .bind(location_type)
+    .bind(location_value)
+    .bind(&group_id)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
+    // Create availability rules
+    let avail_days = form.avail_days.as_deref().unwrap_or("1,2,3,4,5");
+    let avail_start = form.avail_start.as_deref().unwrap_or("09:00");
+    let avail_end = form.avail_end.as_deref().unwrap_or("17:00");
+
+    for day_str in avail_days.split(',') {
+        if let Ok(day) = day_str.trim().parse::<i32>() {
+            if (0..=6).contains(&day) {
+                let rule_id = uuid::Uuid::new_v4().to_string();
+                let _ = sqlx::query(
+                    "INSERT INTO availability_rules (id, event_type_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(&rule_id)
+                .bind(&et_id)
+                .bind(day)
+                .bind(avail_start)
+                .bind(avail_end)
+                .execute(&state.pool)
+                .await;
+            }
+        }
+    }
+
+    Redirect::to("/dashboard").into_response()
+}
+
+// --- Group public pages ---
+
+async fn group_profile(
+    State(state): State<Arc<AppState>>,
+    Path(group_slug): Path<String>,
+) -> impl IntoResponse {
+    let group: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM groups WHERE slug = ?",
+    )
+    .bind(&group_slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (group_id, group_name) = match group {
+        Some(g) => g,
+        None => return Html("Group not found.".to_string()),
+    };
+
+    let event_types: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT et.slug, et.title, et.description, et.duration_min
+         FROM event_types et
+         WHERE et.group_id = ? AND et.enabled = 1
+         ORDER BY et.created_at",
+    )
+    .bind(&group_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let tmpl = match state.templates.get_template("group_profile.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    let et_ctx: Vec<minijinja::Value> = event_types
+        .iter()
+        .map(|(slug, title, desc, duration)| {
+            context! { slug => slug, title => title, description => desc, duration_min => duration }
+        })
+        .collect();
+
+    Html(
+        tmpl.render(context! {
+            group_name => group_name,
+            group_slug => group_slug,
+            event_types => et_ctx,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn show_group_slots(
+    State(state): State<Arc<AppState>>,
+    Path((group_slug, slug)): Path<(String, String)>,
+    Query(query): Query<SlotsQuery>,
+) -> impl IntoResponse {
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, g.name
+         FROM event_types et
+         JOIN groups g ON g.id = et.group_id
+         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+    )
+    .bind(&group_slug)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (et_id, et_slug, et_title, et_desc, duration, buf_before, buf_after, min_notice, loc_type, loc_value, group_name) =
+        match et {
+            Some(e) => e,
+            None => return Html("Event type not found.".to_string()),
+        };
+
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let host_tz = get_host_tz(&state.pool, &et_id).await;
+    let guest_tz_name = guest_tz.name().to_string();
+
+    let week = query.week.unwrap_or(0).max(0);
+    let days_per_page = 7;
+    let start_offset = week * days_per_page;
+    let slot_days = compute_group_slots(
+        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz,
+    )
+    .await;
+    let prev_week = if week > 0 { Some(week - 1) } else { None };
+    let next_week = week + 1;
+
+    let days_ctx: Vec<minijinja::Value> = slot_days
+        .iter()
+        .map(|d| {
+            let slots: Vec<minijinja::Value> = d
+                .slots
+                .iter()
+                .map(|s| context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time })
+                .collect();
+            context! { date => d.date, label => d.label, slots => slots }
+        })
+        .collect();
+
+    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
+    let range_start = now_guest.date() + Duration::days(start_offset as i64);
+    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
+    let range_label = format!(
+        "{} – {}",
+        range_start.format("%b %-d"),
+        range_end.format("%b %-d, %Y")
+    );
+
+    let tz_options: Vec<minijinja::Value> = common_timezones()
+        .iter()
+        .map(|(iana, label)| context! { value => iana, label => label, selected => (*iana == guest_tz_name) })
+        .collect();
+
+    let tmpl = state.templates.get_template("slots.html").unwrap();
+    let rendered = tmpl
+        .render(context! {
+            event_type => context! {
+                slug => et_slug,
+                title => et_title,
+                description => et_desc,
+                duration_min => duration,
+                location_type => loc_type,
+                location_value => loc_value,
+            },
+            host_name => group_name,
+            group_slug => group_slug,
+            days => days_ctx,
+            prev_week => prev_week,
+            next_week => next_week,
+            range_label => range_label,
+            guest_tz => guest_tz_name,
+            tz_options => tz_options,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e));
+
+    Html(rendered)
+}
+
+async fn show_group_book_form(
+    State(state): State<Arc<AppState>>,
+    Path((group_slug, slug)): Path<(String, String)>,
+    Query(query): Query<BookQuery>,
+) -> impl IntoResponse {
+    let et: Option<(String, String, String, Option<String>, i32, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, g.name
+         FROM event_types et
+         JOIN groups g ON g.id = et.group_id
+         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+    )
+    .bind(&group_slug)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (_et_id, et_slug, et_title, et_desc, duration, loc_type, loc_value, group_name) = match et {
+        Some(e) => e,
+        None => return Html("Event type not found.".to_string()),
+    };
+
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let guest_tz_name = guest_tz.name().to_string();
+
+    let date = NaiveDate::parse_from_str(&query.date, "%Y-%m-%d").unwrap();
+    let time = NaiveTime::parse_from_str(&query.time, "%H:%M").unwrap();
+    let end_time = (date.and_time(time) + Duration::minutes(duration as i64))
+        .time()
+        .format("%H:%M")
+        .to_string();
+    let date_label = date.format("%A, %B %-d, %Y").to_string();
+
+    let tmpl = state.templates.get_template("book.html").unwrap();
+    let rendered = tmpl
+        .render(context! {
+            event_type => context! {
+                slug => et_slug,
+                title => et_title,
+                description => et_desc,
+                duration_min => duration,
+                location_type => loc_type,
+                location_value => loc_value,
+            },
+            host_name => group_name,
+            group_slug => group_slug,
+            date => query.date,
+            date_label => date_label,
+            time_start => query.time,
+            time_end => end_time,
+            guest_tz => guest_tz_name,
+            error => "",
+            form_name => "",
+            form_email => "",
+            form_notes => "",
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e));
+
+    Html(rendered)
+}
+
+async fn handle_group_booking(
+    State(state): State<Arc<AppState>>,
+    Path((group_slug, slug)): Path<(String, String)>,
+    Form(form): Form<BookForm>,
+) -> impl IntoResponse {
+    let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.group_id
+         FROM event_types et
+         JOIN groups g ON g.id = et.group_id
+         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+    )
+    .bind(&group_slug)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (et_id, _et_slug, et_title, duration, buffer_before, buffer_after, min_notice, requires_confirmation, loc_type, loc_value, group_id) = match et {
+        Some(e) => e,
+        None => return Html("Event type not found.".to_string()).into_response(),
+    };
+    let needs_approval = requires_confirmation != 0;
+
+    let date = match NaiveDate::parse_from_str(&form.date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return Html("Invalid date.".to_string()).into_response(),
+    };
+    let start_time = match NaiveTime::parse_from_str(&form.time, "%H:%M") {
+        Ok(t) => t,
+        Err(_) => return Html("Invalid time.".to_string()).into_response(),
+    };
+
+    let slot_start = date.and_time(start_time);
+    let slot_end = slot_start + Duration::minutes(duration as i64);
+
+    let now = Local::now().naive_local();
+    if slot_start < now + Duration::minutes(min_notice as i64) {
+        return Html("This slot is no longer available (too soon).".to_string()).into_response();
+    }
+
+    // Pick an available group member
+    let assigned = pick_group_member(
+        &state.pool,
+        &group_id,
+        slot_start,
+        slot_end,
+        buffer_before,
+        buffer_after,
+    )
+    .await;
+
+    let (assigned_user_id, host_name, host_email) = match assigned {
+        Some(a) => a,
+        None => return Html("No team members are available for this slot.".to_string()).into_response(),
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let uid = format!("{}@calrs", uuid::Uuid::new_v4());
+    let cancel_token = uuid::Uuid::new_v4().to_string();
+    let reschedule_token = uuid::Uuid::new_v4().to_string();
+    let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let guest_tz = parse_guest_tz(form.tz.as_deref());
+    let guest_timezone = guest_tz.name().to_string();
+
+    let initial_status = if needs_approval { "pending" } else { "confirmed" };
+
+    sqlx::query(
+        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, assigned_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&et_id)
+    .bind(&uid)
+    .bind(&form.name)
+    .bind(&form.email)
+    .bind(&guest_timezone)
+    .bind(&form.notes)
+    .bind(&start_at)
+    .bind(&end_at)
+    .bind(initial_status)
+    .bind(&cancel_token)
+    .bind(&reschedule_token)
+    .bind(&assigned_user_id)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    // Send emails if SMTP is configured
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+        let location_display = if loc_value.as_ref().is_some_and(|v| !v.is_empty()) {
+            loc_value.clone()
+        } else {
+            None
+        };
+        let details = crate::email::BookingDetails {
+            event_title: et_title.clone(),
+            date: form.date.clone(),
+            start_time: form.time.clone(),
+            end_time: slot_end.time().format("%H:%M").to_string(),
+            guest_name: form.name.clone(),
+            guest_email: form.email.clone(),
+            guest_timezone: guest_timezone.clone(),
+            host_name: host_name.clone(),
+            host_email: host_email.clone(),
+            uid: uid.clone(),
+            notes: form.notes.clone(),
+            location: location_display,
+        };
+
+        if needs_approval {
+            let _ = crate::email::send_host_approval_request(&smtp_config, &details, &id).await;
+            let _ = crate::email::send_guest_pending_notice(&smtp_config, &details).await;
+        } else {
+            let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
+            let _ = crate::email::send_host_notification(&smtp_config, &details).await;
+        }
+    }
+
+    let date_label = date.format("%A, %B %-d, %Y").to_string();
+    let end_time_str = slot_end.time().format("%H:%M").to_string();
+
+    let tmpl = state.templates.get_template("confirmed.html").unwrap();
+    let rendered = tmpl
+        .render(context! {
+            event_title => et_title,
+            date_label => date_label,
+            time_start => form.time,
+            time_end => end_time_str,
+            host_name => host_name,
+            guest_email => form.email,
+            notes => form.notes,
+            pending => needs_approval,
+            location_type => loc_type,
+            location_value => loc_value,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e));
+
+    Html(rendered).into_response()
+}
+
+// --- Group slot computation ---
+
+/// Compute available slots for a group event type.
+/// A slot is available if ANY group member is free during that time.
+async fn compute_group_slots(
+    pool: &SqlitePool,
+    et_id: &str,
+    duration: i32,
+    buffer_before: i32,
+    buffer_after: i32,
+    min_notice: i32,
+    start_offset: i32,
+    days_ahead: i32,
+    host_tz: Tz,
+    guest_tz: Tz,
+) -> Vec<SlotDay> {
+    // Get availability rules for this event type
+    let rules: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT day_of_week, start_time, end_time FROM availability_rules WHERE event_type_id = ?",
+    )
+    .bind(et_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    // Get the group_id for this event type
+    let group_id: Option<String> = sqlx::query_scalar(
+        "SELECT group_id FROM event_types WHERE id = ?",
+    )
+    .bind(et_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+
+    let group_id = match group_id {
+        Some(gid) => gid,
+        None => return Vec::new(),
+    };
+
+    // Get all enabled group members
+    let members: Vec<(String,)> = sqlx::query_as(
+        "SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
+    )
+    .bind(&group_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if members.is_empty() {
+        return Vec::new();
+    }
+
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let now = now_host;
+    let min_start = now + Duration::minutes(min_notice as i64);
+    let end_date = now.date() + Duration::days((start_offset + days_ahead) as i64);
+
+    let end_compact = end_date.format("%Y%m%d").to_string();
+    let now_compact = now.format("%Y%m%dT%H%M%S").to_string();
+    let end_iso = end_date.format("%Y-%m-%dT23:59:59").to_string();
+    let now_iso = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    // Pre-fetch busy times for all members
+    let mut member_busy: std::collections::HashMap<String, Vec<(NaiveDateTime, NaiveDateTime)>> = std::collections::HashMap::new();
+
+    for (user_id,) in &members {
+        let mut busy_times = Vec::new();
+
+        // Events from their CalDAV calendars
+        let events: Vec<(String, String)> = sqlx::query_as(
+            "SELECT e.start_at, e.end_at FROM events e
+             JOIN calendars c ON c.id = e.calendar_id
+             JOIN caldav_sources cs ON cs.id = c.source_id
+             JOIN accounts a ON a.id = cs.account_id
+             WHERE a.user_id = ? AND c.is_busy = 1
+               AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
+        )
+        .bind(user_id)
+        .bind(&end_compact)
+        .bind(&now_compact)
+        .bind(&end_iso)
+        .bind(&now_iso)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for (s, e) in &events {
+            if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
+                busy_times.push((start, end));
+            }
+        }
+
+        // Confirmed bookings assigned to or owned by this member
+        let bookings: Vec<(String, String)> = sqlx::query_as(
+            "SELECT b.start_at, b.end_at FROM bookings b
+             JOIN event_types et ON et.id = b.event_type_id
+             JOIN accounts a ON a.id = et.account_id
+             WHERE (a.user_id = ? OR b.assigned_user_id = ?) AND b.status = 'confirmed'
+               AND b.start_at <= ? AND b.end_at >= ?",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(&end_iso)
+        .bind(&now_iso)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for (s, e) in &bookings {
+            if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
+                busy_times.push((start, end));
+            }
+        }
+
+        member_busy.insert(user_id.clone(), busy_times);
+    }
+
+    let slot_duration = Duration::minutes(duration as i64);
+    let mut result = Vec::new();
+
+    for day_offset in start_offset..(start_offset + days_ahead) {
+        let date = now.date() + Duration::days(day_offset as i64);
+        let weekday = date.weekday().num_days_from_sunday() as i32;
+
+        let day_rules: Vec<&(i32, String, String)> = rules
+            .iter()
+            .filter(|(d, _, _)| *d == weekday)
+            .collect();
+
+        if day_rules.is_empty() {
+            continue;
+        }
+
+        let mut day_slots = Vec::new();
+
+        for (_, start_str, end_str) in &day_rules {
+            let window_start = match NaiveTime::parse_from_str(start_str, "%H:%M") {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let window_end = match NaiveTime::parse_from_str(end_str, "%H:%M") {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            let mut cursor = window_start;
+            while cursor + slot_duration <= window_end {
+                let slot_start = date.and_time(cursor);
+                let slot_end = slot_start + slot_duration;
+
+                if slot_start < min_start {
+                    cursor = cursor + Duration::minutes(duration as i64);
+                    continue;
+                }
+
+                let buf_start = slot_start - Duration::minutes(buffer_before as i64);
+                let buf_end = slot_end + Duration::minutes(buffer_after as i64);
+
+                // A slot is available if ANY member is free
+                let any_member_free = member_busy.iter().any(|(_uid, busy_times)| {
+                    !busy_times.iter().any(|(s, e)| *s < buf_end && *e > buf_start)
+                });
+
+                if any_member_free {
+                    let slot_start_utc = host_tz.from_local_datetime(&slot_start).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_start)).with_timezone(&Utc);
+                    let slot_end_utc = host_tz.from_local_datetime(&slot_end).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_end)).with_timezone(&Utc);
+                    let guest_start = slot_start_utc.with_timezone(&guest_tz);
+                    let guest_end = slot_end_utc.with_timezone(&guest_tz);
+
+                    day_slots.push(SlotTime {
+                        start: guest_start.format("%H:%M").to_string(),
+                        end: guest_end.format("%H:%M").to_string(),
+                        host_date: date.format("%Y-%m-%d").to_string(),
+                        host_time: cursor.format("%H:%M").to_string(),
+                        guest_date: guest_start.format("%Y-%m-%d").to_string(),
+                    });
+                }
+
+                cursor = cursor + Duration::minutes(duration as i64);
+            }
+        }
+
+        if !day_slots.is_empty() {
+            let mut guest_days: std::collections::BTreeMap<String, Vec<SlotTime>> = std::collections::BTreeMap::new();
+            for slot in day_slots {
+                guest_days.entry(slot.guest_date.clone()).or_default().push(slot);
+            }
+            for (guest_date_str, slots) in guest_days {
+                if let Ok(gd) = NaiveDate::parse_from_str(&guest_date_str, "%Y-%m-%d") {
+                    if !result.iter().any(|d: &SlotDay| d.date == guest_date_str) {
+                        result.push(SlotDay {
+                            date: guest_date_str,
+                            label: gd.format("%A, %B %-d").to_string(),
+                            slots,
+                        });
+                    } else if let Some(existing) = result.iter_mut().find(|d: &&mut SlotDay| d.date == guest_date_str) {
+                        existing.slots.extend(slots);
+                    }
+                }
+            }
+        }
+    }
+
+    result.sort_by(|a, b| a.date.cmp(&b.date));
+    result
+}
+
+/// Pick an available group member for a booking slot.
+/// Returns (user_id, name, email) of the member with fewest recent bookings.
+async fn pick_group_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    slot_start: NaiveDateTime,
+    slot_end: NaiveDateTime,
+    buffer_before: i32,
+    buffer_after: i32,
+) -> Option<(String, String, String)> {
+    let buf_start = slot_start - Duration::minutes(buffer_before as i64);
+    let buf_end = slot_end + Duration::minutes(buffer_after as i64);
+
+    // Get all enabled group members
+    let members: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut available_members = Vec::new();
+
+    for (user_id, name, email) in &members {
+        // Check CalDAV events
+        let event_conflict: Option<(String,)> = sqlx::query_as(
+            "SELECT e.id FROM events e
+             JOIN calendars c ON c.id = e.calendar_id
+             JOIN caldav_sources cs ON cs.id = c.source_id
+             JOIN accounts a ON a.id = cs.account_id
+             WHERE a.user_id = ? AND c.is_busy = 1
+               AND ((e.start_at < ? AND e.end_at > ?) OR (e.start_at < ? AND e.end_at > ?))
+             LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(&buf_end.format("%Y%m%dT%H%M%S").to_string())
+        .bind(&buf_start.format("%Y%m%dT%H%M%S").to_string())
+        .bind(&buf_end.format("%Y-%m-%dT%H:%M:%S").to_string())
+        .bind(&buf_start.format("%Y-%m-%dT%H:%M:%S").to_string())
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        if event_conflict.is_some() {
+            continue;
+        }
+
+        // Check booking conflicts
+        let booking_conflict: Option<(String,)> = sqlx::query_as(
+            "SELECT b.id FROM bookings b
+             JOIN event_types et ON et.id = b.event_type_id
+             JOIN accounts a ON a.id = et.account_id
+             WHERE (a.user_id = ? OR b.assigned_user_id = ?) AND b.status = 'confirmed'
+               AND b.start_at < ? AND b.end_at > ?
+             LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(&buf_end.format("%Y-%m-%dT%H:%M:%S").to_string())
+        .bind(&buf_start.format("%Y-%m-%dT%H:%M:%S").to_string())
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        if booking_conflict.is_some() {
+            continue;
+        }
+
+        available_members.push((user_id.clone(), name.clone(), email.clone()));
+    }
+
+    if available_members.is_empty() {
+        return None;
+    }
+
+    // Among available members, pick the one with fewest bookings in last 30 days
+    let thirty_days_ago = (Utc::now() - Duration::days(30)).format("%Y-%m-%dT%H:%M:%S").to_string();
+    let mut best: Option<(String, String, String, i64)> = None;
+
+    for (user_id, name, email) in &available_members {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookings WHERE assigned_user_id = ? AND created_at >= ?",
+        )
+        .bind(user_id)
+        .bind(&thirty_days_ago)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+        match &best {
+            None => best = Some((user_id.clone(), name.clone(), email.clone(), count)),
+            Some((_, _, _, best_count)) if count < *best_count => {
+                best = Some((user_id.clone(), name.clone(), email.clone(), count));
+            }
+            _ => {}
+        }
+    }
+
+    best.map(|(uid, name, email, _)| (uid, name, email))
+}
+
 // --- User profile page ---
 
 async fn user_profile(
@@ -715,11 +1596,15 @@ async fn show_slots_for_user(
     .unwrap_or(None)
     .unwrap_or_else(|| "Host".to_string());
 
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let host_tz = get_host_tz(&state.pool, &et_id).await;
+    let guest_tz_name = guest_tz.name().to_string();
+
     let week = query.week.unwrap_or(0).max(0);
     let days_per_page = 7;
     let start_offset = week * days_per_page;
     let slot_days = compute_slots(
-        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page,
+        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz,
     )
     .await;
     let prev_week = if week > 0 { Some(week - 1) } else { None };
@@ -731,20 +1616,25 @@ async fn show_slots_for_user(
             let slots: Vec<minijinja::Value> = d
                 .slots
                 .iter()
-                .map(|s| context! { start => s.start, end => s.end })
+                .map(|s| context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time })
                 .collect();
             context! { date => d.date, label => d.label, slots => slots }
         })
         .collect();
 
-    let now = Local::now().naive_local();
-    let range_start = now.date() + Duration::days(start_offset as i64);
-    let range_end = now.date() + Duration::days((start_offset + days_per_page - 1) as i64);
+    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
+    let range_start = now_guest.date() + Duration::days(start_offset as i64);
+    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
     let range_label = format!(
         "{} – {}",
         range_start.format("%b %-d"),
         range_end.format("%b %-d, %Y")
     );
+
+    let tz_options: Vec<minijinja::Value> = common_timezones()
+        .iter()
+        .map(|(iana, label)| context! { value => iana, label => label, selected => (*iana == guest_tz_name) })
+        .collect();
 
     let tmpl = state.templates.get_template("slots.html").unwrap();
     let rendered = tmpl
@@ -763,6 +1653,8 @@ async fn show_slots_for_user(
             prev_week => prev_week,
             next_week => next_week,
             range_label => range_label,
+            guest_tz => guest_tz_name,
+            tz_options => tz_options,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
 
@@ -801,6 +1693,9 @@ async fn show_book_form_for_user(
     .unwrap_or(None)
     .unwrap_or_else(|| "Host".to_string());
 
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let guest_tz_name = guest_tz.name().to_string();
+
     let date = NaiveDate::parse_from_str(&query.date, "%Y-%m-%d").unwrap();
     let time = NaiveTime::parse_from_str(&query.time, "%H:%M").unwrap();
     let end_time = (date.and_time(time) + Duration::minutes(duration as i64))
@@ -826,6 +1721,7 @@ async fn show_book_form_for_user(
             date_label => date_label,
             time_start => query.time,
             time_end => end_time,
+            guest_tz => guest_tz_name,
             error => "",
             form_name => "",
             form_email => "",
@@ -903,7 +1799,8 @@ async fn handle_booking_for_user(
     let reschedule_token = uuid::Uuid::new_v4().to_string();
     let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
     let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let guest_timezone = "UTC".to_string();
+    let guest_tz = parse_guest_tz(form.tz.as_deref());
+    let guest_timezone = guest_tz.name().to_string();
 
     let initial_status = if needs_approval { "pending" } else { "confirmed" };
 
@@ -1025,8 +1922,11 @@ struct SlotDay {
 }
 
 struct SlotTime {
-    start: String,
-    end: String,
+    start: String,     // guest TZ display
+    end: String,       // guest TZ display
+    host_date: String, // YYYY-MM-DD in host TZ (for booking)
+    host_time: String, // HH:MM in host TZ (for booking)
+    guest_date: String, // YYYY-MM-DD in guest TZ (for grouping by day)
 }
 
 async fn compute_slots(
@@ -1038,6 +1938,8 @@ async fn compute_slots(
     min_notice: i32,
     start_offset: i32,
     days_ahead: i32,
+    host_tz: Tz,
+    guest_tz: Tz,
 ) -> Vec<SlotDay> {
     let rules: Vec<(i32, String, String)> = sqlx::query_as(
         "SELECT day_of_week, start_time, end_time FROM availability_rules WHERE event_type_id = ?",
@@ -1047,7 +1949,9 @@ async fn compute_slots(
     .await
     .unwrap_or_default();
 
-    let now = Local::now().naive_local();
+    // Work in host timezone for availability rules
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let now = now_host;
     let min_start = now + Duration::minutes(min_notice as i64);
     let end_date = now.date() + Duration::days((start_offset + days_ahead) as i64);
 
@@ -1127,9 +2031,19 @@ async fn compute_slots(
                 });
 
                 if !has_conflict {
+                    // Convert from host TZ to guest TZ for display
+                    let slot_start_utc = host_tz.from_local_datetime(&slot_start).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_start)).with_timezone(&Utc);
+                    let slot_end_utc = host_tz.from_local_datetime(&slot_end).earliest().unwrap_or_else(|| host_tz.from_utc_datetime(&slot_end)).with_timezone(&Utc);
+                    let guest_start = slot_start_utc.with_timezone(&guest_tz);
+                    let guest_end = slot_end_utc.with_timezone(&guest_tz);
+
                     day_slots.push(SlotTime {
-                        start: cursor.format("%H:%M").to_string(),
-                        end: (cursor + slot_duration).format("%H:%M").to_string(),
+                        start: guest_start.format("%H:%M").to_string(),
+                        end: guest_end.format("%H:%M").to_string(),
+                        // Store host-TZ date/time for the booking form (the server works in host TZ)
+                        host_date: date.format("%Y-%m-%d").to_string(),
+                        host_time: cursor.format("%H:%M").to_string(),
+                        guest_date: guest_start.format("%Y-%m-%d").to_string(),
                     });
                 }
 
@@ -1138,16 +2052,33 @@ async fn compute_slots(
         }
 
         if !day_slots.is_empty() {
-            let label = date.format("%A, %B %-d").to_string();
-            let date_str = date.format("%Y-%m-%d").to_string();
-            result.push(SlotDay {
-                date: date_str,
-                label,
-                slots: day_slots,
-            });
+            // Group slots by guest date (may differ from host date due to TZ offset)
+            let mut guest_days: std::collections::BTreeMap<String, Vec<SlotTime>> = std::collections::BTreeMap::new();
+            for slot in day_slots {
+                guest_days.entry(slot.guest_date.clone()).or_default().push(slot);
+            }
+            for (guest_date_str, slots) in guest_days {
+                if let Ok(gd) = NaiveDate::parse_from_str(&guest_date_str, "%Y-%m-%d") {
+                    // Only add if we haven't already added this guest date
+                    if !result.iter().any(|d: &SlotDay| d.date == guest_date_str) {
+                        result.push(SlotDay {
+                            date: guest_date_str,
+                            label: gd.format("%A, %B %-d").to_string(),
+                            slots,
+                        });
+                    } else {
+                        // Merge slots into existing day
+                        if let Some(existing) = result.iter_mut().find(|d| d.date == guest_date_str) {
+                            existing.slots.extend(slots);
+                        }
+                    }
+                }
+            }
         }
     }
 
+    // Sort by date since guest TZ conversion may reorder
+    result.sort_by(|a, b| a.date.cmp(&b.date));
     result
 }
 
@@ -1157,6 +2088,55 @@ async fn compute_slots(
 struct SlotsQuery {
     #[serde(default)]
     week: Option<i32>,
+    #[serde(default)]
+    tz: Option<String>,
+}
+
+/// Parse a timezone string into a Tz, falling back to server local.
+fn parse_guest_tz(tz: Option<&str>) -> Tz {
+    tz.and_then(|s| s.parse::<Tz>().ok())
+        .unwrap_or_else(|| {
+            // Fall back to server's local timezone
+            iana_time_zone::get_timezone()
+                .ok()
+                .and_then(|s| s.parse::<Tz>().ok())
+                .unwrap_or(Tz::UTC)
+        })
+}
+
+/// Get the host's timezone (uses server local TZ as proxy).
+async fn get_host_tz(_pool: &SqlitePool, _et_id: &str) -> Tz {
+    iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|s| s.parse::<Tz>().ok())
+        .unwrap_or(Tz::UTC)
+}
+
+/// Common IANA timezones for the selector (most used ones).
+fn common_timezones() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("Pacific/Midway", "UTC-11 Midway"),
+        ("Pacific/Honolulu", "UTC-10 Hawaii"),
+        ("America/Anchorage", "UTC-9 Alaska"),
+        ("America/Los_Angeles", "UTC-8 Pacific"),
+        ("America/Denver", "UTC-7 Mountain"),
+        ("America/Chicago", "UTC-6 Central"),
+        ("America/New_York", "UTC-5 Eastern"),
+        ("America/Sao_Paulo", "UTC-3 Brasilia"),
+        ("Atlantic/Cape_Verde", "UTC-1 Cape Verde"),
+        ("UTC", "UTC"),
+        ("Europe/London", "UTC+0 London"),
+        ("Europe/Paris", "UTC+1 Paris"),
+        ("Europe/Helsinki", "UTC+2 Helsinki"),
+        ("Europe/Moscow", "UTC+3 Moscow"),
+        ("Asia/Dubai", "UTC+4 Dubai"),
+        ("Asia/Kolkata", "UTC+5:30 India"),
+        ("Asia/Bangkok", "UTC+7 Bangkok"),
+        ("Asia/Shanghai", "UTC+8 Shanghai"),
+        ("Asia/Tokyo", "UTC+9 Tokyo"),
+        ("Australia/Sydney", "UTC+11 Sydney"),
+        ("Pacific/Auckland", "UTC+12 Auckland"),
+    ]
 }
 
 async fn show_slots(
@@ -1188,38 +2168,45 @@ async fn show_slots(
     .unwrap_or(None)
     .unwrap_or_else(|| "Host".to_string());
 
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let host_tz = get_host_tz(&state.pool, &et_id).await;
+    let guest_tz_name = guest_tz.name().to_string();
+
     let week = query.week.unwrap_or(0).max(0);
     let days_per_page = 7;
     let start_offset = week * days_per_page;
     let slot_days = compute_slots(
-        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page,
+        &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz,
     )
     .await;
     let prev_week = if week > 0 { Some(week - 1) } else { None };
-    let next_week = week + 1; // always allow forward navigation
+    let next_week = week + 1;
 
-    // Convert to template-friendly format
     let days_ctx: Vec<minijinja::Value> = slot_days
         .iter()
         .map(|d| {
             let slots: Vec<minijinja::Value> = d
                 .slots
                 .iter()
-                .map(|s| context! { start => s.start, end => s.end })
+                .map(|s| context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time })
                 .collect();
             context! { date => d.date, label => d.label, slots => slots }
         })
         .collect();
 
-    // Compute the date range label for this week view
-    let now = Local::now().naive_local();
-    let range_start = now.date() + Duration::days(start_offset as i64);
-    let range_end = now.date() + Duration::days((start_offset + days_per_page - 1) as i64);
+    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
+    let range_start = now_guest.date() + Duration::days(start_offset as i64);
+    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
     let range_label = format!(
         "{} – {}",
         range_start.format("%b %-d"),
         range_end.format("%b %-d, %Y")
     );
+
+    let tz_options: Vec<minijinja::Value> = common_timezones()
+        .iter()
+        .map(|(iana, label)| context! { value => iana, label => label, selected => (*iana == guest_tz_name) })
+        .collect();
 
     let tmpl = state.templates.get_template("slots.html").unwrap();
     let rendered = tmpl
@@ -1235,6 +2222,8 @@ async fn show_slots(
             prev_week => prev_week,
             next_week => next_week,
             range_label => range_label,
+            guest_tz => guest_tz_name,
+            tz_options => tz_options,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
 
@@ -1245,6 +2234,8 @@ async fn show_slots(
 struct BookQuery {
     date: String,
     time: String,
+    #[serde(default)]
+    tz: Option<String>,
 }
 
 async fn show_book_form(
@@ -1275,6 +2266,9 @@ async fn show_book_form(
     .unwrap_or(None)
     .unwrap_or_else(|| "Host".to_string());
 
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let guest_tz_name = guest_tz.name().to_string();
+
     let date = NaiveDate::parse_from_str(&query.date, "%Y-%m-%d").unwrap();
     let time = NaiveTime::parse_from_str(&query.time, "%H:%M").unwrap();
     let end_time = (date.and_time(time) + Duration::minutes(duration as i64))
@@ -1297,6 +2291,7 @@ async fn show_book_form(
             date_label => date_label,
             time_start => query.time,
             time_end => end_time,
+            guest_tz => guest_tz_name,
             error => "",
             form_name => "",
             form_email => "",
@@ -1314,6 +2309,8 @@ struct BookForm {
     name: String,
     email: String,
     notes: Option<String>,
+    #[serde(default)]
+    tz: Option<String>,
 }
 
 async fn handle_booking(
@@ -1382,7 +2379,8 @@ async fn handle_booking(
     let reschedule_token = uuid::Uuid::new_v4().to_string();
     let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
     let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let guest_timezone = "UTC".to_string(); // TODO: detect from browser
+    let guest_tz = parse_guest_tz(form.tz.as_deref());
+    let guest_timezone = guest_tz.name().to_string();
 
     let initial_status = if needs_approval { "pending" } else { "confirmed" };
 

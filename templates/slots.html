@@ -3,8 +3,10 @@
 {% block title %}{{ event_type.title }} — {{ host_name }}{% endblock %}
 
 {% block content %}
-{# Compute base path: /u/username/slug or /slug #}
-{% if username is defined and username %}
+{# Compute base path: /g/group_slug/slug, /u/username/slug, or /slug #}
+{% if group_slug is defined and group_slug %}
+  {% set base = "/g/" ~ group_slug ~ "/" ~ event_type.slug %}
+{% elif username is defined and username %}
   {% set base = "/u/" ~ username ~ "/" ~ event_type.slug %}
 {% else %}
   {% set base = "/" ~ event_type.slug %}
@@ -23,15 +25,26 @@
     {% endif %}
   </div>
 
+  {% if tz_options is defined and tz_options %}
+  <div style="margin: 1rem 0 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+    <label for="tz-select" style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;">Timezone:</label>
+    <select id="tz-select" style="padding: 0.375rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text); flex: 1; max-width: 300px;">
+      {% for tz in tz_options %}
+        <option value="{{ tz.value }}" {% if tz.selected %}selected{% endif %}>{{ tz.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
   <div class="week-nav">
     <span class="range">{{ range_label }}</span>
     <div class="nav-links">
       {% if prev_week is defined and prev_week is not none %}
-        <a href="{{ base }}?week={{ prev_week }}">&larr;</a>
+        <a href="{{ base }}?week={{ prev_week }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}">&larr;</a>
       {% else %}
         <span class="disabled">&larr;</span>
       {% endif %}
-      <a href="{{ base }}?week={{ next_week }}">&rarr;</a>
+      <a href="{{ base }}?week={{ next_week }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}">&rarr;</a>
     </div>
   </div>
 
@@ -41,7 +54,7 @@
       <div class="day-label">{{ day.label }}</div>
       <div class="slots">
         {% for slot in day.slots %}
-          <a href="{{ base }}/book?date={{ day.date }}&time={{ slot.start }}"
+          <a href="{{ base }}/book?date={{ slot.host_date | default(value=day.date) }}&time={{ slot.host_time | default(value=slot.start) }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}"
              class="slot-btn">{{ slot.start }}</a>
         {% endfor %}
       </div>
@@ -51,4 +64,32 @@
     <p class="empty">No available slots this week. Try the next one.</p>
   {% endif %}
 </div>
+
+<script>
+(function() {
+  var select = document.getElementById('tz-select');
+  if (!select) return;
+
+  var params = new URLSearchParams(window.location.search);
+  if (!params.has('tz')) {
+    var detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (detected) {
+      var found = false;
+      for (var i = 0; i < select.options.length; i++) {
+        if (select.options[i].value === detected) { found = true; break; }
+      }
+      if (found && detected !== select.value) {
+        params.set('tz', detected);
+        window.location.search = params.toString();
+        return;
+      }
+    }
+  }
+
+  select.addEventListener('change', function() {
+    params.set('tz', select.value);
+    window.location.search = params.toString();
+  });
+})();
+</script>
 {% endblock %}

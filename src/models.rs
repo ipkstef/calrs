@@ -57,6 +57,7 @@ pub struct Group {
     pub source: String,
     pub oidc_id: Option<String>,
     pub created_at: String,
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -119,6 +120,8 @@ pub struct EventType {
     pub min_notice_min: i32,
     pub enabled: bool,
     pub created_at: String,
+    pub group_id: Option<String>,
+    pub created_by_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -155,4 +158,5 @@ pub struct Booking {
     pub cancel_token: String,
     pub reschedule_token: String,
     pub created_at: String,
+    pub assigned_user_id: Option<String>,
 }
