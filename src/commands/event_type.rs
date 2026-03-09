@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Datelike, Duration, Local, NaiveTime};
+use chrono::{Datelike, Duration, Local, NaiveDateTime, NaiveTime};
 use clap::Subcommand;
 use colored::Colorize;
 use sqlx::SqlitePool;
@@ -166,13 +166,28 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
             let min_start = now + Duration::minutes(min_notice as i64);
             let end_date = now.date() + Duration::days(days as i64);
 
+            // Fetch all events in range (both YYYYMMDD and ISO formats)
+            let end_compact = end_date.format("%Y%m%d").to_string();
+            let now_compact = now.format("%Y%m%dT%H%M%S").to_string();
+            let end_iso = end_date.format("%Y-%m-%dT23:59:59").to_string();
+            let now_iso = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+
             let busy_events: Vec<(String, String)> = sqlx::query_as(
                 "SELECT start_at, end_at FROM events
-                 WHERE start_at <= ? AND end_at >= ?
+                 WHERE (start_at <= ? AND end_at >= ?)
+                    OR (start_at <= ? AND end_at >= ?)
+                 UNION ALL
+                 SELECT start_at, end_at FROM bookings
+                 WHERE status = 'confirmed'
+                   AND start_at <= ? AND end_at >= ?
                  ORDER BY start_at",
             )
-            .bind(end_date.format("%Y-%m-%dT23:59:59").to_string())
-            .bind(now.format("%Y-%m-%dT%H:%M:%S").to_string())
+            .bind(&end_compact)
+            .bind(&now_compact)
+            .bind(&end_iso)
+            .bind(&now_iso)
+            .bind(&end_iso)
+            .bind(&now_iso)
             .fetch_all(pool)
             .await?;
 
@@ -219,9 +234,12 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
                         let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
                         let has_conflict = busy_events.iter().any(|(bs, be)| {
-                            let buf_start_str = buf_start.format("%Y-%m-%dT%H:%M:%S").to_string();
-                            let buf_end_str = buf_end.format("%Y-%m-%dT%H:%M:%S").to_string();
-                            bs.as_str() < buf_end_str.as_str() && be.as_str() > buf_start_str.as_str()
+                            let ev_start = parse_datetime(bs);
+                            let ev_end = parse_datetime(be);
+                            match (ev_start, ev_end) {
+                                (Some(s), Some(e)) => s < buf_end && e > buf_start,
+                                _ => false,
+                            }
                         });
 
                         if !has_conflict {
@@ -249,4 +267,25 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse datetime from iCal formats: YYYYMMDD, YYYYMMDDTHHMMSS, YYYY-MM-DDTHH:MM:SS
+fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
+    // YYYYMMDDTHHMMSS
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S") {
+        return Some(dt);
+    }
+    // YYYY-MM-DDTHH:MM:SS
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt);
+    }
+    // YYYYMMDD (all-day → start of day)
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y%m%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?);
+    }
+    // YYYY-MM-DD
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?);
+    }
+    None
 }

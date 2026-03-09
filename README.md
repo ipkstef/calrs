@@ -6,7 +6,7 @@
 
 ## What is this?
 
-`calrs` is an open-source scheduling platform built in Rust. Connect your CalDAV calendar (Nextcloud, Fastmail, iCloud, Google…), define bookable meeting types, and share a link. No Node.js, no PostgreSQL, no subscription.
+`calrs` is an open-source scheduling platform built in Rust. Connect your CalDAV calendar (Nextcloud, Fastmail, BlueMind, iCloud, Google…), define bookable meeting types, and share a link. No Node.js, no PostgreSQL, no subscription.
 
 ## Status
 
@@ -21,9 +21,9 @@ cargo build --release
 # Initialize
 calrs init
 
-# Connect your CalDAV calendar (e.g. Nextcloud)
+# Connect your CalDAV calendar (see "Connecting your calendar" below)
 calrs source add --url https://nextcloud.example.com/remote.php/dav \
-                 --username alice --name Nextcloud
+                 --username alice --name "My Calendar"
 
 # Pull events
 calrs sync
@@ -34,25 +34,68 @@ calrs event-type create --title "30min intro call" --slug intro --duration 30
 # Check your availability
 calrs event-type slots intro
 
+# Book a slot
+calrs booking create intro --date 2026-03-20 --time 14:00 \
+  --name "Jane Doe" --email jane@example.com
+
 # See your upcoming events
 calrs calendar show
+
+# List bookings
+calrs booking list --upcoming
 ```
+
+## Connecting your calendar
+
+calrs connects to any CalDAV server. You need the **DAV root URL** for your provider — not a calendar-specific or public link.
+
+### Common CalDAV URLs
+
+| Provider | URL |
+|---|---|
+| **Nextcloud** | `https://your-server.com/remote.php/dav` |
+| **BlueMind** | `https://your-server.com/dav/` |
+| **Fastmail** | `https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/` |
+| **iCloud** | `https://caldav.icloud.com/` |
+| **Google** | `https://apidata.googleusercontent.com/caldav/v2/your@gmail.com/` |
+| **Zimbra** | `https://your-server.com/dav/` |
+| **SOGo** | `https://your-server.com/SOGo/dav/` |
+| **Radicale** | `https://your-server.com/` |
+
+### Example
+
+```bash
+# Nextcloud
+calrs source add --url https://cloud.example.com/remote.php/dav \
+                 --username alice --name Nextcloud
+
+# BlueMind (use --no-test if OPTIONS hangs)
+calrs source add --url https://mail.example.com/dav/ \
+                 --username alice --name BlueMind --no-test
+
+# Fastmail
+calrs source add --url https://caldav.fastmail.com/dav/calendars/user/alice@fastmail.com/ \
+                 --username alice@fastmail.com --name Fastmail
+```
+
+calrs will auto-discover your principal URL and calendar-home-set via PROPFIND (RFC 4791). If the connection test hangs or fails, use `--no-test` to skip it and go straight to `calrs sync`.
 
 ## CLI reference
 
 ```
-calrs init                        First-time setup
-calrs source add                  Connect a CalDAV calendar
-calrs source list                 List connected sources
-calrs source remove <id>          Remove a source
-calrs source test <id>            Test a connection
-calrs sync [--full]               Pull latest events from CalDAV
-calrs event-type create           Define a new bookable meeting
-calrs event-type list             List your event types
-calrs event-type slots <slug>     Show available slots
+calrs init                           First-time setup
+calrs source add [--no-test]         Connect a CalDAV calendar
+calrs source list                    List connected sources
+calrs source remove <id>             Remove a source
+calrs source test <id>               Test a connection
+calrs sync [--full]                  Pull latest events from CalDAV
+calrs event-type create              Define a new bookable meeting
+calrs event-type list                List your event types
+calrs event-type slots <slug>        Show available slots
 calrs calendar show [--from] [--to]  View your calendar
-calrs booking list [--upcoming]   View bookings
-calrs booking cancel <id>         Cancel a booking
+calrs booking create <slug>          Book a slot
+calrs booking list [--upcoming]      View bookings
+calrs booking cancel <id>            Cancel a booking
 ```
 
 ## Architecture
@@ -77,7 +120,7 @@ calrs/
         ├── sync.rs            calrs sync
         ├── calendar.rs        calrs calendar show
         ├── event_type.rs      calrs event-type create/list/slots
-        └── booking.rs         calrs booking list/cancel
+        └── booking.rs         calrs booking create/list/cancel
 ```
 
 **Storage:** SQLite (WAL mode). Single file, zero ops.
@@ -90,6 +133,7 @@ Does not write to your CalDAV server (bookings are stored locally, with optional
 - [x] CalDAV sync (pull)
 - [x] SQLite storage
 - [x] CLI availability viewer
+- [x] Booking engine with conflict detection
 - [ ] Web booking page (Axum + HTMX, no JS framework)
 - [ ] Email notifications (SMTP)
 - [ ] iCal `.ics` generation for booking confirmations

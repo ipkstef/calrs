@@ -53,7 +53,7 @@ calrs/
         ├── sync.rs               ← `calrs sync [--full]` — pull CalDAV → SQLite
         ├── calendar.rs           ← `calrs calendar show`
         ├── event_type.rs         ← `calrs event-type create/list/slots`
-        └── booking.rs            ← `calrs booking list/cancel`
+        └── booking.rs            ← `calrs booking create/list/cancel`
 ```
 
 ---

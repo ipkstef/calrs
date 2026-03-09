@@ -1,11 +1,38 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use clap::Subcommand;
 use colored::Colorize;
 use sqlx::SqlitePool;
 use tabled::{Table, Tabled};
+use uuid::Uuid;
+
+use std::io::{self, Write};
 
 #[derive(Debug, Subcommand)]
 pub enum BookingCommands {
+    /// Book a slot on an event type
+    Create {
+        /// Event type slug
+        slug: String,
+        /// Date (YYYY-MM-DD)
+        #[arg(long)]
+        date: Option<String>,
+        /// Start time (HH:MM)
+        #[arg(long)]
+        time: Option<String>,
+        /// Guest name
+        #[arg(long)]
+        name: Option<String>,
+        /// Guest email
+        #[arg(long)]
+        email: Option<String>,
+        /// Guest timezone
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+        /// Notes
+        #[arg(long)]
+        notes: Option<String>,
+    },
     /// List bookings
     List {
         /// Show only upcoming bookings
@@ -17,6 +44,14 @@ pub enum BookingCommands {
         /// Booking ID (prefix match)
         id: String,
     },
+}
+
+fn prompt(label: &str) -> String {
+    print!("{}: ", label);
+    io::stdout().flush().unwrap();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    input.trim().to_string()
 }
 
 #[derive(Tabled)]
@@ -35,6 +70,151 @@ struct BookingRow {
 
 pub async fn run(pool: &SqlitePool, cmd: BookingCommands) -> Result<()> {
     match cmd {
+        BookingCommands::Create {
+            slug,
+            date,
+            time,
+            name,
+            email,
+            timezone,
+            notes,
+        } => {
+            // Look up event type
+            let et: Option<(String, String, i32, i32, i32, i32)> = sqlx::query_as(
+                "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min
+                 FROM event_types WHERE slug = ? AND enabled = 1",
+            )
+            .bind(&slug)
+            .fetch_optional(pool)
+            .await?;
+
+            let (et_id, et_title, duration, buffer_before, buffer_after, min_notice) = match et {
+                Some(e) => e,
+                None => {
+                    bail!("No active event type with slug '{}'", slug);
+                }
+            };
+
+            // Get date and time (prompt if not provided)
+            let date_str = date.unwrap_or_else(|| prompt("Date (YYYY-MM-DD)"));
+            let time_str = time.unwrap_or_else(|| prompt("Start time (HH:MM)"));
+            let guest_name = name.unwrap_or_else(|| prompt("Guest name"));
+            let guest_email = email.unwrap_or_else(|| prompt("Guest email"));
+
+            let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
+            let start_time = NaiveTime::parse_from_str(&time_str, "%H:%M")?;
+            let slot_start = date.and_time(start_time);
+            let slot_end = slot_start + Duration::minutes(duration as i64);
+
+            // Validate: minimum notice
+            let now = Local::now().naive_local();
+            let min_start = now + Duration::minutes(min_notice as i64);
+            if slot_start < min_start {
+                bail!(
+                    "Slot is too soon. Minimum notice is {} minutes (earliest: {})",
+                    min_notice,
+                    min_start.format("%Y-%m-%d %H:%M")
+                );
+            }
+
+            // Validate: within availability rules
+            let weekday = date.weekday().num_days_from_sunday() as i32;
+            let rule_match: Option<(String,)> = sqlx::query_as(
+                "SELECT id FROM availability_rules
+                 WHERE event_type_id = ? AND day_of_week = ?
+                   AND start_time <= ? AND end_time >= ?",
+            )
+            .bind(&et_id)
+            .bind(weekday)
+            .bind(start_time.format("%H:%M").to_string())
+            .bind(slot_end.time().format("%H:%M").to_string())
+            .fetch_optional(pool)
+            .await?;
+
+            if rule_match.is_none() {
+                bail!(
+                    "Slot {} {} – {} is outside availability windows",
+                    date_str,
+                    time_str,
+                    slot_end.time().format("%H:%M")
+                );
+            }
+
+            // Validate: no conflicts with existing events
+            let buf_start = slot_start - Duration::minutes(buffer_before as i64);
+            let buf_end = slot_end + Duration::minutes(buffer_after as i64);
+
+            let conflicts: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                "SELECT start_at, end_at, summary FROM events",
+            )
+            .fetch_all(pool)
+            .await?;
+
+            for (bs, be, summary) in &conflicts {
+                let ev_start = parse_datetime(bs);
+                let ev_end = parse_datetime(be);
+                if let (Some(s), Some(e)) = (ev_start, ev_end) {
+                    if s < buf_end && e > buf_start {
+                        bail!(
+                            "Conflict with '{}' ({} – {})",
+                            summary.as_deref().unwrap_or("(no title)"),
+                            s.format("%H:%M"),
+                            e.format("%H:%M")
+                        );
+                    }
+                }
+            }
+
+            // Validate: no conflicts with existing bookings
+            let booking_conflicts: Vec<(String, String)> = sqlx::query_as(
+                "SELECT start_at, end_at FROM bookings WHERE status = 'confirmed'",
+            )
+            .fetch_all(pool)
+            .await?;
+
+            for (bs, be) in &booking_conflicts {
+                let bk_start = parse_datetime(bs);
+                let bk_end = parse_datetime(be);
+                if let (Some(s), Some(e)) = (bk_start, bk_end) {
+                    if s < buf_end && e > buf_start {
+                        bail!("Conflict with an existing booking at {} – {}", s.format("%H:%M"), e.format("%H:%M"));
+                    }
+                }
+            }
+
+            // All good — create the booking
+            let id = Uuid::new_v4().to_string();
+            let uid = format!("{}@calrs", Uuid::new_v4());
+            let cancel_token = Uuid::new_v4().to_string();
+            let reschedule_token = Uuid::new_v4().to_string();
+            let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
+            let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+            sqlx::query(
+                "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, cancel_token, reschedule_token)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&et_id)
+            .bind(&uid)
+            .bind(&guest_name)
+            .bind(&guest_email)
+            .bind(&timezone)
+            .bind(&notes)
+            .bind(&start_at)
+            .bind(&end_at)
+            .bind(&cancel_token)
+            .bind(&reschedule_token)
+            .execute(pool)
+            .await?;
+
+            println!();
+            println!("{} Booking confirmed!", "✓".green());
+            println!("  {} {}", "Event:".bold(), et_title);
+            println!("  {} {} {} – {}", "When:".bold(), date_str, time_str, slot_end.time().format("%H:%M"));
+            println!("  {} {} <{}>", "Guest:".bold(), guest_name, guest_email);
+            println!("  {} {}", "ID:".bold(), &id[..8]);
+        }
         BookingCommands::List { upcoming } => {
             let query = if upcoming {
                 "SELECT b.id, b.guest_name, b.guest_email, et.title, b.start_at, b.end_at, b.status
@@ -113,4 +293,21 @@ pub async fn run(pool: &SqlitePool, cmd: BookingCommands) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse datetime from iCal formats: YYYYMMDD, YYYYMMDDTHHMMSS, YYYY-MM-DDTHH:MM:SS
+fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S") {
+        return Some(dt);
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt);
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y%m%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?);
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?);
+    }
+    None
 }
