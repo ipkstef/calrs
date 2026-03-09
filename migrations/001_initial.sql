@@ -101,6 +101,20 @@ CREATE TABLE IF NOT EXISTS bookings (
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS smtp_config (
+    id              TEXT PRIMARY KEY,
+    account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    host            TEXT NOT NULL,
+    port            INTEGER NOT NULL DEFAULT 587,
+    username        TEXT NOT NULL,
+    password_enc    TEXT,
+    from_email      TEXT NOT NULL,
+    from_name       TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_calendar ON events(calendar_id);
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
 CREATE INDEX IF NOT EXISTS idx_bookings_start ON bookings(start_at);

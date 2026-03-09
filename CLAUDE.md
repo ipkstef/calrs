@@ -24,6 +24,7 @@
 | Time | `chrono` + `chrono-tz` | Timezone handling is a known complexity area |
 | IDs | `uuid` v1 | UUID v4 for all primary keys |
 | Terminal output | `colored` + `tabled` | Colored text and ASCII tables in CLI output |
+| Email | `lettre` 0.11 | SMTP with STARTTLS, async tokio transport |
 | Error handling | `anyhow` (app-level) + `thiserror` (lib-level) | Standard Rust pattern |
 | Config/paths | `directories` crate | XDG-compliant data dir: `$XDG_DATA_HOME/calrs` |
 
@@ -53,7 +54,8 @@ calrs/
         ├── sync.rs               ← `calrs sync [--full]` — pull CalDAV → SQLite
         ├── calendar.rs           ← `calrs calendar show`
         ├── event_type.rs         ← `calrs event-type create/list/slots`
-        └── booking.rs            ← `calrs booking create/list/cancel`
+        ├── booking.rs            ← `calrs booking create/list/cancel`
+        └── config.rs             ← `calrs config smtp/show/smtp-test`
 ```
 
 ---
@@ -72,6 +74,7 @@ Key tables:
 - **`availability_rules`** — weekly recurring windows per event type (day_of_week 0=Sun…6=Sat with CHECK constraint, HH:MM times)
 - **`availability_overrides`** — date-specific exceptions (day off, special hours). `is_blocked` flag
 - **`bookings`** — confirmed bookings with `uid` (iCal), guest info, `cancel_token`/`reschedule_token` (both UNIQUE)
+- **`smtp_config`** — SMTP server settings (host, port, credentials, sender), one per account
 
 All primary keys are UUID v4 strings. Datetimes are ISO8601 strings. Indexes on `events(calendar_id)`, `events(start_at)`, `bookings(start_at)`, `bookings(event_type_id)`.
 

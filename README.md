@@ -96,6 +96,9 @@ calrs calendar show [--from] [--to]  View your calendar
 calrs booking create <slug>          Book a slot
 calrs booking list [--upcoming]      View bookings
 calrs booking cancel <id>            Cancel a booking
+calrs config smtp                    Configure SMTP for email notifications
+calrs config show                    Show current configuration
+calrs config smtp-test <email>       Send a test email
 ```
 
 ## Architecture
@@ -120,7 +123,8 @@ calrs/
         ├── sync.rs            calrs sync
         ├── calendar.rs        calrs calendar show
         ├── event_type.rs      calrs event-type create/list/slots
-        └── booking.rs         calrs booking create/list/cancel
+        ├── booking.rs         calrs booking create/list/cancel
+        └── config.rs          calrs config smtp/show/smtp-test
 ```
 
 **Storage:** SQLite (WAL mode). Single file, zero ops.
@@ -134,9 +138,8 @@ Does not write to your CalDAV server (bookings are stored locally, with optional
 - [x] SQLite storage
 - [x] CLI availability viewer
 - [x] Booking engine with conflict detection
+- [x] Email notifications (SMTP) with `.ics` calendar invite
 - [ ] Web booking page (Axum + HTMX, no JS framework)
-- [ ] Email notifications (SMTP)
-- [ ] iCal `.ics` generation for booking confirmations
 - [ ] CalDAV write (push confirmed bookings back to your calendar)
 - [ ] Recurrence rule expansion
 - [ ] Multi-timezone support

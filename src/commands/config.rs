@@ -1,0 +1,132 @@
+use anyhow::Result;
+use clap::Subcommand;
+use colored::Colorize;
+use sqlx::SqlitePool;
+use uuid::Uuid;
+
+use std::io::{self, Write};
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommands {
+    /// Configure SMTP for email notifications
+    Smtp {
+        /// SMTP server host
+        #[arg(long)]
+        host: Option<String>,
+        /// SMTP port (default: 587)
+        #[arg(long, default_value = "587")]
+        port: u16,
+        /// SMTP username
+        #[arg(long)]
+        username: Option<String>,
+        /// From email address
+        #[arg(long)]
+        from_email: Option<String>,
+        /// From display name
+        #[arg(long)]
+        from_name: Option<String>,
+    },
+    /// Show current configuration
+    Show,
+    /// Send a test email
+    SmtpTest {
+        /// Email address to send test to
+        to: String,
+    },
+}
+
+fn prompt(label: &str) -> String {
+    print!("{}: ", label);
+    io::stdout().flush().unwrap();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    input.trim().to_string()
+}
+
+pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {
+    match cmd {
+        ConfigCommands::Smtp {
+            host,
+            port,
+            username,
+            from_email,
+            from_name,
+        } => {
+            let account: (String,) =
+                sqlx::query_as("SELECT id FROM accounts LIMIT 1")
+                    .fetch_optional(pool)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("No account found. Run `calrs init` first."))?;
+
+            let host = host.unwrap_or_else(|| prompt("SMTP host"));
+            let username = username.unwrap_or_else(|| prompt("SMTP username"));
+            let password = prompt("SMTP password");
+            let from_email = from_email.unwrap_or_else(|| prompt("From email"));
+            let from_name = from_name.or_else(|| {
+                let name = prompt("From name (optional, press Enter to skip)");
+                if name.is_empty() { None } else { Some(name) }
+            });
+
+            let password_hex = hex::encode(password.as_bytes());
+            let id = Uuid::new_v4().to_string();
+
+            // Upsert (one config per account)
+            sqlx::query("DELETE FROM smtp_config WHERE account_id = ?")
+                .bind(&account.0)
+                .execute(pool)
+                .await?;
+
+            sqlx::query(
+                "INSERT INTO smtp_config (id, account_id, host, port, username, password_enc, from_email, from_name)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&account.0)
+            .bind(&host)
+            .bind(port as i32)
+            .bind(&username)
+            .bind(&password_hex)
+            .bind(&from_email)
+            .bind(&from_name)
+            .execute(pool)
+            .await?;
+
+            println!("{} SMTP configured ({}:{})", "✓".green(), host, port);
+        }
+        ConfigCommands::Show => {
+            let smtp: Option<(String, i32, String, String, Option<String>, bool)> = sqlx::query_as(
+                "SELECT host, port, username, from_email, from_name, enabled FROM smtp_config LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await?;
+
+            match smtp {
+                Some((host, port, username, from_email, from_name, enabled)) => {
+                    println!("{}:", "SMTP".bold());
+                    println!("  Host:     {}:{}", host, port);
+                    println!("  Username: {}", username);
+                    println!("  From:     {} <{}>", from_name.as_deref().unwrap_or(""), from_email);
+                    println!("  Enabled:  {}", if enabled { "✓" } else { "✗" });
+                }
+                None => {
+                    println!("No SMTP configured. Run `calrs config smtp` to set it up.");
+                }
+            }
+        }
+        ConfigCommands::SmtpTest { to } => {
+            let smtp_config = crate::email::load_smtp_config(pool).await?;
+            match smtp_config {
+                Some(config) => {
+                    println!("{} Sending test email to {}…", "…".dimmed(), to);
+                    crate::email::send_test_email(&config, &to).await?;
+                    println!("{} Test email sent!", "✓".green());
+                }
+                None => {
+                    println!("{} No SMTP configured. Run `calrs config smtp` first.", "✗".red());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

@@ -1,6 +1,7 @@
 mod caldav;
 mod commands;
 mod db;
+mod email;
 mod models;
 
 use anyhow::Result;
@@ -49,6 +50,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::booking::BookingCommands,
     },
+    /// Configure calrs settings (SMTP, etc.)
+    Config {
+        #[command(subcommand)]
+        command: commands::config::ConfigCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +97,7 @@ async fn main() -> Result<()> {
         },
         Commands::EventType { command } => commands::event_type::run(&pool, command).await?,
         Commands::Booking { command } => commands::booking::run(&pool, command).await?,
+        Commands::Config { command } => commands::config::run(&pool, command).await?,
     }
 
     Ok(())

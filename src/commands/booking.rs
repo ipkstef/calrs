@@ -214,6 +214,47 @@ pub async fn run(pool: &SqlitePool, cmd: BookingCommands) -> Result<()> {
             println!("  {} {} {} – {}", "When:".bold(), date_str, time_str, slot_end.time().format("%H:%M"));
             println!("  {} {} <{}>", "Guest:".bold(), guest_name, guest_email);
             println!("  {} {}", "ID:".bold(), &id[..8]);
+
+            // Send email notifications if SMTP is configured
+            if let Some(smtp_config) = crate::email::load_smtp_config(pool).await? {
+                // Fetch host info
+                let host: Option<(String, String)> = sqlx::query_as(
+                    "SELECT name, email FROM accounts WHERE id = (SELECT account_id FROM event_types WHERE id = ?)",
+                )
+                .bind(&et_id)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some((host_name, host_email)) = host {
+                    let details = crate::email::BookingDetails {
+                        event_title: et_title.clone(),
+                        date: date_str.clone(),
+                        start_time: time_str.clone(),
+                        end_time: slot_end.time().format("%H:%M").to_string(),
+                        guest_name: guest_name.clone(),
+                        guest_email: guest_email.clone(),
+                        guest_timezone: timezone.clone(),
+                        host_name,
+                        host_email,
+                        uid: uid.clone(),
+                        notes: notes.clone(),
+                    };
+
+                    print!("  {} Sending confirmation to {}… ", "…".dimmed(), guest_email);
+                    io::stdout().flush().unwrap();
+                    match crate::email::send_guest_confirmation(&smtp_config, &details).await {
+                        Ok(_) => println!("{}", "sent".green()),
+                        Err(e) => println!("{} {}", "failed:".red(), e),
+                    }
+
+                    print!("  {} Sending notification to {}… ", "…".dimmed(), details.host_email);
+                    io::stdout().flush().unwrap();
+                    match crate::email::send_host_notification(&smtp_config, &details).await {
+                        Ok(_) => println!("{}", "sent".green()),
+                        Err(e) => println!("{} {}", "failed:".red(), e),
+                    }
+                }
+            }
         }
         BookingCommands::List { upcoming } => {
             let query = if upcoming {

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-03-09
+
+### Added
+
+- **Email notifications on booking** — when a booking is created, both the guest and the host receive an email with a `.ics` calendar invite attached (METHOD:REQUEST)
+- **SMTP configuration** (`calrs config smtp`) — configure SMTP server, credentials, and sender identity. Stored in SQLite
+- **`calrs config show`** — display current SMTP configuration
+- **`calrs config smtp-test <email>`** — send a test email to verify SMTP setup
+- **`smtp_config` table** — new migration table for SMTP settings (one per account)
+
+### Notes
+
+- If no SMTP is configured, bookings still work — emails are simply skipped
+- Tested with Scaleway Transactional Email (SWG) on port 2525 with STARTTLS
+
 ## [0.1.2] - 2026-03-09
 
 ### Added
