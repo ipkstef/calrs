@@ -20,13 +20,16 @@
 
 - **Event types** — bookable meeting templates with duration, buffer times, minimum notice, and availability schedule
 - **Availability engine** — free/busy computation from availability rules + synced calendar events
+- **Recurring event support** — RRULE expansion (DAILY/WEEKLY/MONTHLY with INTERVAL, UNTIL, COUNT, BYDAY, EXDATE)
 - **Conflict detection** — validates against both calendar events and existing bookings
 - **Pending bookings** — optional confirmation mode: host approves or declines from the dashboard
 - **Timezone support** — guest timezone picker with browser auto-detection, times displayed in the visitor's timezone
+- **Availability troubleshoot** — visual timeline showing why slots are available or blocked, with event details
 
 ### CalDAV integration
 
 - **CalDAV sync** — pull-based sync from any CalDAV server (Nextcloud, BlueMind, Fastmail, iCloud, Google, Zimbra, SOGo, Radicale...)
+- **CalDAV write-back** — confirmed bookings pushed to the host's calendar, deleted on cancellation
 - **Calendar source management** — add, test, sync, and remove sources from the web dashboard or CLI
 - **Provider presets** — selecting BlueMind, Nextcloud, etc. auto-fills the CalDAV URL and shows setup tips
 - **Auto-discovery** — principal URL and calendar-home-set discovered via PROPFIND (RFC 4791)
@@ -296,6 +299,7 @@ calrs/
     ├── models.rs            Domain types
     ├── auth.rs              Authentication (local + OIDC)
     ├── email.rs             SMTP email with .ics invites
+    ├── rrule.rs             Recurring event expansion (RRULE)
     ├── caldav/mod.rs        CalDAV client (RFC 4791)
     ├── web/mod.rs           Axum web server + all handlers
     └── commands/            CLI subcommands
@@ -303,12 +307,13 @@ calrs/
 
 **Storage:** SQLite (WAL mode). Single file, zero ops.
 
-**CalDAV:** Pull-based sync. Reads your existing calendars for free/busy. Does not write to your CalDAV server (bookings stored locally).
+**CalDAV:** Pull-based sync for free/busy, write-back for confirmed bookings.
 
 ## Roadmap
 
 - [x] CalDAV sync (pull) with auto-discovery
 - [x] Availability engine with conflict detection
+- [x] Recurring event expansion (RRULE)
 - [x] Email notifications with `.ics` invites
 - [x] Web booking page with dark mode
 - [x] Authentication (local + OIDC/SSO)
@@ -317,8 +322,14 @@ calrs/
 - [x] Timezone support
 - [x] Calendar source management from the web UI
 - [x] Docker image + systemd service
-- [x] CalDAV write (push confirmed bookings back to your calendar)
-- [ ] Recurrence rule expansion
+- [x] CalDAV write-back (push confirmed bookings to your calendar)
+- [x] Availability troubleshoot page
+- [ ] Reschedule flow (change date/time without cancelling)
+- [ ] Availability overrides (block specific dates, add special hours)
+- [ ] Delta sync using CalDAV `sync-token` / `ctag`
+- [ ] Webhook notifications
+- [ ] Multi-language support (i18n)
+- [ ] REST API for third-party integrations
 
 ## License
 

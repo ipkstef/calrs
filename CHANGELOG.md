@@ -42,6 +42,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Login rate limiting | 0.6.1 | Per-IP rate limiting on login attempts |
 | Secure cookies | 0.6.1 | HttpOnly + Secure flag on all session cookies |
 | ICS sanitization | 0.6.1 | Prevents injection in calendar invites |
+| RRULE expansion | 0.7.0 | Recurring events block availability (DAILY/WEEKLY/MONTHLY, EXDATE) |
+| Availability troubleshoot | 0.7.0 | Visual timeline showing why slots are blocked |
+| Duplicate email fix | 0.7.0 | Guest emails use METHOD:PUBLISH to avoid mail server re-invites |
+
+## [0.7.0] - 2026-03-09
+
+### Added
+
+- **RRULE expansion** — recurring calendar events now correctly block booking availability
+  - Supports FREQ=DAILY, FREQ=WEEKLY (with BYDAY), FREQ=MONTHLY (with Nth weekday BYDAY like 2MO, -1FR)
+  - Handles INTERVAL, UNTIL, COUNT, and EXDATE
+  - Integrated across all availability checks: public slot picker, CLI slots, booking creation validation, troubleshoot page, and group member availability
+- **Availability troubleshoot page** — visual timeline at `/dashboard/troubleshoot` showing why slots are available or blocked
+  - Color-coded blocks: green (available), red (calendar event), orange (booking), gray (outside hours), striped (buffer/min notice)
+  - Blocked slots breakdown with event names and calendar sources
+  - Event type and date selector with prev/next day navigation
+
+### Fixed
+
+- **Recurring events with compact date format** — events stored in iCal compact format (`YYYYMMDDTHHMMSS`) were not found by queries comparing against ISO format (`YYYY-MM-DDTHH:MM:SS`) due to string comparison; now queries compare against both formats
+- **Duplicate guest emails** — guest confirmation emails used `METHOD:REQUEST` in the `.ics` attachment, causing mail servers like BlueMind to send an additional calendar invitation; changed to `METHOD:PUBLISH` (Closes #6)
+- **Missing availability rules message** — troubleshoot page now shows "No availability rules for this day" instead of the misleading "All times are bookable" when no rules exist for the selected weekday
 
 ## [0.6.1] - 2026-03-09
 
