@@ -58,6 +58,8 @@ calrs/
 │   ├── dashboard.html            ← user dashboard (event types, bookings)
 │   ├── admin.html                ← admin dashboard (users, auth, OIDC, SMTP)
 │   ├── event_type_form.html      ← create/edit event types (with group selector)
+│   ├── source_form.html          ← add CalDAV source (provider presets)
+│   ├── source_test.html          ← connection test / sync results
 │   ├── profile.html              ← public user profile
 │   ├── group_profile.html        ← public group page
 │   ├── slots.html                ← available time slots (with timezone picker)
@@ -162,7 +164,7 @@ File: `src/auth.rs`
 
 File: `src/web/mod.rs`, templates in `templates/`
 
-**Dashboard** (`/dashboard`): Lists personal and group event types (create/edit/toggle/view), pending bookings (confirm/decline), upcoming bookings (cancel with optional reason).
+**Dashboard** (`/dashboard`): Lists personal and group event types (create/edit/toggle/view), calendar sources (add/test/sync/remove), pending bookings (confirm/decline), upcoming bookings (cancel with optional reason).
 
 **Admin panel** (`/dashboard/admin`): User management (promote/demote, enable/disable), auth settings (registration toggle, allowed domains), OIDC config, SMTP status, groups overview. Requires `AdminUser`.
 

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Add calendar — calrs{% endblock %}
+
+{% block content %}
+<a href="/dashboard" class="back-link">&larr; Back to dashboard</a>
+
+<div class="card">
+  <h1>Connect a CalDAV calendar</h1>
+  <p class="subtitle">Connect your calendar server to check availability when guests book meetings.</p>
+
+  {% if error %}
+    <div class="error" style="margin-top: 1rem;">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" style="margin-top: 1.25rem;">
+    <div class="form-group">
+      <label for="provider">Provider</label>
+      <select id="provider" name="provider" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        {% for p in providers %}
+          <option value="{{ p.id }}" data-url="{{ p.url }}" {% if p.id == form_provider %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div id="provider-help" style="margin: -0.25rem 0 1rem; padding: 0.75rem 1rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.825rem; color: var(--text-muted);">
+      <div id="help-bluemind" class="provider-help-text">
+        <strong>BlueMind</strong> — Use the DAV endpoint of your BlueMind server.<br>
+        Typically: <code>https://mail.yourcompany.com/dav/</code><br>
+        If the connection test hangs, check "Skip connection test" and try syncing directly.
+      </div>
+      <div id="help-nextcloud" class="provider-help-text" style="display: none;">
+        <strong>Nextcloud</strong> — Use the WebDAV root, not a specific calendar URL.<br>
+        Typically: <code>https://cloud.example.com/remote.php/dav</code>
+      </div>
+      <div id="help-fastmail" class="provider-help-text" style="display: none;">
+        <strong>Fastmail</strong> — Use your full email in the URL path.<br>
+        Example: <code>https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/</code><br>
+        Use an app-specific password (Settings &rarr; Privacy &amp; Security &rarr; Integrations).
+      </div>
+      <div id="help-icloud" class="provider-help-text" style="display: none;">
+        <strong>iCloud</strong> — Use <code>https://caldav.icloud.com/</code><br>
+        You need an app-specific password from <a href="https://appleid.apple.com" target="_blank" style="color: var(--accent);">appleid.apple.com</a> (Security &rarr; App-Specific Passwords).
+      </div>
+      <div id="help-google" class="provider-help-text" style="display: none;">
+        <strong>Google</strong> — Replace <code>your@gmail.com</code> with your actual email.<br>
+        Example: <code>https://apidata.googleusercontent.com/caldav/v2/your@gmail.com/</code><br>
+        Use an app password or OAuth token. Requires CalDAV API access.
+      </div>
+      <div id="help-zimbra" class="provider-help-text" style="display: none;">
+        <strong>Zimbra</strong> — Use the DAV endpoint of your Zimbra server.<br>
+        Typically: <code>https://mail.example.com/dav/</code>
+      </div>
+      <div id="help-sogo" class="provider-help-text" style="display: none;">
+        <strong>SOGo</strong> — Use the SOGo DAV endpoint.<br>
+        Typically: <code>https://mail.example.com/SOGo/dav/</code>
+      </div>
+      <div id="help-radicale" class="provider-help-text" style="display: none;">
+        <strong>Radicale</strong> — Use the server root URL.<br>
+        Typically: <code>https://cal.example.com/</code>
+      </div>
+      <div id="help-other" class="provider-help-text" style="display: none;">
+        Enter your CalDAV server's <strong>DAV root URL</strong> — not a specific calendar or public link.<br>
+        calrs will auto-discover your calendars via PROPFIND (RFC 4791).
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="name">Display name</label>
+      <input type="text" id="name" name="name" required value="{{ form_name }}" placeholder="My Calendar">
+    </div>
+
+    <div class="form-group">
+      <label for="url">CalDAV URL</label>
+      <input type="url" id="url" name="url" required value="{{ form_url }}" placeholder="https://...">
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required value="{{ form_username }}" placeholder="alice">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required placeholder="App password or account password">
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
+      <label style="display: flex; align-items: center; gap: 0.625rem; cursor: pointer; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); transition: all 0.15s ease;">
+        <input type="checkbox" name="no_test" style="accent-color: var(--accent); width: 1.125rem; height: 1.125rem;">
+        <div>
+          <strong style="font-size: 0.925rem;">Skip connection test</strong>
+          <div style="color: var(--text-muted); font-size: 0.825rem;">Use this if the test hangs (common with some BlueMind/Zimbra setups). You can test the connection later.</div>
+        </div>
+      </label>
+    </div>
+
+    <button type="submit" class="btn" style="margin-top: 1.5rem;">Add calendar source</button>
+  </form>
+</div>
+
+<script>
+(function() {
+  var select = document.getElementById('provider');
+  var urlInput = document.getElementById('url');
+  var nameInput = document.getElementById('name');
+
+  function updateProvider() {
+    var opt = select.options[select.selectedIndex];
+    var id = opt.value;
+    var url = opt.getAttribute('data-url');
+
+    // Update URL placeholder/value if it looks like a template or empty
+    if (url && (urlInput.value === '' || urlInput.value.match(/^https:\/\/(mail|cloud|caldav|apidata|cal)\./))) {
+      urlInput.value = url;
+    }
+
+    // Auto-fill name if empty
+    if (nameInput.value === '') {
+      nameInput.value = opt.textContent.trim().replace(/ \/ .*/, '');
+    }
+
+    // Show relevant help text
+    document.querySelectorAll('.provider-help-text').forEach(function(el) { el.style.display = 'none'; });
+    var help = document.getElementById('help-' + id);
+    if (help) help.style.display = 'block';
+  }
+
+  select.addEventListener('change', updateProvider);
+  updateProvider();
+})();
+</script>
+{% endblock %}

@@ -8,37 +8,61 @@
 
 > _"Your time, your stack."_
 
-## What is this?
+`calrs` is an open-source scheduling platform built in Rust. Connect your CalDAV calendar (Nextcloud, Fastmail, BlueMind, iCloud, Google...), define bookable meeting types, and share a link. No Node.js, no PostgreSQL, no subscription.
 
-`calrs` is an open-source scheduling platform built in Rust. Connect your CalDAV calendar (Nextcloud, Fastmail, BlueMind, iCloud, Google…), define bookable meeting types, and share a link. No Node.js, no PostgreSQL, no subscription.
-
-## Status
-
-Early development. CLI and web booking page are functional.
+<p align="center">
+  <img src="assets/screenshot.png" alt="calrs dashboard" width="720">
+</p>
 
 ## Features
 
-| Feature | Description |
-|---|---|
-| **CalDAV sync** | Connect Nextcloud, BlueMind, Fastmail, iCloud, Google, etc. |
-| **Availability engine** | Free/busy computation from availability rules + calendar events |
-| **Event types** | Bookable meeting templates with duration, buffers, minimum notice |
-| **SQLite storage** | Single-file WAL-mode database, zero ops |
-| **CLI** | Full command set: init, source, sync, calendar, event-type, booking |
-| **Booking with conflict detection** | Validates against both calendar events and existing bookings |
-| **Email notifications** | SMTP emails with `.ics` calendar invites (REQUEST/CANCEL) |
-| **Web booking page** | Axum server with slot picker, booking form, confirmation page |
-| **Local authentication** | Email/password with Argon2, server-side sessions, HttpOnly cookies |
-| **OIDC / SSO** | OpenID Connect via Keycloak (authorization code + PKCE, auto-discovery) |
-| **User roles** | Admin/user with first-user-becomes-admin |
-| **Admin dashboard** | User management, auth settings, OIDC config, SMTP status |
-| **Event type management UI** | Create/edit from dashboard with availability, location, confirmation |
-| **Location support** | Video link, phone, in-person, or custom — in pages, emails, `.ics` |
-| **Pending bookings** | `requires_confirmation` — host approves/declines from dashboard |
-| **OIDC group sync** | Groups synced from Keycloak `groups` JWT claim on SSO login |
-| **Group event types** | Combined availability (any member free) + round-robin assignment |
-| **Public group pages** | `/g/{group-slug}` and `/g/{group-slug}/{slug}` |
-| **Timezone support** | Guest timezone picker, browser auto-detection, tz-aware booking |
+### Scheduling
+
+- **Event types** — bookable meeting templates with duration, buffer times, minimum notice, and availability schedule
+- **Availability engine** — free/busy computation from availability rules + synced calendar events
+- **Conflict detection** — validates against both calendar events and existing bookings
+- **Pending bookings** — optional confirmation mode: host approves or declines from the dashboard
+- **Timezone support** — guest timezone picker with browser auto-detection, times displayed in the visitor's timezone
+
+### CalDAV integration
+
+- **CalDAV sync** — pull-based sync from any CalDAV server (Nextcloud, BlueMind, Fastmail, iCloud, Google, Zimbra, SOGo, Radicale...)
+- **Calendar source management** — add, test, sync, and remove sources from the web dashboard or CLI
+- **Provider presets** — selecting BlueMind, Nextcloud, etc. auto-fills the CalDAV URL and shows setup tips
+- **Auto-discovery** — principal URL and calendar-home-set discovered via PROPFIND (RFC 4791)
+
+### Web interface
+
+- **Web booking page** — public slot picker, booking form, and confirmation page
+- **User dashboard** — manage event types, calendar sources, pending approvals, and upcoming bookings
+- **Admin dashboard** — user management, auth settings, OIDC config, SMTP status
+- **Event type management** — create/edit from the dashboard with availability schedule, location, and confirmation toggle
+- **Location support** — video link, phone, in-person, or custom — displayed on booking pages, emails, and `.ics` invites
+- **Dark mode** — automatic via `prefers-color-scheme`, clean responsive design
+
+### Groups
+
+- **OIDC group sync** — groups synced from Keycloak `groups` JWT claim on SSO login
+- **Group event types** — combined availability (any member free) with round-robin assignment
+- **Public group pages** — bookable at `/g/{group-slug}/{slug}`
+
+### Authentication
+
+- **Local accounts** — email/password with Argon2 hashing, server-side sessions, HttpOnly cookies
+- **OIDC / SSO** — OpenID Connect via Keycloak, Authentik, etc. (authorization code + PKCE, auto-discovery)
+- **User roles** — admin/user, first registered user becomes admin
+- **Registration controls** — enable/disable open registration, restrict by email domain
+
+### Notifications
+
+- **Email notifications** — SMTP emails with `.ics` calendar invites on booking, cancellation, and approval
+- **SMTP configuration** — configure from CLI or admin dashboard
+
+### Infrastructure
+
+- **SQLite storage** — single-file WAL-mode database, zero ops
+- **CLI** — full command set for headless operation (init, source, sync, event-type, booking, config, user)
+- **Single binary** — no runtime dependencies beyond the binary itself
 
 ## Quick start
 
@@ -49,7 +73,15 @@ cargo build --release
 # Initialize
 calrs init
 
-# Connect your CalDAV calendar (see "Connecting your calendar" below)
+# Start the web server
+calrs serve --port 3000
+# Visit http://localhost:3000, register, then add calendars from the dashboard
+```
+
+Or use the CLI to set up everything headless:
+
+```bash
+# Connect your CalDAV calendar
 calrs source add --url https://nextcloud.example.com/remote.php/dav \
                  --username alice --name "My Calendar"
 
@@ -65,52 +97,54 @@ calrs event-type slots intro
 # Book a slot
 calrs booking create intro --date 2026-03-20 --time 14:00 \
   --name "Jane Doe" --email jane@example.com
-
-# See your upcoming events
-calrs calendar show
-
-# List bookings
-calrs booking list --upcoming
-
-# Start the web booking page
-calrs serve --port 3000
-# Then visit http://localhost:3000/intro
 ```
 
 ## Connecting your calendar
 
-calrs connects to any CalDAV server. You need the **DAV root URL** for your provider — not a calendar-specific or public link.
+calrs connects to any CalDAV server. You need the **DAV root URL** for your provider — not a calendar-specific or public link. When adding a source from the web dashboard, selecting a provider auto-fills the URL pattern.
 
 ### Common CalDAV URLs
 
-| Provider | URL |
-|---|---|
-| **Nextcloud** | `https://your-server.com/remote.php/dav` |
-| **BlueMind** | `https://your-server.com/dav/` |
-| **Fastmail** | `https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/` |
-| **iCloud** | `https://caldav.icloud.com/` |
-| **Google** | `https://apidata.googleusercontent.com/caldav/v2/your@gmail.com/` |
-| **Zimbra** | `https://your-server.com/dav/` |
-| **SOGo** | `https://your-server.com/SOGo/dav/` |
-| **Radicale** | `https://your-server.com/` |
+- **BlueMind** — `https://mail.yourcompany.com/dav/`
+- **Nextcloud** — `https://cloud.example.com/remote.php/dav`
+- **Fastmail** — `https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/` (use an app-specific password)
+- **iCloud** — `https://caldav.icloud.com/` (use an app-specific password from appleid.apple.com)
+- **Google** — `https://apidata.googleusercontent.com/caldav/v2/your@gmail.com/`
+- **Zimbra** — `https://mail.example.com/dav/`
+- **SOGo** — `https://mail.example.com/SOGo/dav/`
+- **Radicale** — `https://cal.example.com/`
 
-### Example
+calrs auto-discovers your principal URL and calendar-home-set via PROPFIND (RFC 4791). If the connection test hangs or fails, use the "skip connection test" option and try syncing directly.
+
+## OIDC setup (Keycloak example)
+
+1. In your Keycloak realm, create a new **OpenID Connect** client:
+   - **Client ID**: `calrs`
+   - **Client authentication**: ON (confidential)
+   - **Valid redirect URIs**: `https://your-calrs-host/auth/oidc/callback`
+   - **Web origins**: `https://your-calrs-host`
+
+2. Copy the **Client secret** from the Credentials tab.
+
+3. Configure calrs:
 
 ```bash
-# Nextcloud
-calrs source add --url https://cloud.example.com/remote.php/dav \
-                 --username alice --name Nextcloud
-
-# BlueMind (use --no-test if OPTIONS hangs)
-calrs source add --url https://mail.example.com/dav/ \
-                 --username alice --name BlueMind --no-test
-
-# Fastmail
-calrs source add --url https://caldav.fastmail.com/dav/calendars/user/alice@fastmail.com/ \
-                 --username alice@fastmail.com --name Fastmail
+calrs config oidc \
+  --issuer-url https://keycloak.example.com/realms/your-realm \
+  --client-id calrs \
+  --client-secret YOUR_CLIENT_SECRET \
+  --enabled true \
+  --auto-register true
 ```
 
-calrs will auto-discover your principal URL and calendar-home-set via PROPFIND (RFC 4791). If the connection test hangs or fails, use `--no-test` to skip it and go straight to `calrs sync`.
+4. Set the base URL and start:
+
+```bash
+export CALRS_BASE_URL=https://your-calrs-host
+calrs serve --port 3000
+```
+
+The login page will show a "Sign in with SSO" button. With `--auto-register true`, users are created automatically on first OIDC login. Existing local users are linked by email.
 
 ## CLI reference
 
@@ -145,107 +179,43 @@ calrs serve [--port 3000]            Start the web booking server
 ```
 calrs/
 ├── Cargo.toml
-├── CLAUDE.md
-├── README.md
-├── migrations/
-│   └── 001_initial.sql        SQLite schema
-├── templates/
-│   ├── base.html              Base layout + CSS
-│   ├── auth/
-│   │   ├── login.html         Login page (local + SSO)
-│   │   └── register.html      Registration page
-│   ├── dashboard.html         User dashboard
-│   ├── event_type_form.html   Create/edit event types
-│   ├── profile.html           Public user profile
-│   ├── slots.html             Available time slots
-│   ├── book.html              Booking form
-│   └── confirmed.html         Confirmation page
+├── migrations/              SQLite schema (incremental)
+├── templates/               Minijinja HTML templates
+│   ├── base.html            Base layout + CSS (dark mode)
+│   ├── auth/                Login + registration
+│   ├── dashboard.html       User dashboard
+│   ├── admin.html           Admin panel
+│   ├── source_form.html     Add CalDAV source (provider presets)
+│   ├── event_type_form.html Create/edit event types
+│   ├── slots.html           Slot picker (timezone aware)
+│   ├── book.html            Booking form
+│   └── confirmed.html       Confirmation page
 └── src/
-    ├── main.rs                CLI entry point (clap)
-    ├── db.rs                  SQLite connection + migrations
-    ├── models.rs              Domain types
-    ├── auth.rs                Authentication (local + OIDC)
-    ├── email.rs               SMTP email with .ics invites
-    ├── caldav/
-    │   └── mod.rs             CalDAV client (RFC 4791)
-    ├── web/
-    │   └── mod.rs             Axum web server + booking handlers
-    └── commands/
-        ├── mod.rs             Re-exports
-        ├── init.rs            calrs init
-        ├── source.rs          calrs source add/list/remove/test
-        ├── sync.rs            calrs sync
-        ├── calendar.rs        calrs calendar show
-        ├── event_type.rs      calrs event-type create/list/slots
-        ├── booking.rs         calrs booking create/list/cancel
-        ├── config.rs          calrs config smtp/show/smtp-test/auth/oidc
-        └── user.rs            calrs user create/list/promote/demote
+    ├── main.rs              CLI entry point (clap)
+    ├── db.rs                SQLite connection + migrations
+    ├── models.rs            Domain types
+    ├── auth.rs              Authentication (local + OIDC)
+    ├── email.rs             SMTP email with .ics invites
+    ├── caldav/mod.rs        CalDAV client (RFC 4791)
+    ├── web/mod.rs           Axum web server + all handlers
+    └── commands/            CLI subcommands
 ```
 
 **Storage:** SQLite (WAL mode). Single file, zero ops.
 
-**CalDAV:** Pull-based sync. Reads your existing calendars for free/busy.
-Does not write to your CalDAV server (bookings are stored locally, with optional push).
-
-## Authentication
-
-calrs supports local accounts (email/password) and SSO via OpenID Connect (Keycloak, Authentik, etc.).
-
-The first registered user automatically becomes admin.
-
-### OIDC setup (Keycloak example)
-
-1. In your Keycloak realm, create a new **OpenID Connect** client:
-   - **Client ID**: `calrs`
-   - **Client authentication**: ON (confidential)
-   - **Valid redirect URIs**: `https://your-calrs-host/auth/oidc/callback`
-   - **Web origins**: `https://your-calrs-host`
-
-2. Copy the **Client secret** from the Credentials tab.
-
-3. Configure calrs:
-
-```bash
-calrs config oidc \
-  --issuer-url https://keycloak.example.com/realms/your-realm \
-  --client-id calrs \
-  --client-secret YOUR_CLIENT_SECRET \
-  --enabled true \
-  --auto-register true
-```
-
-4. Set the base URL and start:
-
-```bash
-export CALRS_BASE_URL=https://your-calrs-host
-calrs serve --port 3000
-```
-
-The login page will show a "Sign in with SSO" button. With `--auto-register true`, users are created automatically on first OIDC login. Existing local users are linked by email.
-
-### Registration control
-
-```bash
-# Disable open registration
-calrs config auth --registration false
-
-# Restrict to specific email domains
-calrs config auth --allowed-domains "example.com,company.org"
-```
+**CalDAV:** Pull-based sync. Reads your existing calendars for free/busy. Does not write to your CalDAV server (bookings stored locally).
 
 ## Roadmap
 
-- [x] CalDAV sync (pull)
-- [x] SQLite storage
-- [x] CLI availability viewer
-- [x] Booking engine with conflict detection
-- [x] Email notifications (SMTP) with `.ics` calendar invite
-- [x] Web booking page (Axum + minijinja, no JS framework)
+- [x] CalDAV sync (pull) with auto-discovery
+- [x] Availability engine with conflict detection
+- [x] Email notifications with `.ics` invites
+- [x] Web booking page with dark mode
 - [x] Authentication (local + OIDC/SSO)
-- [x] User management (admin/user roles)
-- [x] Group sync from OIDC provider
+- [x] User and group management
 - [x] Group event types (combined availability + round-robin)
-- [x] Multi-timezone support
+- [x] Timezone support
+- [x] Calendar source management from the web UI
 - [ ] CalDAV write (push confirmed bookings back to your calendar)
 - [ ] Recurrence rule expansion
 - [ ] Docker image

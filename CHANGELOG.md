@@ -34,6 +34,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Group event types | 0.4.0 | Combined availability (any member free) + round-robin assignment |
 | Public group pages | 0.4.0 | `/g/{group-slug}` and `/g/{group-slug}/{slug}` |
 | Timezone support | 0.4.0 | Guest timezone picker, browser auto-detection, tz-aware booking |
+| Calendar source management UI | 0.5.0 | Add/test/sync/remove CalDAV sources from the web dashboard |
+| Provider presets | 0.5.0 | BlueMind, Nextcloud, Fastmail, iCloud, Google, etc. with auto-fill |
+
+## [0.5.0] - 2026-03-09
+
+### Added
+
+- **Calendar source management from the web dashboard** — add, test, sync, and remove CalDAV sources without the CLI
+  - Provider selector with presets: BlueMind, Nextcloud, Fastmail, iCloud, Google, Zimbra, SOGo, Radicale
+  - Auto-fills CalDAV URL and display name when selecting a provider
+  - Contextual help per provider (app passwords, skip-test tips, URL patterns)
+  - Connection test before saving (with "skip test" option for tricky servers)
+  - One-click sync from the dashboard (full CalDAV discovery + event fetch)
+  - Connection test button to verify credentials
+  - Remove with confirmation dialog (cascade-deletes calendars and events)
+- **Dashboard "Calendar sources" card** — lists all connected sources with URL, username, last sync time, and action buttons
 
 ## [0.4.0] - 2026-03-09
 

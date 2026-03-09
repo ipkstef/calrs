@@ -32,6 +32,11 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/dashboard/event-types/new", get(new_event_type_form).post(create_event_type))
         .route("/dashboard/event-types/{slug}/edit", get(edit_event_type_form).post(update_event_type))
         .route("/dashboard/event-types/{slug}/toggle", post(toggle_event_type))
+        // Calendar source management
+        .route("/dashboard/sources/new", get(new_source_form).post(create_source))
+        .route("/dashboard/sources/{id}/remove", post(remove_source))
+        .route("/dashboard/sources/{id}/test", post(test_source))
+        .route("/dashboard/sources/{id}/sync", post(sync_source))
         // Admin routes
         .route("/dashboard/admin", get(admin_dashboard))
         .route("/dashboard/admin/users/{id}/toggle-role", post(admin_toggle_role))
@@ -124,6 +129,19 @@ async fn dashboard(
     .await
     .unwrap_or_default();
 
+    // Fetch CalDAV sources
+    let sources: Vec<(String, String, String, String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT cs.id, cs.name, cs.url, cs.username, cs.last_synced, cs.enabled
+         FROM caldav_sources cs
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE a.user_id = ?
+         ORDER BY cs.created_at",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
     let tmpl = match state.templates.get_template("dashboard.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -157,6 +175,21 @@ async fn dashboard(
         })
         .collect();
 
+    let sources_ctx: Vec<minijinja::Value> = sources
+        .iter()
+        .map(|(id, name, url, username, last_synced, enabled)| {
+            context! {
+                id => id,
+                id_short => &id[..8.min(id.len())],
+                name => name,
+                url => url,
+                username => username,
+                last_synced => last_synced.as_deref().unwrap_or("never"),
+                enabled => enabled,
+            }
+        })
+        .collect();
+
     Html(
         tmpl.render(context! {
             user_name => user.name,
@@ -168,6 +201,7 @@ async fn dashboard(
             user_has_groups => user_has_groups,
             pending_bookings => pending_ctx,
             bookings => bookings_ctx,
+            sources => sources_ctx,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
     )
@@ -660,6 +694,380 @@ async fn toggle_event_type(
     .await;
 
     Redirect::to("/dashboard")
+}
+
+// --- Calendar source management ---
+
+#[derive(Deserialize)]
+struct SourceForm {
+    provider: Option<String>,
+    name: String,
+    url: String,
+    username: String,
+    password: String,
+    no_test: Option<String>,
+}
+
+fn caldav_providers() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        ("bluemind", "BlueMind", "https://mail.example.com/dav/"),
+        ("nextcloud", "Nextcloud", "https://cloud.example.com/remote.php/dav"),
+        ("fastmail", "Fastmail", "https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/"),
+        ("icloud", "iCloud", "https://caldav.icloud.com/"),
+        ("google", "Google", "https://apidata.googleusercontent.com/caldav/v2/your@gmail.com/"),
+        ("zimbra", "Zimbra", "https://mail.example.com/dav/"),
+        ("sogo", "SOGo", "https://mail.example.com/SOGo/dav/"),
+        ("radicale", "Radicale", "https://cal.example.com/"),
+        ("other", "Other / Generic CalDAV", ""),
+    ]
+}
+
+async fn new_source_form(
+    State(state): State<Arc<AppState>>,
+    _auth_user: crate::auth::AuthUser,
+) -> impl IntoResponse {
+    let tmpl = match state.templates.get_template("source_form.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    let providers: Vec<minijinja::Value> = caldav_providers()
+        .iter()
+        .map(|(id, name, url)| context! { id => id, name => name, url => url })
+        .collect();
+
+    Html(
+        tmpl.render(context! {
+            providers => providers,
+            form_provider => "bluemind",
+            form_name => "",
+            form_url => "https://mail.example.com/dav/",
+            form_username => "",
+            error => "",
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn create_source(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Form(form): Form<SourceForm>,
+) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    let account_id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE user_id = ? LIMIT 1",
+    )
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let account_id = match account_id {
+        Some(id) => id,
+        None => return Redirect::to("/dashboard").into_response(),
+    };
+
+    let url = form.url.trim().to_string();
+    let username = form.username.trim().to_string();
+    let name = form.name.trim().to_string();
+
+    if url.is_empty() || username.is_empty() || name.is_empty() || form.password.is_empty() {
+        return render_source_form_error(&state, "All fields are required.", &form).into_response();
+    }
+
+    // Test connection unless skip requested
+    let skip_test = form.no_test.as_deref() == Some("on");
+    if !skip_test {
+        let client = crate::caldav::CaldavClient::new(&url, &username, &form.password);
+        match client.check_connection().await {
+            Ok(_) => {} // fine, even if CalDAV not explicitly detected
+            Err(e) => {
+                let msg = format!("Connection failed: {}. Check the URL and credentials, or check \"Skip connection test\" to save anyway.", e);
+                return render_source_form_error(&state, &msg, &form).into_response();
+            }
+        }
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let password_hex = hex::encode(form.password.as_bytes());
+
+    let _ = sqlx::query(
+        "INSERT INTO caldav_sources (id, account_id, name, url, username, password_enc) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&account_id)
+    .bind(&name)
+    .bind(&url)
+    .bind(&username)
+    .bind(&password_hex)
+    .execute(&state.pool)
+    .await;
+
+    Redirect::to("/dashboard").into_response()
+}
+
+fn render_source_form_error(state: &AppState, error: &str, form: &SourceForm) -> Html<String> {
+    let tmpl = match state.templates.get_template("source_form.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    let providers: Vec<minijinja::Value> = caldav_providers()
+        .iter()
+        .map(|(id, name, url)| context! { id => id, name => name, url => url })
+        .collect();
+
+    Html(
+        tmpl.render(context! {
+            providers => providers,
+            form_provider => form.provider.as_deref().unwrap_or("other"),
+            form_name => form.name.as_str(),
+            form_url => form.url.as_str(),
+            form_username => form.username.as_str(),
+            error => error,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn remove_source(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(source_id): Path<String>,
+) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    // Verify source belongs to this user before deleting
+    let _ = sqlx::query(
+        "DELETE FROM caldav_sources WHERE id = ? AND account_id IN (SELECT id FROM accounts WHERE user_id = ?)",
+    )
+    .bind(&source_id)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
+    Redirect::to("/dashboard")
+}
+
+async fn test_source(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(source_id): Path<String>,
+) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    let source: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT cs.url, cs.username, cs.password_enc, cs.name
+         FROM caldav_sources cs
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE cs.id = ? AND a.user_id = ?",
+    )
+    .bind(&source_id)
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (url, username, password_hex, name) = match source {
+        Some(s) => s,
+        None => return Html("Source not found.".to_string()).into_response(),
+    };
+
+    let password = match hex::decode(&password_hex) {
+        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+        Err(_) => return Html("Invalid stored credentials.".to_string()).into_response(),
+    };
+
+    let client = crate::caldav::CaldavClient::new(&url, &username, &password);
+    let result = match client.check_connection().await {
+        Ok(true) => format!("'{}' — connection OK, CalDAV supported.", name),
+        Ok(false) => format!("'{}' — connected but CalDAV not explicitly detected. Sync may still work.", name),
+        Err(e) => format!("'{}' — connection failed: {}", name, e),
+    };
+
+    // Return a simple page with back link
+    let tmpl = match state.templates.get_template("source_test.html") {
+        Ok(t) => t,
+        Err(_) => return Html(format!(
+            "<p>{}</p><p><a href=\"/dashboard\">Back to dashboard</a></p>", result
+        )).into_response(),
+    };
+    Html(
+        tmpl.render(context! { result => result })
+            .unwrap_or_else(|e| format!("Template error: {}", e)),
+    ).into_response()
+}
+
+async fn sync_source(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(source_id): Path<String>,
+) -> impl IntoResponse {
+    let user = &auth_user.0;
+
+    let source: Option<(String, String, String, String, String)> = sqlx::query_as(
+        "SELECT cs.id, cs.url, cs.username, cs.password_enc, cs.name
+         FROM caldav_sources cs
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE cs.id = ? AND a.user_id = ?",
+    )
+    .bind(&source_id)
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (sid, url, username, password_hex, name) = match source {
+        Some(s) => s,
+        None => return Html("Source not found.".to_string()).into_response(),
+    };
+
+    let password = match hex::decode(&password_hex) {
+        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+        Err(_) => return Html("Invalid stored credentials.".to_string()).into_response(),
+    };
+
+    let client = crate::caldav::CaldavClient::new(&url, &username, &password);
+    let mut messages: Vec<String> = Vec::new();
+
+    // Discover → list calendars → fetch events (same as sync command)
+    let principal = match client.discover_principal().await {
+        Ok(p) => p,
+        Err(e) => {
+            messages.push(format!("Could not discover principal: {}", e));
+            return render_sync_result(&state, &name, &messages).into_response();
+        }
+    };
+
+    let calendar_home = match client.discover_calendar_home(&principal).await {
+        Ok(h) => h,
+        Err(e) => {
+            messages.push(format!("Could not discover calendar home: {}", e));
+            return render_sync_result(&state, &name, &messages).into_response();
+        }
+    };
+
+    let calendars = match client.list_calendars(&calendar_home).await {
+        Ok(c) => c,
+        Err(e) => {
+            messages.push(format!("Could not list calendars: {}", e));
+            return render_sync_result(&state, &name, &messages).into_response();
+        }
+    };
+
+    let mut total_events = 0usize;
+
+    for cal_info in &calendars {
+        let display = cal_info.display_name.as_deref().unwrap_or(&cal_info.href);
+
+        // Upsert calendar record
+        let cal_id: String = match sqlx::query_scalar::<_, String>(
+            "SELECT id FROM calendars WHERE source_id = ? AND href = ?",
+        )
+        .bind(&sid)
+        .bind(&cal_info.href)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        {
+            Some(id) => id,
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                let _ = sqlx::query(
+                    "INSERT INTO calendars (id, source_id, href, display_name, color, ctag) VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&id)
+                .bind(&sid)
+                .bind(&cal_info.href)
+                .bind(&cal_info.display_name)
+                .bind(&cal_info.color)
+                .bind(&cal_info.ctag)
+                .execute(&state.pool)
+                .await;
+                id
+            }
+        };
+
+        // Fetch events
+        match client.fetch_events(&cal_info.href).await {
+            Ok(raw_events) => {
+                let mut count = 0;
+                for raw in &raw_events {
+                    let uid = extract_ical_field(&raw.ical_data, "UID")
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    let summary = extract_ical_field(&raw.ical_data, "SUMMARY");
+                    let start_at = extract_ical_field(&raw.ical_data, "DTSTART").unwrap_or_default();
+                    let end_at = extract_ical_field(&raw.ical_data, "DTEND").unwrap_or_default();
+                    let location = extract_ical_field(&raw.ical_data, "LOCATION");
+                    let description = extract_ical_field(&raw.ical_data, "DESCRIPTION");
+                    let status = extract_ical_field(&raw.ical_data, "STATUS");
+                    let rrule = extract_ical_field(&raw.ical_data, "RRULE");
+
+                    let event_id = uuid::Uuid::new_v4().to_string();
+                    let _ = sqlx::query(
+                        "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         ON CONFLICT(uid) DO UPDATE SET
+                           summary = excluded.summary,
+                           start_at = excluded.start_at,
+                           end_at = excluded.end_at,
+                           location = excluded.location,
+                           description = excluded.description,
+                           status = excluded.status,
+                           rrule = excluded.rrule,
+                           raw_ical = excluded.raw_ical,
+                           synced_at = datetime('now')",
+                    )
+                    .bind(&event_id)
+                    .bind(&cal_id)
+                    .bind(&uid)
+                    .bind(&summary)
+                    .bind(&start_at)
+                    .bind(&end_at)
+                    .bind(&location)
+                    .bind(&description)
+                    .bind(&status)
+                    .bind(&rrule)
+                    .bind(&raw.ical_data)
+                    .execute(&state.pool)
+                    .await;
+
+                    count += 1;
+                }
+                total_events += count;
+                messages.push(format!("{} — {} event(s)", display, count));
+            }
+            Err(e) => {
+                messages.push(format!("{} — failed: {}", display, e));
+            }
+        }
+    }
+
+    // Update last_synced
+    let _ = sqlx::query("UPDATE caldav_sources SET last_synced = datetime('now') WHERE id = ?")
+        .bind(&sid)
+        .execute(&state.pool)
+        .await;
+
+    messages.push(format!("Sync complete: {} calendars, {} events total.", calendars.len(), total_events));
+
+    render_sync_result(&state, &name, &messages).into_response()
+}
+
+fn render_sync_result(state: &AppState, source_name: &str, messages: &[String]) -> Html<String> {
+    let tmpl = match state.templates.get_template("source_test.html") {
+        Ok(t) => t,
+        Err(_) => return Html(format!(
+            "<p>{}</p><p><a href=\"/dashboard\">Back to dashboard</a></p>",
+            messages.join("<br>")
+        )),
+    };
+    Html(
+        tmpl.render(context! { result => messages.join("\n"), source_name => source_name })
+            .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
 }
 
 fn render_event_type_form_error(state: &AppState, error: &str, form: &EventTypeForm, editing: bool) -> Html<String> {
@@ -1911,6 +2319,26 @@ fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
     }
     if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         return Some(d.and_hms_opt(0, 0, 0)?);
+    }
+    None
+}
+
+fn extract_ical_field(ical: &str, field: &str) -> Option<String> {
+    let vevent_start = ical.find("BEGIN:VEVENT")?;
+    let vevent_end = ical[vevent_start..].find("END:VEVENT")
+        .map(|i| vevent_start + i)
+        .unwrap_or(ical.len());
+    let vevent = &ical[vevent_start..vevent_end];
+
+    for line in vevent.lines() {
+        if line.starts_with(field) {
+            if let Some(colon_pos) = line.find(':') {
+                let value = line[colon_pos + 1..].trim().to_string();
+                if !value.is_empty() {
+                    return Some(value);
+                }
+            }
+        }
     }
     None
 }
