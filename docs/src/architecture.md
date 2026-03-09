@@ -14,25 +14,35 @@ calrs/
 │   ├── 004_oidc.sql        OIDC columns
 │   ├── 005_requires_confirmation.sql
 │   ├── 006_group_event_types.sql
-│   └── 007_caldav_write.sql
+│   ├── 007_caldav_write.sql
+│   ├── 008_recurrence_id.sql
+│   ├── 009_uid_recurrence_unique.sql
+│   └── 010_confirm_token.sql
 ├── templates/              Minijinja HTML templates
-│   ├── base.html           Base layout + CSS (dark mode)
+│   ├── base.html           Base layout + CSS (light/dark mode)
 │   ├── auth/               Login, registration
 │   ├── dashboard.html      User dashboard
 │   ├── admin.html          Admin panel
 │   ├── source_form.html    Add CalDAV source
 │   ├── event_type_form.html  Create/edit event types
+│   ├── troubleshoot.html   Availability troubleshoot timeline
 │   ├── slots.html          Slot picker (timezone-aware)
 │   ├── book.html           Booking form
-│   └── confirmed.html      Confirmation page
+│   ├── confirmed.html      Confirmation / pending page
+│   ├── booking_approved.html     Token-based approve success
+│   ├── booking_decline_form.html Token-based decline form
+│   ├── booking_declined.html     Token-based decline success
+│   └── booking_action_error.html Invalid/expired token error
 ├── docs/                   mdBook documentation
 └── src/
     ├── main.rs             CLI entry point (clap)
     ├── db.rs               SQLite connection + migrations
     ├── models.rs           Domain types
     ├── auth.rs             Authentication (local + OIDC)
-    ├── email.rs            SMTP email with .ics invites
-    ├── caldav/mod.rs       CalDAV client (RFC 4791)
+    ├── email.rs            SMTP email with .ics invites + HTML templates
+    ├── rrule.rs            RRULE expansion (DAILY/WEEKLY/MONTHLY)
+    ├── utils.rs            Shared utilities (iCal splitting/parsing)
+    ├── caldav/mod.rs       CalDAV client (RFC 4791) + write-back
     ├── web/mod.rs          Axum web server + handlers
     └── commands/           CLI subcommands
         ├── source.rs
@@ -57,7 +67,7 @@ calrs/
 | `sessions` | Server-side sessions |
 | `caldav_sources` | CalDAV server connections |
 | `calendars` | Discovered calendars |
-| `events` | Synced calendar events |
+| `events` | Synced calendar events (unique on uid + recurrence_id) |
 | `event_types` | Bookable meeting templates |
 | `availability_rules` | Per-event-type availability (day + time range) |
 | `bookings` | Guest bookings |
@@ -74,13 +84,16 @@ calrs/
 
 | Route | Handler |
 |---|---|
-| `/auth/login`, `/auth/register` | Authentication |
+| `/auth/login`, `/auth/register` | Authentication (redirects to dashboard if already logged in) |
 | `/auth/oidc/login`, `/auth/oidc/callback` | OIDC flow |
 | `/dashboard` | User dashboard |
-| `/dashboard/admin` | Admin panel |
+| `/dashboard/admin` | Admin panel + impersonation |
 | `/dashboard/event-types/*` | Event type CRUD |
 | `/dashboard/sources/*` | CalDAV source management |
-| `/dashboard/bookings/*` | Booking actions |
+| `/dashboard/bookings/*` | Booking actions (confirm, cancel) |
+| `/dashboard/troubleshoot/{id}` | Availability troubleshoot timeline |
+| `/booking/approve/{token}` | Token-based booking approval (from email) |
+| `/booking/decline/{token}` | Token-based booking decline (from email) |
 | `/u/{username}` | Public user profile |
 | `/u/{username}/{slug}` | Public slot picker |
 | `/u/{username}/{slug}/book` | Booking form + submit |
@@ -109,11 +122,14 @@ Handles absolute and relative hrefs, BlueMind/Apple namespace prefixes, tags wit
 
 ## Email
 
-**Lettre** for SMTP with STARTTLS. ICS generation is hand-crafted (no icalendar crate dependency for generation):
+**Lettre** for SMTP with STARTTLS. All emails are **HTML with plain text fallback** (multipart/alternative). ICS generation is hand-crafted (no icalendar crate dependency for generation):
 
 - `METHOD:REQUEST` for confirmations
+- `METHOD:PUBLISH` for guest confirmations (avoids mail server re-invites)
 - `METHOD:CANCEL` for cancellations
 - Events include `ORGANIZER`, `ATTENDEE`, `LOCATION`, `STATUS`
+
+The approval request email includes Approve and Decline action buttons (table-based layout for email client compatibility). These link to token-based public endpoints that don't require authentication.
 
 ## Authentication flow
 

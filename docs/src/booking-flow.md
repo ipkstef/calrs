@@ -18,6 +18,7 @@
 | `confirmed` | Booking is active. Slot is blocked. Emails sent. |
 | `pending` | Awaiting host approval (when `requires_confirmation` is on). |
 | `cancelled` | Cancelled by host. Slot is freed. |
+| `declined` | Declined by host (pending booking rejected). |
 
 ## Confirmation mode
 
@@ -25,11 +26,14 @@ When an event type has **requires confirmation** enabled:
 
 1. Guest submits booking → status is `pending`
 2. Guest receives a "pending" email (no `.ics` yet)
-3. Host receives an "approval request" email
-4. Host goes to dashboard → **Pending approval** section
-5. Host clicks **Confirm** or **Decline**
-6. On confirm: status becomes `confirmed`, guest receives confirmation email with `.ics`, booking is pushed to CalDAV
-7. On decline: status becomes `cancelled`, guest receives cancellation email
+3. Host receives an "approval request" email with **Approve** and **Decline** buttons
+4. Host can approve/decline in two ways:
+   - **From the email** — click the Approve or Decline button (no login required, token-based)
+   - **From the dashboard** — go to **Pending approval** section and click Confirm or Decline
+5. On confirm: status becomes `confirmed`, guest receives confirmation email with `.ics`, booking is pushed to CalDAV
+6. On decline: status becomes `declined`, guest receives a decline notification with optional reason
+
+> **Note:** The email action buttons require `CALRS_BASE_URL` to be set. Without it, the host must use the dashboard.
 
 ## Cancellation
 
@@ -60,10 +64,11 @@ If SMTP is configured, calrs sends emails at these moments:
 | Event | Guest receives | Host receives |
 |---|---|---|
 | Booking confirmed | Confirmation + `.ics` REQUEST | Notification + `.ics` REQUEST |
-| Booking pending | "Awaiting confirmation" notice | Approval request |
+| Booking pending | "Awaiting confirmation" notice | Approval request with Approve/Decline buttons |
+| Booking declined | Decline notice (with optional reason) | — |
 | Booking cancelled | Cancellation + `.ics` CANCEL | Cancellation + `.ics` CANCEL |
 
-Emails include event title, date, time, timezone, location, and notes.
+All emails are sent as **HTML with plain text fallback**. They include event title, date, time, timezone, location, and notes. The HTML templates are responsive and support dark mode in email clients that honor `prefers-color-scheme`.
 
 ## Timezone handling
 

@@ -46,6 +46,15 @@ All database queries use parameterized bindings via `sqlx`. No SQL is constructe
 
 All HTML output is rendered through Minijinja, which **auto-escapes** all template variables by default. No `|safe` or `|raw` filters are used.
 
+## Token-based actions
+
+Certain actions can be performed without authentication, using single-use-like tokens:
+
+- **Cancel token** — allows guests to cancel their booking via a link in the confirmation email
+- **Confirm token** — allows hosts to approve or decline pending bookings via links in the approval request email
+
+Tokens are UUID v4 (128-bit random), stored with unique indexes in the database. They are not invalidated after use (the booking status check prevents replay — a token for an already-confirmed booking shows "already approved"). These links should be treated as sensitive — anyone with the link can perform the action.
+
 ## Known limitations
 
 ### No CSRF tokens

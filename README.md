@@ -138,10 +138,15 @@ Then register at `http://localhost:3000` — the first user becomes admin.
 ### Build the documentation
 
 ```bash
-cargo doc --open
+# Install mdBook (one time)
+cargo install mdbook
+
+# Build and serve the docs
+cd docs
+mdbook serve --open
 ```
 
-This generates Rust API documentation from the source code and opens it in your browser. The docs are built to `target/doc/calrs/`.
+This builds the user documentation from `docs/src/` and opens it in your browser. The docs are also available as static HTML in `docs/book/`.
 
 ## CLI quick start
 

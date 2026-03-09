@@ -121,7 +121,7 @@ cal.example.com {
 | Variable | Description | Default |
 |---|---|---|
 | `CALRS_DATA_DIR` | SQLite database directory | `/var/lib/calrs` (Docker/systemd) or XDG (dev) |
-| `CALRS_BASE_URL` | Public URL (required for OIDC callbacks) | `http://localhost:3000` |
+| `CALRS_BASE_URL` | Public URL (required for OIDC callbacks and email action links) | `http://localhost:3000` |
 
 ## Backup
 

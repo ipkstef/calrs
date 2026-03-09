@@ -50,7 +50,7 @@ calrs serve --port 3000
 | Variable | Description | Default |
 |---|---|---|
 | `CALRS_DATA_DIR` | Directory for the SQLite database | Platform-specific (XDG) |
-| `CALRS_BASE_URL` | Public URL (needed for OIDC callbacks) | `http://localhost:3000` |
+| `CALRS_BASE_URL` | Public URL (needed for OIDC callbacks and email action links) | `http://localhost:3000` |
 
 ## Data directory
 

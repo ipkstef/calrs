@@ -6,16 +6,20 @@ calrs is an open-source scheduling platform. Connect your CalDAV calendar (Nextc
 
 ## Key features
 
-- **CalDAV sync** — pull events from any CalDAV server for free/busy computation
+- **CalDAV sync** — pull events from any CalDAV server for free/busy computation, with multi-VEVENT support for recurring event modifications
 - **CalDAV write-back** — confirmed bookings are automatically pushed to your calendar
 - **Availability engine** — computes free slots from availability rules + calendar events
+- **Recurring events** — RRULE expansion (DAILY/WEEKLY/MONTHLY with INTERVAL, UNTIL, COUNT, BYDAY, EXDATE) blocks availability correctly
 - **Event types** — bookable meeting templates with duration, buffers, minimum notice
 - **Booking flow** — public slot picker, booking form, email confirmations with `.ics` invites
+- **Email approve/decline** — approve or decline pending bookings directly from the notification email
+- **HTML emails** — clean, responsive HTML notifications with plain text fallback
 - **Groups** — combined availability with round-robin assignment
 - **Timezone support** — guest timezone picker with browser auto-detection
 - **Authentication** — local accounts (Argon2) or OIDC/SSO (Keycloak, Authentik, etc.)
 - **Web dashboard** — manage event types, calendar sources, pending approvals, bookings
-- **Admin panel** — user management, auth settings, OIDC config, SMTP status
+- **Admin panel** — user management, auth settings, OIDC config, SMTP status, impersonation
+- **Availability troubleshoot** — visual timeline showing why slots are blocked
 - **SQLite storage** — single-file WAL-mode database, zero ops
 - **Single binary** — no runtime dependencies
 

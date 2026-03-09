@@ -60,7 +60,15 @@ calrs sync --full
 
 From the dashboard, click **Sync** on any source to trigger a sync.
 
-Sync pulls all VEVENT data from your calendars and stores it in the local SQLite database. Events are upserted by UID, so re-syncing is safe.
+Sync pulls all VEVENT data from your calendars and stores it in the local SQLite database. Events are upserted by UID (and RECURRENCE-ID for modified instances), so re-syncing is safe.
+
+### Multi-VEVENT resources
+
+Some CalDAV servers (notably BlueMind) bundle recurring events and their modified instances into a single CalDAV resource containing multiple VEVENTs. calrs splits these and stores each VEVENT as a separate row:
+
+- The **parent event** has the RRULE and is stored with its UID
+- **Modified instances** have a RECURRENCE-ID and are stored alongside the parent with a composite unique key `(uid, recurrence_id)`
+- This ensures modified occurrences correctly block (or free) availability
 
 ## CalDAV write-back
 
