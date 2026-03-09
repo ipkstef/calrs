@@ -39,6 +39,7 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
         ("004_oidc", include_str!("../migrations/004_oidc.sql")),
         ("005_requires_confirmation", include_str!("../migrations/005_requires_confirmation.sql")),
         ("006_group_event_types", include_str!("../migrations/006_group_event_types.sql")),
+        ("007_caldav_write", include_str!("../migrations/007_caldav_write.sql")),
     ];
 
     for (name, sql) in migrations {
