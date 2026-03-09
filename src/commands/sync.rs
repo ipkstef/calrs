@@ -90,52 +90,58 @@ pub async fn run(pool: &SqlitePool, _full: bool) -> Result<()> {
                 Ok(raw_events) => {
                     let mut count = 0;
                     for raw in &raw_events {
-                        let uid = extract_ical_field(&raw.ical_data, "UID")
-                            .unwrap_or_else(|| Uuid::new_v4().to_string());
-                        let summary = extract_ical_field(&raw.ical_data, "SUMMARY");
-                        let start_at = extract_ical_field(&raw.ical_data, "DTSTART")
-                            .unwrap_or_default();
-                        let end_at = extract_ical_field(&raw.ical_data, "DTEND")
-                            .unwrap_or_default();
-                        let location = extract_ical_field(&raw.ical_data, "LOCATION");
-                        let description = extract_ical_field(&raw.ical_data, "DESCRIPTION");
-                        let status = extract_ical_field(&raw.ical_data, "STATUS");
-                        let rrule = extract_ical_field(&raw.ical_data, "RRULE");
-                        let recurrence_id = extract_ical_field(&raw.ical_data, "RECURRENCE-ID");
+                        // A single iCal resource can contain multiple VEVENTs
+                        // (parent recurring + modified instances with RECURRENCE-ID).
+                        let vevent_blocks = split_vevents(&raw.ical_data);
 
-                        let event_id = Uuid::new_v4().to_string();
+                        for vevent in &vevent_blocks {
+                            let uid = extract_vevent_field(vevent, "UID")
+                                .unwrap_or_else(|| Uuid::new_v4().to_string());
+                            let summary = extract_vevent_field(vevent, "SUMMARY");
+                            let start_at = extract_vevent_field(vevent, "DTSTART")
+                                .unwrap_or_default();
+                            let end_at = extract_vevent_field(vevent, "DTEND")
+                                .unwrap_or_default();
+                            let location = extract_vevent_field(vevent, "LOCATION");
+                            let description = extract_vevent_field(vevent, "DESCRIPTION");
+                            let status = extract_vevent_field(vevent, "STATUS");
+                            let rrule = extract_vevent_field(vevent, "RRULE");
+                            let recurrence_id = extract_vevent_field(vevent, "RECURRENCE-ID");
 
-                        sqlx::query(
-                            "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                             ON CONFLICT(uid) DO UPDATE SET
-                               summary = excluded.summary,
-                               start_at = excluded.start_at,
-                               end_at = excluded.end_at,
-                               location = excluded.location,
-                               description = excluded.description,
-                               status = excluded.status,
-                               rrule = excluded.rrule,
-                               raw_ical = excluded.raw_ical,
-                               recurrence_id = excluded.recurrence_id,
-                               synced_at = datetime('now')",
-                        )
-                        .bind(&event_id)
-                        .bind(&cal_id)
-                        .bind(&uid)
-                        .bind(&summary)
-                        .bind(&start_at)
-                        .bind(&end_at)
-                        .bind(&location)
-                        .bind(&description)
-                        .bind(&status)
-                        .bind(&rrule)
-                        .bind(&raw.ical_data)
-                        .bind(&recurrence_id)
-                        .execute(pool)
-                        .await?;
+                            let event_id = Uuid::new_v4().to_string();
 
-                        count += 1;
+                            sqlx::query(
+                                "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 ON CONFLICT(uid, COALESCE(recurrence_id, '')) DO UPDATE SET
+                                   summary = excluded.summary,
+                                   start_at = excluded.start_at,
+                                   end_at = excluded.end_at,
+                                   location = excluded.location,
+                                   description = excluded.description,
+                                   status = excluded.status,
+                                   rrule = excluded.rrule,
+                                   raw_ical = excluded.raw_ical,
+                                   recurrence_id = excluded.recurrence_id,
+                                   synced_at = datetime('now')",
+                            )
+                            .bind(&event_id)
+                            .bind(&cal_id)
+                            .bind(&uid)
+                            .bind(&summary)
+                            .bind(&start_at)
+                            .bind(&end_at)
+                            .bind(&location)
+                            .bind(&description)
+                            .bind(&status)
+                            .bind(&rrule)
+                            .bind(&raw.ical_data)
+                            .bind(&recurrence_id)
+                            .execute(pool)
+                            .await?;
+
+                            count += 1;
+                        }
                     }
                     println!(
                         "  {} {} — {} event(s) synced",
@@ -162,14 +168,33 @@ pub async fn run(pool: &SqlitePool, _full: bool) -> Result<()> {
 }
 
 /// Extract a field from the VEVENT block only (ignores VTIMEZONE etc.)
-fn extract_ical_field(ical: &str, field: &str) -> Option<String> {
-    // Find the VEVENT block to avoid matching fields in VTIMEZONE etc.
-    let vevent_start = ical.find("BEGIN:VEVENT")?;
-    let vevent_end = ical[vevent_start..].find("END:VEVENT")
-        .map(|i| vevent_start + i)
-        .unwrap_or(ical.len());
-    let vevent = &ical[vevent_start..vevent_end];
+/// Split an iCal blob into individual VEVENT blocks.
+/// A single CalDAV resource can contain multiple VEVENTs when a recurring
+/// event has modified instances (RECURRENCE-ID). Each block is returned as
+/// the text between BEGIN:VEVENT and END:VEVENT (inclusive).
+fn split_vevents(ical: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut search_from = 0;
+    while let Some(start) = ical[search_from..].find("BEGIN:VEVENT") {
+        let abs_start = search_from + start;
+        if let Some(end) = ical[abs_start..].find("END:VEVENT") {
+            let abs_end = abs_start + end + "END:VEVENT".len();
+            blocks.push(ical[abs_start..abs_end].to_string());
+            search_from = abs_end;
+        } else {
+            break;
+        }
+    }
+    // Fallback: if no VEVENT found, treat the whole blob as one block
+    // so the old extract logic still works
+    if blocks.is_empty() {
+        blocks.push(ical.to_string());
+    }
+    blocks
+}
 
+/// Extract a field value from a single VEVENT block.
+fn extract_vevent_field(vevent: &str, field: &str) -> Option<String> {
     for line in vevent.lines() {
         if line.starts_with(field) {
             if let Some(colon_pos) = line.find(':') {
