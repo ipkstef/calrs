@@ -48,7 +48,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | RECURRENCE-ID handling | 0.7.1 | Modified recurring event instances no longer cause phantom occurrences |
 | Admin impersonation | 0.8.0 | Admins can impersonate any user for troubleshooting |
 
-## [0.8.0] - 2026-03-09
+## [0.8.1] - 2026-03-09
+
+### Fixed
+
+- **User-scoped availability on public pages** — public booking pages (`/u/{username}/{slug}` and legacy `/:slug`) incorrectly used global busy times (all users' events) instead of the host user's events only, causing other users' calendar events to block the host's available slots
+- **Group slot fallback** — the group event type slot page fallback also used global busy times; now correctly scoped to the event type owner
+- **Removed dead code** — `fetch_busy_times_global()` removed since all paths now use `fetch_busy_times_for_user()`
+
+
 
 ### Added
 

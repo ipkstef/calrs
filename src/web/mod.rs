@@ -1516,7 +1516,16 @@ async fn show_group_slots(
         }
         BusySource::Group(member_busy)
     } else {
-        BusySource::Individual(fetch_busy_times_global(&state.pool, now_host, window_end).await)
+        // Fallback for individual event type (shouldn't happen on group route, but be safe)
+        let owner_id: String = sqlx::query_scalar(
+            "SELECT a.user_id FROM accounts a JOIN event_types et ON et.account_id = a.id WHERE et.id = ?",
+        )
+        .bind(&et_id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+        BusySource::Individual(fetch_busy_times_for_user(&state.pool, &owner_id, now_host, window_end).await)
     };
 
     let slot_days = compute_slots(
@@ -1844,8 +1853,8 @@ async fn show_slots_for_user(
     Path((username, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          JOIN users u ON u.id = a.user_id
@@ -1857,20 +1866,11 @@ async fn show_slots_for_user(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_slug, et_title, et_desc, duration, buf_before, buf_after, min_notice, loc_type, loc_value) =
+    let (et_id, et_slug, et_title, et_desc, duration, buf_before, buf_after, min_notice, loc_type, loc_value, host_user_id, host_name) =
         match et {
             Some(e) => e,
             None => return Html("Event type not found.".to_string()),
         };
-
-    let host_name: String = sqlx::query_scalar(
-        "SELECT name FROM users WHERE username = ?",
-    )
-    .bind(&username)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None)
-    .unwrap_or_else(|| "Host".to_string());
 
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let host_tz = get_host_tz(&state.pool, &et_id).await;
@@ -1882,7 +1882,7 @@ async fn show_slots_for_user(
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-    let busy = BusySource::Individual(fetch_busy_times_global(&state.pool, now_host, window_end).await);
+    let busy = BusySource::Individual(fetch_busy_times_for_user(&state.pool, &host_user_id, now_host, window_end).await);
     let slot_days = compute_slots(
         &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
@@ -2017,8 +2017,8 @@ async fn handle_booking_for_user(
     Path((username, slug)): Path<(String, String)>,
     Form(form): Form<BookForm>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value
+    let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, u.id
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          JOIN users u ON u.id = a.user_id
@@ -2030,7 +2030,7 @@ async fn handle_booking_for_user(
     .await
     .unwrap_or(None);
 
-    let (et_id, _et_slug, et_title, duration, buffer_before, buffer_after, min_notice, requires_confirmation, loc_type, loc_value) = match et {
+    let (et_id, _et_slug, et_title, duration, buffer_before, buffer_after, min_notice, requires_confirmation, loc_type, loc_value, host_user_id) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()).into_response(),
     };
@@ -2056,7 +2056,7 @@ async fn handle_booking_for_user(
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-    let busy = fetch_busy_times_global(&state.pool, buf_start, buf_end).await;
+    let busy = fetch_busy_times_for_user(&state.pool, &host_user_id, buf_start, buf_end).await;
     if has_conflict(&busy, buf_start, buf_end) {
         return Html("This slot is no longer available.".to_string()).into_response();
     }
@@ -2306,56 +2306,6 @@ fn expand_recurring_into_busy(
         }
     }
     result
-}
-
-/// Fetch all busy times (events + bookings) globally (not user-scoped).
-async fn fetch_busy_times_global(
-    pool: &SqlitePool,
-    window_start: NaiveDateTime,
-    window_end: NaiveDateTime,
-) -> Vec<(NaiveDateTime, NaiveDateTime)> {
-    let end_compact = window_end.format("%Y%m%d").to_string();
-    let start_compact = window_start.format("%Y%m%dT%H%M%S").to_string();
-    let end_iso = window_end.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let start_iso = window_start.format("%Y-%m-%dT%H:%M:%S").to_string();
-
-    let non_recurring: Vec<(String, String)> = sqlx::query_as(
-        "SELECT start_at, end_at FROM events
-         WHERE (rrule IS NULL OR rrule = '')
-           AND (status IS NULL OR status != 'CANCELLED')
-           AND ((start_at <= ? AND end_at >= ?) OR (start_at <= ? AND end_at >= ?))
-         UNION ALL
-         SELECT start_at, end_at FROM bookings
-         WHERE status = 'confirmed'
-           AND start_at <= ? AND end_at >= ?
-         ORDER BY start_at",
-    )
-    .bind(&end_compact).bind(&start_compact)
-    .bind(&end_iso).bind(&start_iso)
-    .bind(&end_iso).bind(&start_iso)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    let mut busy: Vec<(NaiveDateTime, NaiveDateTime)> = non_recurring.iter()
-        .filter_map(|(s, e)| Some((parse_datetime(s)?, parse_datetime(e)?)))
-        .collect();
-
-    let end_compact_rrule = window_end.format("%Y%m%dT235959").to_string();
-    let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != ''
-           AND (status IS NULL OR status != 'CANCELLED')
-           AND (start_at <= ? OR start_at <= ?)",
-    )
-    .bind(&end_iso)
-    .bind(&end_compact_rrule)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    busy.extend(expand_recurring_into_busy(&recurring, window_start, window_end));
-    busy
 }
 
 /// Fetch busy times for a specific user (events from their calendars + their bookings).
@@ -2641,14 +2591,15 @@ async fn show_slots(
             None => return Html("Event type not found.".to_string()),
         };
 
-    let host_name: String = sqlx::query_scalar(
-        "SELECT a.name FROM accounts a JOIN event_types et ON et.account_id = a.id WHERE et.id = ?",
+    let host_info: Option<(String, String)> = sqlx::query_as(
+        "SELECT a.user_id, a.name FROM accounts a JOIN event_types et ON et.account_id = a.id WHERE et.id = ?",
     )
     .bind(&et_id)
     .fetch_optional(&state.pool)
     .await
-    .unwrap_or(None)
-    .unwrap_or_else(|| "Host".to_string());
+    .unwrap_or(None);
+
+    let (host_user_id, host_name) = host_info.unwrap_or_else(|| ("".to_string(), "Host".to_string()));
 
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let host_tz = get_host_tz(&state.pool, &et_id).await;
@@ -2660,7 +2611,7 @@ async fn show_slots(
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-    let busy = BusySource::Individual(fetch_busy_times_global(&state.pool, now_host, window_end).await);
+    let busy = BusySource::Individual(fetch_busy_times_for_user(&state.pool, &host_user_id, now_host, window_end).await);
     let slot_days = compute_slots(
         &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
@@ -2819,6 +2770,16 @@ async fn handle_booking(
     };
     let needs_approval = requires_confirmation != 0;
 
+    // Get the host user_id for user-scoped busy time check
+    let host_user_id: String = sqlx::query_scalar(
+        "SELECT a.user_id FROM accounts a JOIN event_types et ON et.account_id = a.id WHERE et.id = ?",
+    )
+    .bind(&et_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .unwrap_or_default();
+
     let date = match NaiveDate::parse_from_str(&form.date, "%Y-%m-%d") {
         Ok(d) => d,
         Err(_) => return Html("Invalid date.".to_string()).into_response(),
@@ -2841,7 +2802,7 @@ async fn handle_booking(
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-    let busy = fetch_busy_times_global(&state.pool, buf_start, buf_end).await;
+    let busy = fetch_busy_times_for_user(&state.pool, &host_user_id, buf_start, buf_end).await;
     if has_conflict(&busy, buf_start, buf_end) {
         return Html("This slot is no longer available.".to_string()).into_response();
     }
