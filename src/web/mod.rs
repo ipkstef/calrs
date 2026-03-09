@@ -1835,16 +1835,18 @@ async fn compute_group_slots(
         }
 
         // Recurring events from their CalDAV calendars
+        let end_compact_member = end_date.format("%Y%m%dT235959").to_string();
         let recurring_events: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
             "SELECT e.start_at, e.end_at, e.rrule, e.raw_ical FROM events e
              JOIN calendars c ON c.id = e.calendar_id
              JOIN caldav_sources cs ON cs.id = c.source_id
              JOIN accounts a ON a.id = cs.account_id
              WHERE a.user_id = ? AND c.is_busy = 1
-               AND e.rrule IS NOT NULL AND e.rrule != '' AND e.start_at <= ?",
+               AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
         )
         .bind(user_id)
         .bind(&end_iso)
+        .bind(&end_compact_member)
         .fetch_all(pool)
         .await
         .unwrap_or_default();
@@ -2636,11 +2638,13 @@ async fn compute_slots(
     .unwrap_or_default();
 
     // Recurring events — expand into the window
+    let end_compact = end_date.format("%Y%m%dT235959").to_string();
     let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT start_at, end_at, rrule, raw_ical FROM events
-         WHERE rrule IS NOT NULL AND rrule != '' AND start_at <= ?",
+         WHERE rrule IS NOT NULL AND rrule != '' AND (start_at <= ? OR start_at <= ?)",
     )
     .bind(&end_iso)
+    .bind(&end_compact)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -3292,10 +3296,11 @@ async fn troubleshoot(
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
            AND e.rrule IS NOT NULL AND e.rrule != ''
-           AND e.start_at <= ?",
+           AND (e.start_at <= ? OR e.start_at <= ?)",
     )
     .bind(&user.id)
     .bind(&day_end_iso)
+    .bind(&day_end_compact)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();

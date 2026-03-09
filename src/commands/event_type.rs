@@ -193,11 +193,13 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
             .await?;
 
             // Expand recurring events
+            let end_compact_rrule = end_date.format("%Y%m%dT235959").to_string();
             let recurring: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
                 "SELECT start_at, end_at, rrule, raw_ical FROM events
-                 WHERE rrule IS NOT NULL AND rrule != '' AND start_at <= ?",
+                 WHERE rrule IS NOT NULL AND rrule != '' AND (start_at <= ? OR start_at <= ?)",
             )
             .bind(&end_iso)
+            .bind(&end_compact_rrule)
             .fetch_all(pool)
             .await
             .unwrap_or_default();
