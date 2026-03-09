@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{Datelike, Duration, Local, NaiveDateTime, NaiveTime};
 use clap::Subcommand;
 use colored::Colorize;
 use sqlx::SqlitePool;

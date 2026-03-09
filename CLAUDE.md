@@ -254,6 +254,14 @@ Data is stored at `$XDG_DATA_HOME/calrs/calrs.db` (typically `~/.local/share/cal
 - Lint: `cargo clippy -- -D warnings`
 - Format: `cargo fmt`
 
+### Known compiler warnings (intentional)
+
+The following `dead_code` warnings are expected and should **not** be suppressed:
+
+- **`models.rs` structs** (`Account`, `Group`, `CaldavSource`, `Calendar`, `Event`, `EventType`, `AvailabilityRule`, `AvailabilityOverride`, `Booking`) — Domain model definitions kept for documentation and future use. All current DB queries use tuple destructuring via `sqlx::query_as` instead. These structs will be used when migrating to typed queries.
+- **`auth.rs` `cleanup_expired_sessions()`** — Session cleanup utility not yet wired into a scheduled task. Will be used when adding periodic maintenance (e.g. on startup or via a background task).
+- **`caldav/mod.rs` `RawEvent.href` field** — Set during CalDAV fetch but not yet read. Will be needed for CalDAV write-back (pushing bookings to the user's calendar).
+
 When adding a new subcommand:
 1. Create `src/commands/yourcmd.rs` with a `YourCommands` enum and `pub async fn run(db, cmd)`.
 2. Add `pub mod yourcmd;` to `src/commands/mod.rs`.
