@@ -706,7 +706,7 @@ pub async fn send_guest_decline_notice(config: &SmtpConfig, details: &Cancellati
 // --- Utility ---
 
 /// Load SMTP config from database
-pub async fn load_smtp_config(pool: &SqlitePool) -> Result<Option<SmtpConfig>> {
+pub async fn load_smtp_config(pool: &SqlitePool, key: &[u8; 32]) -> Result<Option<SmtpConfig>> {
     let row: Option<(String, i32, String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT host, port, username, password_enc, from_email, from_name
          FROM smtp_config WHERE enabled = 1 LIMIT 1",
@@ -715,9 +715,8 @@ pub async fn load_smtp_config(pool: &SqlitePool) -> Result<Option<SmtpConfig>> {
     .await?;
 
     match row {
-        Some((host, port, username, password_hex, from_email, from_name)) => {
-            let password_bytes = hex::decode(&password_hex)?;
-            let password = String::from_utf8(password_bytes)?;
+        Some((host, port, username, password_enc, from_email, from_name)) => {
+            let password = crate::crypto::decrypt_password(key, &password_enc)?;
             Ok(Some(SmtpConfig {
                 host,
                 port: port as u16,

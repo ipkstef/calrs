@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::path::Path;
@@ -159,6 +160,57 @@ async fn generate_missing_usernames(pool: &SqlitePool) -> Result<()> {
             .bind(&user_id)
             .execute(&*pool)
             .await?;
+    }
+
+    Ok(())
+}
+
+/// Migrate legacy hex-encoded passwords to AES-256-GCM encrypted format.
+pub async fn migrate_passwords(pool: &SqlitePool, key: &[u8; 32]) -> Result<()> {
+    let mut migrated = 0u32;
+
+    // Migrate caldav_sources.password_enc
+    let sources: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, password_enc FROM caldav_sources WHERE password_enc IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (id, stored) in &sources {
+        if let Ok(Some(encrypted)) = crate::crypto::migrate_legacy(key, stored) {
+            sqlx::query("UPDATE caldav_sources SET password_enc = ? WHERE id = ?")
+                .bind(&encrypted)
+                .bind(id)
+                .execute(pool)
+                .await?;
+            migrated += 1;
+        }
+    }
+
+    // Migrate smtp_config.password_enc
+    let smtp_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, password_enc FROM smtp_config WHERE password_enc IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (id, stored) in &smtp_rows {
+        if let Ok(Some(encrypted)) = crate::crypto::migrate_legacy(key, stored) {
+            sqlx::query("UPDATE smtp_config SET password_enc = ? WHERE id = ?")
+                .bind(&encrypted)
+                .bind(id)
+                .execute(pool)
+                .await?;
+            migrated += 1;
+        }
+    }
+
+    if migrated > 0 {
+        println!(
+            "{} Migrated {} credential(s) to encrypted storage.",
+            "✓".green(),
+            migrated
+        );
     }
 
     Ok(())

@@ -60,9 +60,10 @@ pub struct AppState {
     pub templates: Environment<'static>,
     pub login_limiter: RateLimiter,
     pub data_dir: PathBuf,
+    pub secret_key: [u8; 32],
 }
 
-pub fn create_router(pool: SqlitePool, data_dir: PathBuf) -> Router {
+pub fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8; 32]) -> Router {
     let mut env = Environment::new();
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
     env.set_loader(minijinja::path_loader("templates"));
@@ -72,6 +73,7 @@ pub fn create_router(pool: SqlitePool, data_dir: PathBuf) -> Router {
         templates: env,
         // 10 login attempts per IP per 15 minutes
         login_limiter: RateLimiter::new(10, 900),
+        secret_key,
         data_dir,
     });
 
@@ -359,10 +361,10 @@ async fn cancel_booking(
         .await;
 
     // Delete from CalDAV calendar
-    caldav_delete_booking(&state.pool, &user.id, &uid).await;
+    caldav_delete_booking(&state.pool, &state.secret_key, &user.id, &uid).await;
 
     // Send cancellation emails
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         // Extract date and times from start_at/end_at
         let date = if start_at.len() >= 10 { &start_at[..10] } else { &start_at };
         let start_time = if start_at.len() >= 16 { &start_at[11..16] } else { "00:00" };
@@ -446,10 +448,10 @@ async fn confirm_booking(
     };
 
     // Push to CalDAV calendar
-    caldav_push_booking(&state.pool, &user.id, &uid, &details).await;
+    caldav_push_booking(&state.pool, &state.secret_key, &user.id, &uid, &details).await;
 
     // Send confirmation emails
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
     }
 
@@ -906,7 +908,10 @@ async fn create_source(
     }
 
     let id = uuid::Uuid::new_v4().to_string();
-    let password_hex = hex::encode(form.password.as_bytes());
+    let password_enc = match crate::crypto::encrypt_password(&state.secret_key, &form.password) {
+        Ok(enc) => enc,
+        Err(_) => return Html("Encryption error.".to_string()).into_response(),
+    };
 
     let _ = sqlx::query(
         "INSERT INTO caldav_sources (id, account_id, name, url, username, password_enc) VALUES (?, ?, ?, ?, ?, ?)",
@@ -916,7 +921,7 @@ async fn create_source(
     .bind(&name)
     .bind(&url)
     .bind(&username)
-    .bind(&password_hex)
+    .bind(&password_enc)
     .execute(&state.pool)
     .await;
 
@@ -985,14 +990,14 @@ async fn test_source(
     .await
     .unwrap_or(None);
 
-    let (url, username, password_hex, name) = match source {
+    let (url, username, password_enc, name) = match source {
         Some(s) => s,
         None => return Html("Source not found.".to_string()).into_response(),
     };
 
-    let password = match hex::decode(&password_hex) {
-        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
-        Err(_) => return Html("Invalid stored credentials.".to_string()).into_response(),
+    let password = match crate::crypto::decrypt_password(&state.secret_key, &password_enc) {
+        Ok(p) => p,
+        Err(_) => return Html("Failed to decrypt stored credentials.".to_string()).into_response(),
     };
 
     let client = crate::caldav::CaldavClient::new(&url, &username, &password);
@@ -1034,14 +1039,14 @@ async fn sync_source(
     .await
     .unwrap_or(None);
 
-    let (sid, url, username, password_hex, name) = match source {
+    let (sid, url, username, password_enc, name) = match source {
         Some(s) => s,
         None => return Html("Source not found.".to_string()).into_response(),
     };
 
-    let password = match hex::decode(&password_hex) {
-        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
-        Err(_) => return Html("Invalid stored credentials.".to_string()).into_response(),
+    let password = match crate::crypto::decrypt_password(&state.secret_key, &password_enc) {
+        Ok(p) => p,
+        Err(_) => return Html("Failed to decrypt stored credentials.".to_string()).into_response(),
     };
 
     let client = crate::caldav::CaldavClient::new(&url, &username, &password);
@@ -1761,7 +1766,7 @@ async fn handle_group_booking(
     .unwrap();
 
     // Send emails if SMTP is configured
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         let location_display = if loc_value.as_ref().is_some_and(|v| !v.is_empty()) {
             loc_value.clone()
         } else {
@@ -1790,7 +1795,7 @@ async fn handle_group_booking(
             let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
             let _ = crate::email::send_host_notification(&smtp_config, &details).await;
             // Push confirmed booking to assigned member's CalDAV
-            caldav_push_booking(&state.pool, &assigned_user_id, &uid, &details).await;
+            caldav_push_booking(&state.pool, &state.secret_key, &assigned_user_id, &uid, &details).await;
         }
     }
 
@@ -2126,7 +2131,7 @@ async fn handle_booking_for_user(
     .unwrap();
 
     // Send emails if SMTP is configured
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         let host: Option<(String, String)> = sqlx::query_as(
             "SELECT u.name, u.email FROM users u WHERE u.username = ?",
         )
@@ -2172,7 +2177,7 @@ async fn handle_booking_for_user(
                 .await
                 .unwrap_or(None);
                 if let Some(uid_user) = host_user_id {
-                    caldav_push_booking(&state.pool, &uid_user, &uid, &details).await;
+                    caldav_push_booking(&state.pool, &state.secret_key, &uid_user, &uid, &details).await;
                 }
             }
         }
@@ -2876,7 +2881,7 @@ async fn handle_booking(
     .unwrap();
 
     // Send emails if SMTP is configured
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         let host: Option<(String, String)> = sqlx::query_as(
             "SELECT name, email FROM accounts WHERE id = (SELECT account_id FROM event_types WHERE id = ?)",
         )
@@ -2917,7 +2922,7 @@ async fn handle_booking(
                 .await
                 .unwrap_or(None);
                 if let Some(uid_user) = host_user_id {
-                    caldav_push_booking(&state.pool, &uid_user, &uid, &details).await;
+                    caldav_push_booking(&state.pool, &state.secret_key, &uid_user, &uid, &details).await;
                 }
             }
         }
@@ -3841,10 +3846,10 @@ async fn approve_booking_by_token(
     };
 
     // Push to CalDAV calendar
-    caldav_push_booking(&state.pool, &user_id, &uid, &details).await;
+    caldav_push_booking(&state.pool, &state.secret_key, &user_id, &uid, &details).await;
 
     // Send confirmation email to guest
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         let _ = crate::email::send_guest_confirmation(&smtp_config, &details).await;
     }
 
@@ -3951,7 +3956,7 @@ async fn decline_booking_by_token(
     let reason = form.reason.filter(|r| !r.trim().is_empty());
 
     // Send decline notification to guest
-    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool).await {
+    if let Ok(Some(smtp_config)) = crate::email::load_smtp_config(&state.pool, &state.secret_key).await {
         let details = crate::email::CancellationDetails {
             event_title: event_title.clone(),
             date: date.clone(),
@@ -3988,6 +3993,7 @@ async fn decline_booking_by_token(
 /// generates the ICS, and PUTs it to the CalDAV server.
 async fn caldav_push_booking(
     pool: &SqlitePool,
+    key: &[u8; 32],
     user_id: &str,
     booking_uid: &str,
     details: &crate::email::BookingDetails,
@@ -4005,13 +4011,13 @@ async fn caldav_push_booking(
     .await
     .unwrap_or(None);
 
-    let (url, username, password_hex, calendar_href) = match source {
+    let (url, username, password_enc, calendar_href) = match source {
         Some(s) => s,
         None => return, // No CalDAV write configured — silently skip
     };
 
-    let password = match hex::decode(&password_hex) {
-        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+    let password = match crate::crypto::decrypt_password(key, &password_enc) {
+        Ok(p) => p,
         Err(_) => return,
     };
 
@@ -4032,7 +4038,7 @@ async fn caldav_push_booking(
 }
 
 /// Delete a booking from the host's CalDAV calendar.
-async fn caldav_delete_booking(pool: &SqlitePool, user_id: &str, booking_uid: &str) {
+async fn caldav_delete_booking(pool: &SqlitePool, key: &[u8; 32], user_id: &str, booking_uid: &str) {
     // Check if this booking was pushed to CalDAV
     let info: Option<(String,)> = sqlx::query_as(
         "SELECT caldav_calendar_href FROM bookings WHERE uid = ? AND caldav_calendar_href IS NOT NULL",
@@ -4061,13 +4067,13 @@ async fn caldav_delete_booking(pool: &SqlitePool, user_id: &str, booking_uid: &s
     .await
     .unwrap_or(None);
 
-    let (url, username, password_hex) = match source {
+    let (url, username, password_enc) = match source {
         Some(s) => s,
         None => return,
     };
 
-    let password = match hex::decode(&password_hex) {
-        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+    let password = match crate::crypto::decrypt_password(key, &password_enc) {
+        Ok(p) => p,
         Err(_) => return,
     };
 

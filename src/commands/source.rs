@@ -56,7 +56,7 @@ struct SourceRow {
     last_synced: String,
 }
 
-pub async fn run(pool: &SqlitePool, cmd: SourceCommands) -> Result<()> {
+pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: SourceCommands) -> Result<()> {
     match cmd {
         SourceCommands::Add { url, username, name, no_test } => {
             let account: (String,) =
@@ -90,7 +90,7 @@ pub async fn run(pool: &SqlitePool, cmd: SourceCommands) -> Result<()> {
             }
 
             let id = Uuid::new_v4().to_string();
-            let password_hex = hex::encode(password.as_bytes());
+            let password_enc = crate::crypto::encrypt_password(key, &password)?;
 
             sqlx::query(
                 "INSERT INTO caldav_sources (id, account_id, name, url, username, password_enc) VALUES (?, ?, ?, ?, ?, ?)",
@@ -100,7 +100,7 @@ pub async fn run(pool: &SqlitePool, cmd: SourceCommands) -> Result<()> {
             .bind(&name)
             .bind(&url)
             .bind(&username)
-            .bind(&password_hex)
+            .bind(&password_enc)
             .execute(pool)
             .await?;
 
@@ -162,9 +162,8 @@ pub async fn run(pool: &SqlitePool, cmd: SourceCommands) -> Result<()> {
             .await?;
 
             match source {
-                Some((url, username, password_hex, name)) => {
-                    let password_bytes = hex::decode(&password_hex)?;
-                    let password = String::from_utf8(password_bytes)?;
+                Some((url, username, password_enc, name)) => {
+                    let password = crate::crypto::decrypt_password(key, &password_enc)?;
 
                     println!("Testing source '{}'…", name);
                     let client = CaldavClient::new(&url, &username, &password);

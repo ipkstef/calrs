@@ -63,7 +63,7 @@ struct BookingRow {
     status: String,
 }
 
-pub async fn run(pool: &SqlitePool, cmd: BookingCommands) -> Result<()> {
+pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Result<()> {
     match cmd {
         BookingCommands::Create {
             slug,
@@ -216,7 +216,7 @@ pub async fn run(pool: &SqlitePool, cmd: BookingCommands) -> Result<()> {
             println!("  {} {}", "ID:".bold(), &id[..8]);
 
             // Send email notifications if SMTP is configured
-            if let Some(smtp_config) = crate::email::load_smtp_config(pool).await? {
+            if let Some(smtp_config) = crate::email::load_smtp_config(pool, key).await? {
                 // Fetch host info
                 let host: Option<(String, String)> = sqlx::query_as(
                     "SELECT name, email FROM accounts WHERE id = (SELECT account_id FROM event_types WHERE id = ?)",
@@ -328,7 +328,7 @@ pub async fn run(pool: &SqlitePool, cmd: BookingCommands) -> Result<()> {
                     println!("{} Booking {} cancelled.", "✓".green(), &full_id[..8]);
 
                     // Send cancellation emails
-                    if let Some(smtp_config) = crate::email::load_smtp_config(pool).await? {
+                    if let Some(smtp_config) = crate::email::load_smtp_config(pool, key).await? {
                         let host: Option<(String, String)> = sqlx::query_as(
                             "SELECT a.name, a.email FROM accounts a
                              JOIN event_types et ON et.account_id = a.id

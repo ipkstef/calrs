@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::caldav::CaldavClient;
 use crate::utils::{split_vevents, extract_vevent_field, extract_vevent_tzid};
 
-pub async fn run(pool: &SqlitePool, _full: bool) -> Result<()> {
+pub async fn run(pool: &SqlitePool, key: &[u8; 32], _full: bool) -> Result<()> {
     let sources: Vec<(String, String, String, String, String)> = sqlx::query_as(
         "SELECT id, name, url, username, password_enc FROM caldav_sources WHERE enabled = 1",
     )
@@ -18,11 +18,10 @@ pub async fn run(pool: &SqlitePool, _full: bool) -> Result<()> {
         return Ok(());
     }
 
-    for (source_id, name, url, username, password_hex) in &sources {
+    for (source_id, name, url, username, password_enc) in &sources {
         println!("{} Syncing '{}'…", "…".dimmed(), name);
 
-        let password_bytes = hex::decode(password_hex)?;
-        let password = String::from_utf8(password_bytes)?;
+        let password = crate::crypto::decrypt_password(key, password_enc)?;
 
         let client = CaldavClient::new(url, username, &password);
 

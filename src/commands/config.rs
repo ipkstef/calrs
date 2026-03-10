@@ -62,7 +62,7 @@ pub enum ConfigCommands {
     },
 }
 
-pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {
+pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: ConfigCommands) -> Result<()> {
     match cmd {
         ConfigCommands::Smtp {
             host,
@@ -90,7 +90,7 @@ pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {
                 if name.is_empty() { None } else { Some(name) }
             });
 
-            let password_hex = hex::encode(password.as_bytes());
+            let password_enc = crate::crypto::encrypt_password(key, &password)?;
             let id = Uuid::new_v4().to_string();
 
             // Upsert (one config per account)
@@ -108,7 +108,7 @@ pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {
             .bind(&host)
             .bind(port as i32)
             .bind(&username)
-            .bind(&password_hex)
+            .bind(&password_enc)
             .bind(&from_email)
             .bind(&from_name)
             .execute(pool)
@@ -162,7 +162,7 @@ pub async fn run(pool: &SqlitePool, cmd: ConfigCommands) -> Result<()> {
             }
         }
         ConfigCommands::SmtpTest { to } => {
-            let smtp_config = crate::email::load_smtp_config(pool).await?;
+            let smtp_config = crate::email::load_smtp_config(pool, key).await?;
             match smtp_config {
                 Some(config) => {
                     println!("{} Sending test email to {}…", "…".dimmed(), to);

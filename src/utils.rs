@@ -122,12 +122,7 @@ pub fn prompt(label: &str) -> String {
 }
 
 pub fn prompt_password(label: &str) -> String {
-    print!("{}: ", label);
-    io::stdout().flush().unwrap();
-    // TODO: use rpassword for hidden input
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
+    rpassword::prompt_password(format!("{}: ", label)).unwrap_or_default()
 }
 
 #[cfg(test)]

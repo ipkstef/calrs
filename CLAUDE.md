@@ -26,6 +26,7 @@
 | Terminal output | `colored` + `tabled` | Colored text and ASCII tables in CLI output |
 | Web server | `axum` 0.8 | HTTP booking page, served from CLI |
 | Templates | `minijinja` 2 | Jinja2-compatible, loaded from `templates/` dir |
+| Encryption | `aes-gcm` | AES-256-GCM encryption for stored credentials |
 | Auth | `argon2` + `password-hash` | Argon2 password hashing for local accounts |
 | Auth (OIDC) | `openidconnect` 4.x | OpenID Connect SSO (Keycloak, etc.) with PKCE |
 | Sessions | `axum-extra` (cookies) | Server-side sessions in SQLite, HttpOnly cookies |
@@ -79,6 +80,8 @@ calrs/
     ├── db.rs                     ← SQLite pool setup (WAL mode) + migration runner
     ├── models.rs                 ← domain structs: Account, User, Session, AuthConfig,
     │                               CaldavSource, Calendar, Event, EventType, Booking
+    ├── crypto.rs                 ← AES-256-GCM encryption for stored credentials,
+    │                               secret key management, legacy password migration
     ├── auth.rs                   ← authentication: password hashing, sessions, OIDC,
     │                               axum extractors (AuthUser, AdminUser), web handlers
     ├── email.rs                  ← SMTP email with .ics calendar invites, HTML templates
@@ -207,15 +210,15 @@ File: `src/web/mod.rs`, templates in `templates/`
 - Use `colored` for status: `"✓".green()`, `"✗".red()`, `"…".dimmed()`
 - Use `tabled` for listing resources (sources, event types, bookings)
 - Interactive prompts via `prompt()` / `prompt_with_default()` helpers
-- All commands take `&SqlitePool` as first argument
+- All commands take `&SqlitePool` as first argument; commands that handle credentials also take `&[u8; 32]` secret key
 
 ---
 
 ## Known issues & TODOs
 
 ### Security
-- **CalDAV passwords** stored as hex-encoded plaintext in `password_enc`. Plan: use `keyring` or `age` encryption.
-- **Passwords echoed to terminal** during `source add`. Replace `prompt()` with `rpassword::read_password()`.
+- ~~**CalDAV/SMTP passwords** stored as hex-encoded plaintext~~ — **Fixed in v0.10.0**: passwords are now encrypted at rest using AES-256-GCM. Key is auto-generated at `$DATA_DIR/secret.key` or provided via `CALRS_SECRET_KEY` env var. Legacy hex-encoded passwords are auto-migrated on startup.
+- ~~**Passwords echoed to terminal**~~ — **Fixed in v0.10.0**: `prompt_password()` now uses `rpassword` for hidden input.
 
 ### Features not yet implemented
 - Delta sync using CalDAV `sync-token` and `ctag`

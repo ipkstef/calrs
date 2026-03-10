@@ -69,6 +69,11 @@
 - **Email approve/decline** — approve or decline pending bookings directly from the notification email (token-based, no login required)
 - **SMTP configuration** — configure from CLI or admin dashboard
 
+### Security
+
+- **Credential encryption** — CalDAV and SMTP passwords encrypted at rest with AES-256-GCM; secret key auto-generated or provided via `CALRS_SECRET_KEY`
+- **Hidden password input** — passwords never echoed to the terminal
+
 ### Infrastructure
 
 - **SQLite storage** — single-file WAL-mode database, zero ops
