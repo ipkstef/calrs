@@ -44,6 +44,7 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
         ("008_recurrence_id", include_str!("../migrations/008_recurrence_id.sql")),
         ("009_uid_recurrence_unique", include_str!("../migrations/009_uid_recurrence_unique.sql")),
         ("010_confirm_token", include_str!("../migrations/010_confirm_token.sql")),
+        ("011_event_type_calendars", include_str!("../migrations/011_event_type_calendars.sql")),
     ];
 
     for (name, sql) in migrations {
