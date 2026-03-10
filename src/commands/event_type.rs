@@ -182,11 +182,16 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
 
             // Non-recurring events (with timezone for conversion)
             let events: Vec<(String, String, Option<String>)> = sqlx::query_as(
-                "SELECT start_at, end_at, timezone FROM events
-                 WHERE (rrule IS NULL OR rrule = '')
-                   AND (status IS NULL OR status != 'CANCELLED')
-                   AND ((start_at <= ? AND end_at >= ?) OR (start_at <= ? AND end_at >= ?))",
+                "SELECT e.start_at, e.end_at, e.timezone FROM events e
+                 JOIN calendars c ON c.id = e.calendar_id
+                 WHERE c.is_busy = 1
+                   AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                        OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
+                   AND (e.rrule IS NULL OR e.rrule = '')
+                   AND (e.status IS NULL OR e.status != 'CANCELLED')
+                   AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
             )
+            .bind(&et_id).bind(&et_id)
             .bind(&end_compact)
             .bind(&now_compact)
             .bind(&end_iso)
@@ -219,11 +224,15 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
             // Expand recurring events
             let end_compact_rrule = end_date.format("%Y%m%dT235959").to_string();
             let recurring: Vec<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(
-                "SELECT start_at, end_at, rrule, raw_ical, timezone FROM events
-                 WHERE rrule IS NOT NULL AND rrule != ''
-                   AND (status IS NULL OR status != 'CANCELLED')
-                   AND (start_at <= ? OR start_at <= ?)",
+                "SELECT e.start_at, e.end_at, e.rrule, e.raw_ical, e.timezone FROM events e
+                 JOIN calendars c ON c.id = e.calendar_id
+                 WHERE c.is_busy = 1
+                   AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                        OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
+                   AND (e.status IS NULL OR e.status != 'CANCELLED')
+                   AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
             )
+            .bind(&et_id).bind(&et_id)
             .bind(&end_iso)
             .bind(&end_compact_rrule)
             .fetch_all(pool)

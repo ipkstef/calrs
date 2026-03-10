@@ -54,7 +54,8 @@ calrs/
 │   ├── 007_caldav_write.sql      ← write_calendar_href on caldav_sources, caldav_calendar_href on bookings
 │   ├── 008_recurrence_id.sql     ← recurrence_id column on events
 │   ├── 009_uid_recurrence_unique.sql ← composite unique index (uid, recurrence_id) on events
-│   └── 010_confirm_token.sql     ← confirm_token on bookings for email approve/decline
+│   ├── 010_confirm_token.sql     ← confirm_token on bookings for email approve/decline
+│   └── 011_event_type_calendars.sql ← junction table for per-event-type calendar selection
 ├── templates/
 │   ├── base.html                 ← base layout + CSS (light/dark mode)
 │   ├── auth/
@@ -62,7 +63,7 @@ calrs/
 │   │   └── register.html         ← registration page
 │   ├── dashboard.html            ← user dashboard (event types, bookings)
 │   ├── admin.html                ← admin dashboard (users, auth, OIDC, SMTP)
-│   ├── event_type_form.html      ← create/edit event types (with group selector)
+│   ├── event_type_form.html      ← create/edit event types (group selector, calendar selection)
 │   ├── source_form.html          ← add CalDAV source (provider presets)
 │   ├── source_test.html          ← connection test / sync results
 │   ├── profile.html              ← public user profile
@@ -122,6 +123,7 @@ Key tables:
 - **`availability_overrides`** — date-specific exceptions (day off, special hours). `is_blocked` flag
 - **`bookings`** — bookings with `uid` (iCal), guest info, status (confirmed/pending/cancelled/declined), `cancel_token`/`reschedule_token`/`confirm_token`, `assigned_user_id` (for group round-robin), `caldav_calendar_href` (write-back tracking)
 - **`smtp_config`** — SMTP server settings (host, port, credentials, sender), one per account
+- **`event_type_calendars`** — junction table linking event types to specific calendars for per-event-type calendar selection. Empty = use all `is_busy=1` calendars (backward-compatible default)
 - **`groups`** / **`user_groups`** — group system synced from Keycloak OIDC; groups have `slug` for public URLs
 
 All primary keys are UUID v4 strings. Datetimes are ISO8601 strings.
@@ -190,6 +192,8 @@ File: `src/web/mod.rs`, templates in `templates/`
 **Public pages:** User profile (`/u/{username}`), group profile (`/g/{group-slug}`), time slot picker (with timezone selector), booking form, confirmation page. Event types support location (video link, phone, in-person, custom).
 
 **Availability troubleshoot** (`/dashboard/troubleshoot/{event_type_id}`): Visual timeline showing why slots are available or blocked, with event details. Helps debug availability issues.
+
+**Per-event-type calendar selection:** Event type form includes calendar checkboxes (from `is_busy=1` calendars). Selected calendars are stored in `event_type_calendars` junction table. When computing busy times, if no calendars are selected all `is_busy=1` calendars are checked (backward-compatible). The filter uses `NOT EXISTS / IN` subquery on `event_type_calendars` and is applied in `fetch_busy_times_for_user()`, troubleshoot handler, and CLI commands.
 
 **Group event types:** Created under a group from the dashboard. Combined availability shows slots where ANY group member is free. Round-robin assignment picks the least-busy available member. Public URLs: `/g/{group-slug}/{slug}`.
 

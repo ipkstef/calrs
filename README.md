@@ -25,6 +25,7 @@
 ### Scheduling
 
 - **Event types** — bookable meeting templates with duration, buffer times, minimum notice, and availability schedule
+- **Per-event-type calendar selection** — choose which calendars block availability for each event type (e.g. only check work calendar for work meetings); defaults to all calendars if none selected
 - **Availability engine** — free/busy computation from availability rules + synced calendar events
 - **Recurring event support** — RRULE expansion (DAILY/WEEKLY/MONTHLY with INTERVAL, UNTIL, COUNT, BYDAY, EXDATE)
 - **Conflict detection** — validates against both calendar events and existing bookings
@@ -359,6 +360,7 @@ calrs/
 - [x] HTML emails with action buttons
 - [x] Email approve/decline for pending bookings
 - [x] Admin impersonation
+- [x] Per-event-type calendar selection
 - [ ] Webhooks (per-event-type HTTP callbacks on new/cancelled bookings)
 - [ ] Reschedule flow (change date/time without cancelling)
 - [ ] Availability overrides (block specific dates, add special hours)

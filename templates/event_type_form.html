@@ -110,6 +110,23 @@
       </div>
     </div>
 
+    {% if calendars is defined and calendars %}
+    <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
+      <h2>Calendars</h2>
+      <span class="hint" style="font-size: 0.825rem; color: var(--text-muted); display: block; margin-bottom: 0.75rem;">Select which calendars to check for conflicts. If none selected, all calendars are used.</span>
+      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+        {% set selected_padded = "," ~ selected_calendar_ids ~ "," %}
+        {% for cal in calendars %}
+          <label style="display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; transition: all 0.15s ease;">
+            <input type="checkbox" class="cal-check" value="{{ cal.id }}" {% if ("," ~ cal.id ~ ",") in selected_padded %}checked{% endif %} style="accent-color: var(--accent);">
+            {{ cal.name }}
+          </label>
+        {% endfor %}
+      </div>
+      <input type="hidden" name="calendar_ids" id="calendar_ids" value="{{ selected_calendar_ids }}">
+    </div>
+    {% endif %}
+
     <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
       <label style="display: flex; align-items: center; gap: 0.625rem; cursor: pointer; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); transition: all 0.15s ease;">
         <input type="checkbox" name="requires_confirmation" {% if form_requires_confirmation %}checked{% endif %} style="accent-color: var(--accent); width: 1.125rem; height: 1.125rem;">
@@ -132,6 +149,14 @@
     cb.addEventListener('change', () => {
       const checked = [...document.querySelectorAll('.day-check:checked')].map(c => c.value);
       document.getElementById('avail_days').value = checked.join(',');
+    });
+  });
+
+  // Sync calendar checkboxes to hidden field
+  document.querySelectorAll('.cal-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const checked = [...document.querySelectorAll('.cal-check:checked')].map(c => c.value);
+      document.getElementById('calendar_ids').value = checked.join(',');
     });
   });
 

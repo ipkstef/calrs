@@ -478,6 +478,8 @@ struct EventTypeForm {
     avail_end: Option<String>, // "17:00"
     // Group (optional)
     group_id: Option<String>,
+    // Calendar selection (comma-separated IDs)
+    calendar_ids: Option<String>,
 }
 
 async fn new_event_type_form(
@@ -500,6 +502,27 @@ async fn new_event_type_form(
         .map(|(id, name)| context! { id => id, name => name })
         .collect();
 
+    // Get user's calendars (is_busy=1) for calendar selection
+    let calendars: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT c.id, c.display_name, cs.name FROM calendars c
+         JOIN caldav_sources cs ON cs.id = c.source_id
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE a.user_id = ? AND c.is_busy = 1
+         ORDER BY cs.name, c.display_name",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let calendars_ctx: Vec<minijinja::Value> = calendars
+        .iter()
+        .map(|(id, display_name, source_name)| context! {
+            id => id,
+            name => format!("{} ({})", display_name.as_deref().unwrap_or("Unnamed"), source_name),
+        })
+        .collect();
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -509,6 +532,8 @@ async fn new_event_type_form(
         tmpl.render(context! {
             editing => false,
             groups => groups_ctx,
+            calendars => calendars_ctx,
+            selected_calendar_ids => "",
             form_title => "",
             form_slug => "",
             form_description => "",
@@ -622,6 +647,22 @@ async fn create_event_type(
         }
     }
 
+    // Save calendar selections
+    if let Some(ref cal_ids_str) = form.calendar_ids {
+        for cal_id in cal_ids_str.split(',') {
+            let cal_id = cal_id.trim();
+            if !cal_id.is_empty() {
+                let _ = sqlx::query(
+                    "INSERT INTO event_type_calendars (event_type_id, calendar_id) VALUES (?, ?)",
+                )
+                .bind(&et_id)
+                .bind(cal_id)
+                .execute(&state.pool)
+                .await;
+            }
+        }
+    }
+
     Redirect::to("/dashboard").into_response()
 }
 
@@ -671,6 +712,38 @@ async fn edit_event_type_form(
         .map(|(_, s, e)| (s.clone(), e.clone()))
         .unwrap_or_else(|| ("09:00".to_string(), "17:00".to_string()));
 
+    // Get user's calendars (is_busy=1) for calendar selection
+    let calendars: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT c.id, c.display_name, cs.name FROM calendars c
+         JOIN caldav_sources cs ON cs.id = c.source_id
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE a.user_id = ? AND c.is_busy = 1
+         ORDER BY cs.name, c.display_name",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let calendars_ctx: Vec<minijinja::Value> = calendars
+        .iter()
+        .map(|(id, display_name, source_name)| context! {
+            id => id,
+            name => format!("{} ({})", display_name.as_deref().unwrap_or("Unnamed"), source_name),
+        })
+        .collect();
+
+    // Get currently selected calendars for this event type
+    let selected_cals: Vec<(String,)> = sqlx::query_as(
+        "SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?",
+    )
+    .bind(&et_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let selected_calendar_ids: String = selected_cals.iter().map(|(id,)| id.as_str()).collect::<Vec<_>>().join(",");
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -680,6 +753,8 @@ async fn edit_event_type_form(
         tmpl.render(context! {
             editing => true,
             original_slug => et_slug,
+            calendars => calendars_ctx,
+            selected_calendar_ids => selected_calendar_ids,
             form_title => et_title,
             form_slug => et_slug,
             form_description => et_desc.unwrap_or_default(),
@@ -785,6 +860,27 @@ async fn update_event_type(
                 .bind(day)
                 .bind(avail_start)
                 .bind(avail_end)
+                .execute(&state.pool)
+                .await;
+            }
+        }
+    }
+
+    // Update calendar selections: delete old, insert new
+    let _ = sqlx::query("DELETE FROM event_type_calendars WHERE event_type_id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
+
+    if let Some(ref cal_ids_str) = form.calendar_ids {
+        for cal_id in cal_ids_str.split(',') {
+            let cal_id = cal_id.trim();
+            if !cal_id.is_empty() {
+                let _ = sqlx::query(
+                    "INSERT INTO event_type_calendars (event_type_id, calendar_id) VALUES (?, ?)",
+                )
+                .bind(&et_id)
+                .bind(cal_id)
                 .execute(&state.pool)
                 .await;
             }
@@ -1534,7 +1630,7 @@ async fn show_group_slots(
         ).bind(gid).fetch_all(&state.pool).await.unwrap_or_default();
         let mut member_busy = HashMap::new();
         for (uid,) in &members {
-            member_busy.insert(uid.clone(), fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz).await);
+            member_busy.insert(uid.clone(), fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz, Some(&et_id)).await);
         }
         BusySource::Group(member_busy)
     } else {
@@ -1547,7 +1643,7 @@ async fn show_group_slots(
         .await
         .unwrap_or(None)
         .unwrap_or_default();
-        BusySource::Individual(fetch_busy_times_for_user(&state.pool, &owner_id, now_host, window_end, host_tz).await)
+        BusySource::Individual(fetch_busy_times_for_user(&state.pool, &owner_id, now_host, window_end, host_tz, Some(&et_id)).await)
     };
 
     let slot_days = compute_slots(
@@ -1714,6 +1810,7 @@ async fn handle_group_booking(
     let assigned = pick_group_member(
         &state.pool,
         &group_id,
+        &et_id,
         slot_start,
         slot_end,
         buffer_before,
@@ -1913,7 +2010,7 @@ async fn show_slots_for_user(
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-    let busy = BusySource::Individual(fetch_busy_times_for_user(&state.pool, &host_user_id, now_host, window_end, host_tz).await);
+    let busy = BusySource::Individual(fetch_busy_times_for_user(&state.pool, &host_user_id, now_host, window_end, host_tz, Some(&et_id)).await);
     let slot_days = compute_slots(
         &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
@@ -2088,7 +2185,7 @@ async fn handle_booking_for_user(
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
     let host_tz = get_host_tz(&state.pool, &et_id).await;
-    let busy = fetch_busy_times_for_user(&state.pool, &host_user_id, buf_start, buf_end, host_tz).await;
+    let busy = fetch_busy_times_for_user(&state.pool, &host_user_id, buf_start, buf_end, host_tz, Some(&et_id)).await;
     if has_conflict(&busy, buf_start, buf_end) {
         return Html("This slot is no longer available.".to_string()).into_response();
     }
@@ -2239,6 +2336,7 @@ fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
 async fn pick_group_member(
     pool: &SqlitePool,
     group_id: &str,
+    event_type_id: &str,
     slot_start: NaiveDateTime,
     slot_end: NaiveDateTime,
     buffer_before: i32,
@@ -2259,7 +2357,7 @@ async fn pick_group_member(
     let mut available_members = Vec::new();
 
     for (user_id, name, email) in &members {
-        let busy = fetch_busy_times_for_user(pool, user_id, buf_start, buf_end, host_tz).await;
+        let busy = fetch_busy_times_for_user(pool, user_id, buf_start, buf_end, host_tz, Some(event_type_id)).await;
         if !has_conflict(&busy, buf_start, buf_end) {
             available_members.push((user_id.clone(), name.clone(), email.clone()));
         }
@@ -2344,11 +2442,15 @@ async fn fetch_busy_times_for_user(
     window_start: NaiveDateTime,
     window_end: NaiveDateTime,
     host_tz: Tz,
+    event_type_id: Option<&str>,
 ) -> Vec<(NaiveDateTime, NaiveDateTime)> {
     let end_compact = window_end.format("%Y%m%d").to_string();
     let start_compact = window_start.format("%Y%m%dT%H%M%S").to_string();
     let end_iso = window_end.format("%Y-%m-%dT%H:%M:%S").to_string();
     let start_iso = window_start.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    // Empty string means NOT EXISTS is always true (no rows match), so all calendars pass
+    let et_id_for_filter = event_type_id.unwrap_or("");
 
     let events: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT e.start_at, e.end_at, e.timezone FROM events e
@@ -2356,11 +2458,14 @@ async fn fetch_busy_times_for_user(
          JOIN caldav_sources cs ON cs.id = c.source_id
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
+           AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
            AND (e.rrule IS NULL OR e.rrule = '')
            AND (e.status IS NULL OR e.status != 'CANCELLED')
            AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
     )
     .bind(user_id)
+    .bind(et_id_for_filter).bind(et_id_for_filter)
     .bind(&end_compact).bind(&start_compact)
     .bind(&end_iso).bind(&start_iso)
     .fetch_all(pool)
@@ -2382,10 +2487,13 @@ async fn fetch_busy_times_for_user(
          JOIN caldav_sources cs ON cs.id = c.source_id
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
+           AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
            AND (e.status IS NULL OR e.status != 'CANCELLED')
            AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
     )
     .bind(user_id)
+    .bind(et_id_for_filter).bind(et_id_for_filter)
     .bind(&end_iso)
     .bind(&end_compact_rrule)
     .fetch_all(pool)
@@ -2645,7 +2753,7 @@ async fn show_slots(
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-    let busy = BusySource::Individual(fetch_busy_times_for_user(&state.pool, &host_user_id, now_host, window_end, host_tz).await);
+    let busy = BusySource::Individual(fetch_busy_times_for_user(&state.pool, &host_user_id, now_host, window_end, host_tz, Some(&et_id)).await);
     let slot_days = compute_slots(
         &state.pool, &et_id, duration, buf_before, buf_after, min_notice, start_offset, days_per_page, host_tz, guest_tz, busy,
     )
@@ -2837,7 +2945,7 @@ async fn handle_booking(
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
     let host_tz = get_host_tz(&state.pool, &et_id).await;
-    let busy = fetch_busy_times_for_user(&state.pool, &host_user_id, buf_start, buf_end, host_tz).await;
+    let busy = fetch_busy_times_for_user(&state.pool, &host_user_id, buf_start, buf_end, host_tz, Some(&et_id)).await;
     if has_conflict(&busy, buf_start, buf_end) {
         return Html("This slot is no longer available.".to_string()).into_response();
     }
@@ -3049,12 +3157,15 @@ async fn troubleshoot(
          JOIN caldav_sources cs ON cs.id = c.source_id
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
+           AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
            AND (e.rrule IS NULL OR e.rrule = '')
            AND (e.status IS NULL OR e.status != 'CANCELLED')
            AND ((e.start_at < ? AND e.end_at > ?) OR (e.start_at < ? AND e.end_at > ?))
          ORDER BY e.start_at",
     )
     .bind(&user.id)
+    .bind(&et_id).bind(&et_id)
     .bind(&day_end_compact).bind(&day_start_compact)
     .bind(&day_end_iso).bind(&day_start_iso)
     .fetch_all(&state.pool)
@@ -3082,11 +3193,14 @@ async fn troubleshoot(
          JOIN caldav_sources cs ON cs.id = c.source_id
          JOIN accounts a ON a.id = cs.account_id
          WHERE a.user_id = ? AND c.is_busy = 1
+           AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
            AND (e.status IS NULL OR e.status != 'CANCELLED')
            AND e.rrule IS NOT NULL AND e.rrule != ''
            AND (e.start_at <= ? OR e.start_at <= ?)",
     )
     .bind(&user.id)
+    .bind(&et_id).bind(&et_id)
     .bind(&day_end_iso)
     .bind(&day_end_compact)
     .fetch_all(&state.pool)

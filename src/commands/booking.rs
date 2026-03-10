@@ -145,8 +145,14 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
                 .unwrap_or(Tz::UTC);
 
             let conflicts: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
-                "SELECT start_at, end_at, summary, timezone FROM events",
+                "SELECT e.start_at, e.end_at, e.summary, e.timezone FROM events e
+                 JOIN calendars c ON c.id = e.calendar_id
+                 WHERE c.is_busy = 1
+                   AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
+                        OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
+                   AND (e.status IS NULL OR e.status != 'CANCELLED')",
             )
+            .bind(&et_id).bind(&et_id)
             .fetch_all(pool)
             .await?;
 

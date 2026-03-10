@@ -51,6 +51,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Multi-VEVENT sync | 0.8.4 | Recurring events with modified instances properly synced from CalDAV |
 | Email approve/decline | 0.8.5 | Approve or decline pending bookings directly from the notification email |
 | Timezone-aware CalDAV events | 0.9.0 | Event times converted from their calendar timezone to host timezone for accurate availability |
+| Credential encryption | 0.10.0 | AES-256-GCM encryption for stored CalDAV/SMTP passwords |
+| Per-event-type calendar selection | 0.11.0 | Choose which calendars block availability per event type |
+
+## [0.11.0] - 2026-03-10
+
+### Added
+
+- **Per-event-type calendar selection** — choose which calendars block availability for each event type
+  - New "Calendars" section on the event type form with checkboxes for all `is_busy=1` calendars
+  - Junction table `event_type_calendars` links event types to selected calendars
+  - If no calendars are selected, all busy calendars are checked (fully backward-compatible)
+  - Filter applied across all availability paths: web slot picker, booking validation, group scheduling, troubleshoot page, and CLI commands
+  - Cascade delete: removing a calendar source automatically cleans up junction rows
+
+## [0.10.0] - 2026-03-10
+
+### Added
+
+- **AES-256-GCM encryption for stored credentials** — CalDAV and SMTP passwords encrypted at rest
+  - Secret key auto-generated at `$DATA_DIR/secret.key` or provided via `CALRS_SECRET_KEY` env var
+  - Legacy hex-encoded passwords auto-migrated on startup
+  - Hidden password input via `rpassword`
 
 ## [0.9.0] - 2026-03-10
 

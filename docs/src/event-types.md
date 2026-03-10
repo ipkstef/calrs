@@ -30,6 +30,14 @@ calrs event-type create \
   --buffer-after 5
 ```
 
+## Calendar selection
+
+When you have multiple CalDAV calendars, you can choose **which calendars block availability** for each event type. For example, a "Work meeting" event type can check only the work calendar, while a "Personal chat" checks only the personal calendar.
+
+From the dashboard form, select the calendars under the **Calendars** section. Only calendars marked as "busy" (`is_busy=1`) appear.
+
+**Default behavior:** If no calendars are selected, all busy calendars are checked — same as before. This is fully backward-compatible.
+
 ## Availability schedule
 
 Each event type has its own availability rules. By default: Monday–Friday, 09:00–17:00.
@@ -39,7 +47,7 @@ From the dashboard form, you can set:
 - Which days of the week are available (checkboxes)
 - Start and end time for available hours
 
-The availability engine intersects these rules with your synced calendar events and existing bookings to compute free slots.
+The availability engine intersects these rules with your synced calendar events (filtered by selected calendars) and existing bookings to compute free slots.
 
 ## Slot computation
 
