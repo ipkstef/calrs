@@ -173,7 +173,8 @@ pub async fn sync_source(
 /// Silently skips on errors (best-effort for guest-facing pages).
 pub async fn sync_if_stale(pool: &SqlitePool, key: &[u8; 32], user_id: &str) {
     let cutoff = Utc::now() - chrono::Duration::seconds(STALE_SECS);
-    let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S").to_string();
+    // Must match SQLite datetime('now') format: "YYYY-MM-DD HH:MM:SS" (space, not T)
+    let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let stale_sources: Vec<(String, String, String, String)> = sqlx::query_as(
         "SELECT cs.id, cs.url, cs.username, cs.password_enc
