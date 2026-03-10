@@ -37,6 +37,7 @@
 ### CalDAV integration
 
 - **CalDAV sync** — pull-based sync from any CalDAV server (Nextcloud, BlueMind, Fastmail, iCloud, Google, Zimbra, SOGo, Radicale...), with multi-VEVENT support for recurring event modifications
+- **On-demand sync** — booking pages automatically sync the host's calendars if stale (>5 min), using RFC 4791 time-range filtering to fetch only future events
 - **CalDAV write-back** — confirmed bookings pushed to the host's calendar, deleted on cancellation
 - **Calendar source management** — add, test, sync, and remove sources from the web dashboard or CLI
 - **Provider presets** — selecting BlueMind, Nextcloud, etc. auto-fills the CalDAV URL and shows setup tips

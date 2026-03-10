@@ -1,10 +1,14 @@
 use anyhow::Result;
+use chrono::Utc;
 use colored::Colorize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::caldav::CaldavClient;
-use crate::utils::{split_vevents, extract_vevent_field, extract_vevent_tzid};
+use crate::utils::{extract_vevent_field, extract_vevent_tzid, split_vevents};
+
+/// Default staleness threshold: 5 minutes
+const STALE_SECS: i64 = 300;
 
 pub async fn run(pool: &SqlitePool, key: &[u8; 32], _full: bool) -> Result<()> {
     let sources: Vec<(String, String, String, String, String)> = sqlx::query_as(
@@ -22,150 +26,183 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], _full: bool) -> Result<()> {
         println!("{} Syncing '{}'…", "…".dimmed(), name);
 
         let password = crate::crypto::decrypt_password(key, password_enc)?;
-
         let client = CaldavClient::new(url, username, &password);
 
-        // Discover principal → calendar-home-set → calendars
-        let principal = match client.discover_principal().await {
-            Ok(p) => p,
-            Err(e) => {
-                println!("  {} Could not discover principal: {}", "✗".red(), e);
-                continue;
-            }
-        };
-
-        let calendar_home = match client.discover_calendar_home(&principal).await {
-            Ok(h) => h,
-            Err(e) => {
-                println!("  {} Could not discover calendar home: {}", "✗".red(), e);
-                continue;
-            }
-        };
-
-        let calendars = match client.list_calendars(&calendar_home).await {
-            Ok(c) => c,
-            Err(e) => {
-                println!("  {} Could not list calendars: {}", "✗".red(), e);
-                continue;
-            }
-        };
-
-        println!("  Found {} calendar(s)", calendars.len());
-
-        for cal_info in &calendars {
-            // Upsert calendar
-            let cal_id: String = match sqlx::query_scalar::<_, String>(
-                "SELECT id FROM calendars WHERE source_id = ? AND href = ?",
-            )
-            .bind(source_id)
-            .bind(&cal_info.href)
-            .fetch_optional(pool)
-            .await?
-            {
-                Some(id) => id,
-                None => {
-                    let id = Uuid::new_v4().to_string();
-                    sqlx::query(
-                        "INSERT INTO calendars (id, source_id, href, display_name, color, ctag) VALUES (?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(&id)
-                    .bind(source_id)
-                    .bind(&cal_info.href)
-                    .bind(&cal_info.display_name)
-                    .bind(&cal_info.color)
-                    .bind(&cal_info.ctag)
-                    .execute(pool)
-                    .await?;
-                    id
-                }
-            };
-
-            let display = cal_info
-                .display_name
-                .as_deref()
-                .unwrap_or(&cal_info.href);
-
-            // Fetch events
-            match client.fetch_events(&cal_info.href).await {
-                Ok(raw_events) => {
-                    let mut count = 0;
-                    for raw in &raw_events {
-                        // A single iCal resource can contain multiple VEVENTs
-                        // (parent recurring + modified instances with RECURRENCE-ID).
-                        let vevent_blocks = split_vevents(&raw.ical_data);
-
-                        for vevent in &vevent_blocks {
-                            let uid = extract_vevent_field(vevent, "UID")
-                                .unwrap_or_else(|| Uuid::new_v4().to_string());
-                            let summary = extract_vevent_field(vevent, "SUMMARY");
-                            let start_at = extract_vevent_field(vevent, "DTSTART")
-                                .unwrap_or_default();
-                            let end_at = extract_vevent_field(vevent, "DTEND")
-                                .unwrap_or_default();
-                            let location = extract_vevent_field(vevent, "LOCATION");
-                            let description = extract_vevent_field(vevent, "DESCRIPTION");
-                            let status = extract_vevent_field(vevent, "STATUS");
-                            let rrule = extract_vevent_field(vevent, "RRULE");
-                            let recurrence_id = extract_vevent_field(vevent, "RECURRENCE-ID");
-                            let timezone = extract_vevent_tzid(vevent, "DTSTART");
-
-                            let event_id = Uuid::new_v4().to_string();
-
-                            sqlx::query(
-                                "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id, timezone)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                 ON CONFLICT(uid, COALESCE(recurrence_id, '')) DO UPDATE SET
-                                   summary = excluded.summary,
-                                   start_at = excluded.start_at,
-                                   end_at = excluded.end_at,
-                                   location = excluded.location,
-                                   description = excluded.description,
-                                   status = excluded.status,
-                                   rrule = excluded.rrule,
-                                   raw_ical = excluded.raw_ical,
-                                   recurrence_id = excluded.recurrence_id,
-                                   timezone = excluded.timezone,
-                                   synced_at = datetime('now')",
-                            )
-                            .bind(&event_id)
-                            .bind(&cal_id)
-                            .bind(&uid)
-                            .bind(&summary)
-                            .bind(&start_at)
-                            .bind(&end_at)
-                            .bind(&location)
-                            .bind(&description)
-                            .bind(&status)
-                            .bind(&rrule)
-                            .bind(&raw.ical_data)
-                            .bind(&recurrence_id)
-                            .bind(&timezone)
-                            .execute(pool)
-                            .await?;
-
-                            count += 1;
-                        }
-                    }
-                    println!(
-                        "  {} {} — {} event(s) synced",
-                        "✓".green(),
-                        display,
-                        count
-                    );
-                }
-                Err(e) => {
-                    println!("  {} {} — failed: {}", "✗".red(), display, e);
-                }
-            }
+        if let Err(e) = sync_source(pool, &client, source_id, None).await {
+            println!("  {} Sync failed: {}", "✗".red(), e);
+            continue;
         }
-
-        // Update last_synced
-        sqlx::query("UPDATE caldav_sources SET last_synced = datetime('now') WHERE id = ?")
-            .bind(source_id)
-            .execute(pool)
-            .await?;
     }
 
     println!("{} Sync complete.", "✓".green());
     Ok(())
+}
+
+/// Sync a single CalDAV source: discover calendars and fetch events.
+/// If `since_utc` is provided, uses time-range filter for incremental sync.
+pub async fn sync_source(
+    pool: &SqlitePool,
+    client: &CaldavClient,
+    source_id: &str,
+    since_utc: Option<&str>,
+) -> Result<()> {
+    let principal = client.discover_principal().await?;
+    let calendar_home = client.discover_calendar_home(&principal).await?;
+    let calendars = client.list_calendars(&calendar_home).await?;
+
+    for cal_info in &calendars {
+        // Upsert calendar
+        let cal_id: String = match sqlx::query_scalar::<_, String>(
+            "SELECT id FROM calendars WHERE source_id = ? AND href = ?",
+        )
+        .bind(source_id)
+        .bind(&cal_info.href)
+        .fetch_optional(pool)
+        .await?
+        {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4().to_string();
+                sqlx::query(
+                    "INSERT INTO calendars (id, source_id, href, display_name, color, ctag) VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&id)
+                .bind(source_id)
+                .bind(&cal_info.href)
+                .bind(&cal_info.display_name)
+                .bind(&cal_info.color)
+                .bind(&cal_info.ctag)
+                .execute(pool)
+                .await?;
+                id
+            }
+        };
+
+        let display = cal_info
+            .display_name
+            .as_deref()
+            .unwrap_or(&cal_info.href);
+
+        // Fetch events (with time-range if available)
+        let raw_events = match since_utc {
+            Some(since) => client.fetch_events_since(&cal_info.href, since).await,
+            None => client.fetch_events(&cal_info.href).await,
+        };
+
+        match raw_events {
+            Ok(raw_events) => {
+                let mut count = 0;
+                for raw in &raw_events {
+                    let vevent_blocks = split_vevents(&raw.ical_data);
+
+                    for vevent in &vevent_blocks {
+                        let uid = extract_vevent_field(vevent, "UID")
+                            .unwrap_or_else(|| Uuid::new_v4().to_string());
+                        let summary = extract_vevent_field(vevent, "SUMMARY");
+                        let start_at =
+                            extract_vevent_field(vevent, "DTSTART").unwrap_or_default();
+                        let end_at = extract_vevent_field(vevent, "DTEND").unwrap_or_default();
+                        let location = extract_vevent_field(vevent, "LOCATION");
+                        let description = extract_vevent_field(vevent, "DESCRIPTION");
+                        let status = extract_vevent_field(vevent, "STATUS");
+                        let rrule = extract_vevent_field(vevent, "RRULE");
+                        let recurrence_id = extract_vevent_field(vevent, "RECURRENCE-ID");
+                        let timezone = extract_vevent_tzid(vevent, "DTSTART");
+
+                        let event_id = Uuid::new_v4().to_string();
+
+                        sqlx::query(
+                            "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id, timezone)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             ON CONFLICT(uid, COALESCE(recurrence_id, '')) DO UPDATE SET
+                               summary = excluded.summary,
+                               start_at = excluded.start_at,
+                               end_at = excluded.end_at,
+                               location = excluded.location,
+                               description = excluded.description,
+                               status = excluded.status,
+                               rrule = excluded.rrule,
+                               raw_ical = excluded.raw_ical,
+                               recurrence_id = excluded.recurrence_id,
+                               timezone = excluded.timezone,
+                               synced_at = datetime('now')",
+                        )
+                        .bind(&event_id)
+                        .bind(&cal_id)
+                        .bind(&uid)
+                        .bind(&summary)
+                        .bind(&start_at)
+                        .bind(&end_at)
+                        .bind(&location)
+                        .bind(&description)
+                        .bind(&status)
+                        .bind(&rrule)
+                        .bind(&raw.ical_data)
+                        .bind(&recurrence_id)
+                        .bind(&timezone)
+                        .execute(pool)
+                        .await?;
+
+                        count += 1;
+                    }
+                }
+                println!(
+                    "  {} {} — {} event(s) synced",
+                    "✓".green(),
+                    display,
+                    count
+                );
+            }
+            Err(e) => {
+                println!("  {} {} — failed: {}", "✗".red(), display, e);
+            }
+        }
+    }
+
+    // Update last_synced
+    sqlx::query("UPDATE caldav_sources SET last_synced = datetime('now') WHERE id = ?")
+        .bind(source_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Sync calendars for a user if any of their sources are stale (last_synced > STALE_SECS ago).
+/// Uses time-range filter to only fetch future events (with 1-day lookback for ongoing events).
+/// Silently skips on errors (best-effort for guest-facing pages).
+pub async fn sync_if_stale(pool: &SqlitePool, key: &[u8; 32], user_id: &str) {
+    let cutoff = Utc::now() - chrono::Duration::seconds(STALE_SECS);
+    let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    let stale_sources: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT cs.id, cs.url, cs.username, cs.password_enc
+         FROM caldav_sources cs
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE a.user_id = ? AND cs.enabled = 1
+           AND (cs.last_synced IS NULL OR cs.last_synced < ?)",
+    )
+    .bind(user_id)
+    .bind(&cutoff_str)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if stale_sources.is_empty() {
+        return;
+    }
+
+    // Time-range: from 1 day ago (catch ongoing events) in UTC
+    let since = (Utc::now() - chrono::Duration::days(1))
+        .format("%Y%m%dT%H%M%SZ")
+        .to_string();
+
+    for (source_id, url, username, password_enc) in &stale_sources {
+        let password = match crate::crypto::decrypt_password(key, password_enc) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let client = CaldavClient::new(url, username, &password);
+        let _ = sync_source(pool, &client, source_id, Some(&since)).await;
+    }
 }

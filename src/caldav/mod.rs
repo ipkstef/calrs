@@ -192,6 +192,57 @@ impl CaldavClient {
         let events = parse_event_responses(&text);
         Ok(events)
     }
+
+    /// Fetch events from a calendar starting from a given UTC datetime.
+    /// Uses RFC 4791 time-range filter to only retrieve future events.
+    /// Falls back to full fetch if the server rejects the time-range query.
+    pub async fn fetch_events_since(
+        &self,
+        calendar_href: &str,
+        since_utc: &str,
+    ) -> Result<Vec<RawEvent>> {
+        let url = self.resolve_url(calendar_href);
+
+        let body = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:prop>
+    <d:getetag />
+    <c:calendar-data />
+  </d:prop>
+  <c:filter>
+    <c:comp-filter name="VCALENDAR">
+      <c:comp-filter name="VEVENT">
+        <c:time-range start="{}" />
+      </c:comp-filter>
+    </c:comp-filter>
+  </c:filter>
+</c:calendar-query>"#,
+            since_utc
+        );
+
+        let resp = self
+            .client
+            .request(reqwest::Method::from_bytes(b"REPORT")?, &url)
+            .basic_auth(&self.username, Some(&self.password))
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("Depth", "1")
+            .timeout(Duration::from_secs(60))
+            .body(body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let text = resp.text().await?;
+
+        // If the server doesn't support time-range, fall back to full fetch
+        if !status.is_success() {
+            return self.fetch_events(calendar_href).await;
+        }
+
+        let events = parse_event_responses(&text);
+        Ok(events)
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -1628,6 +1628,10 @@ async fn show_group_slots(
         let members: Vec<(String,)> = sqlx::query_as(
             "SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
         ).bind(gid).fetch_all(&state.pool).await.unwrap_or_default();
+        // Sync all group members' calendars if stale
+        for (uid,) in &members {
+            crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
+        }
         let mut member_busy = HashMap::new();
         for (uid,) in &members {
             member_busy.insert(uid.clone(), fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz, Some(&et_id)).await);
@@ -1999,6 +2003,9 @@ async fn show_slots_for_user(
             Some(e) => e,
             None => return Html("Event type not found.".to_string()),
         };
+
+    // Sync calendars if stale before computing availability
+    crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, &host_user_id).await;
 
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let host_tz = get_host_tz(&state.pool, &et_id).await;
@@ -2743,6 +2750,9 @@ async fn show_slots(
 
     let (host_user_id, host_name) = host_info.unwrap_or_else(|| ("".to_string(), "Host".to_string()));
 
+    // Sync calendars if stale before computing availability
+    crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, &host_user_id).await;
+
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let guest_tz_name = guest_tz.name().to_string();
@@ -3080,6 +3090,10 @@ async fn troubleshoot(
     Query(params): Query<TroubleshootQuery>,
 ) -> impl IntoResponse {
     let user = &auth_user.user;
+
+    // Always sync before troubleshooting to ensure fresh data
+    crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, &user.id).await;
+
     let host_tz = get_host_tz(&state.pool, "").await;
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
 

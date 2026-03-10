@@ -144,6 +144,7 @@ The client is intentionally minimal — enough to be useful, not a full RFC 4791
 **Other methods:**
 - `check_connection()` — OPTIONS request, verifies `calendar-access` in DAV header
 - `fetch_events(calendar_href)` — REPORT with `calendar-query` filter for VEVENTs (60s timeout)
+- `fetch_events_since(calendar_href, since_utc)` — REPORT with RFC 4791 `time-range` filter (only future events). Falls back to full fetch if the server rejects the time-range query.
 - `put_event(calendar_href, uid, ics)` — PUT a VEVENT to the calendar (write-back)
 - `delete_event(calendar_href, uid)` — DELETE a VEVENT from the calendar
 
@@ -197,6 +198,8 @@ File: `src/web/mod.rs`, templates in `templates/`
 
 **Group event types:** Created under a group from the dashboard. Combined availability shows slots where ANY group member is free. Round-robin assignment picks the least-busy available member. Public URLs: `/g/{group-slug}/{slug}`.
 
+**On-demand sync:** Slot pages (`/u/`, `/g/`, legacy `/{slug}`) and the troubleshoot view automatically sync the host's CalDAV sources if stale (>5 minutes since last sync). Uses `sync_if_stale()` from `commands/sync.rs` which calls `fetch_events_since()` with a time-range filter (RFC 4791) to only pull future events, with fallback to full fetch for servers that don't support it.
+
 **Timezone support:** Guest timezone picker on slot pages. Browser timezone auto-detected via `Intl.DateTimeFormat`. Times displayed and booked in the guest's selected timezone.
 
 **Admin impersonation:** Admins can impersonate any user from the admin panel to troubleshoot their view. Uses a separate `calrs_impersonate` cookie.
@@ -225,7 +228,7 @@ File: `src/web/mod.rs`, templates in `templates/`
 - ~~**Passwords echoed to terminal**~~ — **Fixed in v0.10.0**: `prompt_password()` now uses `rpassword` for hidden input.
 
 ### Features not yet implemented
-- Delta sync using CalDAV `sync-token` and `ctag`
+- Full delta sync using CalDAV `sync-token` and `ctag` (time-range filtering is implemented for on-demand sync)
 - Reschedule flow (change date/time without cancelling)
 - Availability overrides (block specific dates, add special hours)
 - REST API for third-party integrations
