@@ -1305,6 +1305,21 @@ async fn create_source(
     .execute(&state.pool)
     .await;
 
+    // Auto-sync immediately after creating the source, then redirect to
+    // write-back setup if calendars were found.
+    let (messages, calendar_count) =
+        run_sync(&state.pool, &id, &url, &username, &form.password).await;
+
+    if calendar_count > 0 {
+        let joined_messages = messages.join("\n");
+        let encoded_messages = urlencoding::encode(&joined_messages);
+        return Redirect::to(&format!(
+            "/dashboard/sources/{}/setup-write?sync_messages={}",
+            id, encoded_messages
+        ))
+        .into_response();
+    }
+
     Redirect::to("/dashboard").into_response()
 }
 
@@ -1408,44 +1423,23 @@ async fn test_source(
     .into_response()
 }
 
-async fn sync_source(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    Path(source_id): Path<String>,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let source: Option<(String, String, String, String, String)> = sqlx::query_as(
-        "SELECT cs.id, cs.url, cs.username, cs.password_enc, cs.name
-         FROM caldav_sources cs
-         JOIN accounts a ON a.id = cs.account_id
-         WHERE cs.id = ? AND a.user_id = ?",
-    )
-    .bind(&source_id)
-    .bind(&user.id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (sid, url, username, password_enc, name) = match source {
-        Some(s) => s,
-        None => return Html("Source not found.".to_string()).into_response(),
-    };
-
-    let password = match crate::crypto::decrypt_password(&state.secret_key, &password_enc) {
-        Ok(p) => p,
-        Err(_) => return Html("Failed to decrypt stored credentials.".to_string()).into_response(),
-    };
-
-    let client = crate::caldav::CaldavClient::new(&url, &username, &password);
+/// Runs CalDAV discovery + sync for a source. Returns (messages, calendar_count).
+/// On error during discovery, returns partial messages with 0 calendars.
+async fn run_sync(
+    pool: &SqlitePool,
+    source_id: &str,
+    url: &str,
+    username: &str,
+    password: &str,
+) -> (Vec<String>, usize) {
+    let client = crate::caldav::CaldavClient::new(url, username, password);
     let mut messages: Vec<String> = Vec::new();
 
-    // Discover → list calendars → fetch events (same as sync command)
     let principal = match client.discover_principal().await {
         Ok(p) => p,
         Err(e) => {
             messages.push(format!("Could not discover principal: {}", e));
-            return render_sync_result(&state, &name, &messages).into_response();
+            return (messages, 0);
         }
     };
 
@@ -1453,7 +1447,7 @@ async fn sync_source(
         Ok(h) => h,
         Err(e) => {
             messages.push(format!("Could not discover calendar home: {}", e));
-            return render_sync_result(&state, &name, &messages).into_response();
+            return (messages, 0);
         }
     };
 
@@ -1461,7 +1455,7 @@ async fn sync_source(
         Ok(c) => c,
         Err(e) => {
             messages.push(format!("Could not list calendars: {}", e));
-            return render_sync_result(&state, &name, &messages).into_response();
+            return (messages, 0);
         }
     };
 
@@ -1474,9 +1468,9 @@ async fn sync_source(
         let cal_id: String = match sqlx::query_scalar::<_, String>(
             "SELECT id FROM calendars WHERE source_id = ? AND href = ?",
         )
-        .bind(&sid)
+        .bind(source_id)
         .bind(&cal_info.href)
-        .fetch_optional(&state.pool)
+        .fetch_optional(pool)
         .await
         .unwrap_or(None)
         {
@@ -1487,12 +1481,12 @@ async fn sync_source(
                     "INSERT INTO calendars (id, source_id, href, display_name, color, ctag) VALUES (?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&id)
-                .bind(&sid)
+                .bind(source_id)
                 .bind(&cal_info.href)
                 .bind(&cal_info.display_name)
                 .bind(&cal_info.color)
                 .bind(&cal_info.ctag)
-                .execute(&state.pool)
+                .execute(pool)
                 .await;
                 id
             }
@@ -1503,7 +1497,6 @@ async fn sync_source(
             Ok(raw_events) => {
                 let mut count = 0;
                 for raw in &raw_events {
-                    // Split multi-VEVENT blobs (parent + modified instances)
                     let vevent_blocks = split_vevents(&raw.ical_data);
                     for vevent in &vevent_blocks {
                         let uid = extract_vevent_field(vevent, "UID")
@@ -1548,7 +1541,7 @@ async fn sync_source(
                         .bind(&raw.ical_data)
                         .bind(&recurrence_id)
                         .bind(&timezone)
-                        .execute(&state.pool)
+                        .execute(pool)
                         .await;
 
                         count += 1;
@@ -1565,8 +1558,8 @@ async fn sync_source(
 
     // Update last_synced
     let _ = sqlx::query("UPDATE caldav_sources SET last_synced = datetime('now') WHERE id = ?")
-        .bind(&sid)
-        .execute(&state.pool)
+        .bind(source_id)
+        .execute(pool)
         .await;
 
     messages.push(format!(
@@ -1574,6 +1567,41 @@ async fn sync_source(
         calendars.len(),
         total_events
     ));
+
+    (messages, calendars.len())
+}
+
+async fn sync_source(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(source_id): Path<String>,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+
+    let source: Option<(String, String, String, String, String)> = sqlx::query_as(
+        "SELECT cs.id, cs.url, cs.username, cs.password_enc, cs.name
+         FROM caldav_sources cs
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE cs.id = ? AND a.user_id = ?",
+    )
+    .bind(&source_id)
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (sid, url, username, password_enc, name) = match source {
+        Some(s) => s,
+        None => return Html("Source not found.".to_string()).into_response(),
+    };
+
+    let password = match crate::crypto::decrypt_password(&state.secret_key, &password_enc) {
+        Ok(p) => p,
+        Err(_) => return Html("Failed to decrypt stored credentials.".to_string()).into_response(),
+    };
+
+    let (messages, calendar_count) =
+        run_sync(&state.pool, &sid, &url, &username, &password).await;
 
     // If write_calendar_href is not yet configured and we found calendars,
     // redirect to the write-calendar setup page (onboarding flow).
@@ -1586,8 +1614,7 @@ async fn sync_source(
     .unwrap_or(None)
     .flatten();
 
-    if write_href.is_none() && !calendars.is_empty() {
-        // Store sync messages in a query param so the setup page can show them
+    if write_href.is_none() && calendar_count > 0 {
         let joined_messages = messages.join("\n");
         let encoded_messages = urlencoding::encode(&joined_messages);
         return Redirect::to(&format!(
