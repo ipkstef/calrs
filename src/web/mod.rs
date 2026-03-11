@@ -1916,7 +1916,7 @@ async fn new_team_link_form(
 async fn create_team_link(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
-    Form(form): Form<TeamLinkForm>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<TeamLinkForm>,
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
@@ -7413,5 +7413,184 @@ mod tests {
             16,
             "All 16 slots available when team is free"
         );
+    }
+
+    // --- parse_booking_datetime tests ---
+
+    #[test]
+    fn parse_booking_datetime_iso_format() {
+        assert_eq!(
+            parse_booking_datetime("2026-03-15T14:30:00"),
+            Some(dt(2026, 3, 15, 14, 30))
+        );
+    }
+
+    #[test]
+    fn parse_booking_datetime_space_format() {
+        assert_eq!(
+            parse_booking_datetime("2026-03-15 14:30:00"),
+            Some(dt(2026, 3, 15, 14, 30))
+        );
+    }
+
+    #[test]
+    fn parse_booking_datetime_trailing_z() {
+        assert_eq!(
+            parse_booking_datetime("2026-03-15T14:30:00Z"),
+            Some(dt(2026, 3, 15, 14, 30))
+        );
+    }
+
+    #[test]
+    fn parse_booking_datetime_invalid() {
+        assert_eq!(parse_booking_datetime("not-a-date"), None);
+        assert_eq!(parse_booking_datetime(""), None);
+        assert_eq!(parse_booking_datetime("2026-13-40T99:99:99"), None);
+    }
+
+    // --- format_booking_datetime tests ---
+
+    #[test]
+    fn format_booking_datetime_far_future_same_year_not_guaranteed() {
+        // Use a date far in the future (2099) so it's never "today"/"tomorrow"/weekday
+        let result = format_booking_datetime("2099-07-20T09:15:00");
+        assert_eq!(result, "Mon, Jul 20, 2099 at 9:15 AM");
+    }
+
+    #[test]
+    fn format_booking_datetime_different_year() {
+        let result = format_booking_datetime("2050-12-25T18:00:00");
+        assert_eq!(result, "Sun, Dec 25, 2050 at 6:00 PM");
+    }
+
+    #[test]
+    fn format_booking_datetime_invalid_fallback() {
+        assert_eq!(format_booking_datetime("garbage"), "garbage");
+        assert_eq!(format_booking_datetime(""), "");
+    }
+
+    // --- format_booking_range tests ---
+
+    #[test]
+    fn format_booking_range_far_future() {
+        let result = format_booking_range("2099-07-20T09:00:00", "2099-07-20T09:30:00");
+        assert_eq!(result, "Mon, Jul 20, 2099 at 9:00 AM — 9:30 AM");
+    }
+
+    #[test]
+    fn format_booking_range_end_unparseable() {
+        let result = format_booking_range("2099-07-20T09:00:00", "bad");
+        assert_eq!(result, "Mon, Jul 20, 2099 at 9:00 AM — bad");
+    }
+
+    // --- format_date_label tests ---
+
+    #[test]
+    fn format_date_label_from_datetime() {
+        assert_eq!(
+            format_date_label("2026-03-15T14:30:00"),
+            "Sunday, March 15, 2026"
+        );
+    }
+
+    #[test]
+    fn format_date_label_from_date_only() {
+        assert_eq!(
+            format_date_label("2026-03-15"),
+            "Sunday, March 15, 2026"
+        );
+    }
+
+    #[test]
+    fn format_date_label_space_separator() {
+        assert_eq!(
+            format_date_label("2026-03-15 14:30:00"),
+            "Sunday, March 15, 2026"
+        );
+    }
+
+    #[test]
+    fn format_date_label_invalid_fallback() {
+        assert_eq!(format_date_label("nope"), "nope");
+    }
+
+    // --- format_time_from_dt tests ---
+
+    #[test]
+    fn format_time_from_dt_valid() {
+        assert_eq!(format_time_from_dt("2026-03-15T14:30:00"), "2:30 PM");
+        assert_eq!(format_time_from_dt("2026-03-15 09:05:00"), "9:05 AM");
+    }
+
+    #[test]
+    fn format_time_from_dt_midnight() {
+        assert_eq!(format_time_from_dt("2026-03-15T00:00:00"), "12:00 AM");
+    }
+
+    #[test]
+    fn format_time_from_dt_unparseable_long_string() {
+        // 16+ chars but not a valid datetime → falls back to substring [11..16]
+        assert_eq!(format_time_from_dt("XXXX-XX-XX_HH:MM:SS"), "HH:MM");
+    }
+
+    #[test]
+    fn format_time_from_dt_short_string() {
+        assert_eq!(format_time_from_dt("short"), "00:00");
+        assert_eq!(format_time_from_dt(""), "00:00");
+    }
+
+    // --- parse_datetime edge cases ---
+
+    #[test]
+    fn parse_datetime_iso_with_separators() {
+        assert_eq!(
+            parse_datetime("2026-03-15T14:30:00"),
+            Some(dt(2026, 3, 15, 14, 30))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_date_only_compact() {
+        assert_eq!(
+            parse_datetime("20260315"),
+            Some(dt(2026, 3, 15, 0, 0))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_date_only_dashed() {
+        assert_eq!(
+            parse_datetime("2026-03-15"),
+            Some(dt(2026, 3, 15, 0, 0))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_empty_and_garbage() {
+        assert_eq!(parse_datetime(""), None);
+        assert_eq!(parse_datetime("hello"), None);
+        assert_eq!(parse_datetime("2026"), None);
+    }
+
+    // --- parse_guest_tz tests ---
+
+    #[test]
+    fn parse_guest_tz_valid() {
+        assert_eq!(parse_guest_tz(Some("America/New_York")), chrono_tz::America::New_York);
+        assert_eq!(parse_guest_tz(Some("Europe/Paris")), chrono_tz::Europe::Paris);
+        assert_eq!(parse_guest_tz(Some("UTC")), Tz::UTC);
+    }
+
+    #[test]
+    fn parse_guest_tz_invalid_falls_back() {
+        let tz = parse_guest_tz(Some("Not/A/Timezone"));
+        // Should be server local or UTC — either way, not panic
+        let _ = tz;
+    }
+
+    #[test]
+    fn parse_guest_tz_none_falls_back() {
+        let tz = parse_guest_tz(None);
+        let _ = tz;
     }
 }
