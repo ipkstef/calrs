@@ -40,10 +40,7 @@ jobs:
         run: cargo install cargo-tarpaulin
       - name: Run coverage
         run: cargo tarpaulin --out xml --skip-clean
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
         with:
-          files: cobertura.xml
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}
