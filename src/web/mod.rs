@@ -208,6 +208,10 @@ pub fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8; 32]) 
             "/dashboard/event-types/{slug}/toggle",
             post(toggle_event_type),
         )
+        .route(
+            "/dashboard/event-types/{slug}/delete",
+            post(delete_event_type),
+        )
         // Calendar source management
         .route(
             "/dashboard/sources/new",
@@ -308,8 +312,9 @@ async fn dashboard(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    let event_types: Vec<(String, String, i32, bool, i32)> = sqlx::query_as(
-        "SELECT et.slug, et.title, et.duration_min, et.enabled, et.requires_confirmation
+    let event_types: Vec<(String, String, i32, bool, i32, i64)> = sqlx::query_as(
+        "SELECT et.slug, et.title, et.duration_min, et.enabled, et.requires_confirmation,
+                (SELECT COUNT(*) FROM bookings b WHERE b.event_type_id = et.id AND b.status IN ('confirmed', 'pending')) as active_bookings
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          WHERE a.user_id = ? AND et.group_id IS NULL
@@ -390,8 +395,8 @@ async fn dashboard(
 
     let et_ctx: Vec<minijinja::Value> = event_types
         .iter()
-        .map(|(slug, title, duration, enabled, req_conf)| {
-            context! { slug => slug, title => title, duration_min => duration, enabled => enabled, requires_confirmation => *req_conf != 0 }
+        .map(|(slug, title, duration, enabled, req_conf, active_bookings)| {
+            context! { slug => slug, title => title, duration_min => duration, enabled => enabled, requires_confirmation => *req_conf != 0, active_bookings => active_bookings }
         })
         .collect();
 
@@ -1265,6 +1270,69 @@ async fn toggle_event_type(
     .bind(&user.id)
     .execute(&state.pool)
     .await;
+
+    Redirect::to("/dashboard")
+}
+
+async fn delete_event_type(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(slug): Path<String>,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+
+    // Find the event type owned by this user
+    let et: Option<(String,)> = sqlx::query_as(
+        "SELECT et.id FROM event_types et
+         JOIN accounts a ON a.id = et.account_id
+         WHERE et.slug = ? AND a.user_id = ?",
+    )
+    .bind(&slug)
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let et_id = match et {
+        Some((id,)) => id,
+        None => return Redirect::to("/dashboard"),
+    };
+
+    // Check for active bookings (confirmed or pending)
+    let active_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bookings WHERE event_type_id = ? AND status IN ('confirmed', 'pending')",
+    )
+    .bind(&et_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
+    if active_count > 0 {
+        // Can't delete — has active bookings. Just redirect back.
+        return Redirect::to("/dashboard");
+    }
+
+    // Delete in order: availability_rules, availability_overrides, event_type_calendars, bookings (past/cancelled), then event_type
+    let _ = sqlx::query("DELETE FROM availability_rules WHERE event_type_id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM availability_overrides WHERE event_type_id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM event_type_calendars WHERE event_type_id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM bookings WHERE event_type_id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM event_types WHERE id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
 
     Redirect::to("/dashboard")
 }
