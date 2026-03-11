@@ -70,6 +70,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.17.6] - 2026-03-11
+
+### Fixed
+
+- **Post-action redirects go to correct dashboard page** — creating/deleting team links now redirects to `/dashboard/team-links` instead of the overview; same fix applied to event types (`/dashboard/event-types`), bookings (`/dashboard/bookings`), and sources (`/dashboard/sources`)
+
 ## [0.17.5] - 2026-03-11
 
 ### Improved

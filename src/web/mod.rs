@@ -1111,7 +1111,7 @@ async fn cancel_booking(
     let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, _account_id) =
         match booking {
             Some(b) => b,
-            None => return Redirect::to("/dashboard").into_response(),
+            None => return Redirect::to("/dashboard/bookings").into_response(),
         };
 
     // Cancel the booking
@@ -1155,7 +1155,7 @@ async fn cancel_booking(
         let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/bookings").into_response()
 }
 
 // --- Confirm pending booking ---
@@ -1194,7 +1194,7 @@ async fn confirm_booking(
         cancel_token,
     ) = match booking {
         Some(b) => b,
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return Redirect::to("/dashboard/bookings").into_response(),
     };
 
     // Confirm the booking
@@ -1245,7 +1245,7 @@ async fn confirm_booking(
         .await;
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/bookings").into_response()
 }
 
 // --- Event type CRUD ---
@@ -1367,7 +1367,7 @@ async fn create_event_type(
 
     let account_id = match account_id {
         Some(id) => id,
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
     // Validate slug
@@ -1472,7 +1472,7 @@ async fn create_event_type(
         }
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/event-types").into_response()
 }
 
 async fn edit_event_type_form(
@@ -1631,7 +1631,7 @@ async fn update_event_type(
 
     let (et_id, account_id) = match et {
         Some(e) => e,
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
     let new_slug = form.slug.trim().to_lowercase().replace(' ', "-");
@@ -1734,7 +1734,7 @@ async fn update_event_type(
         }
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/event-types").into_response()
 }
 
 async fn toggle_event_type(
@@ -1753,7 +1753,7 @@ async fn toggle_event_type(
     .execute(&state.pool)
     .await;
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard/event-types")
 }
 
 async fn delete_event_type(
@@ -1777,7 +1777,7 @@ async fn delete_event_type(
 
     let et_id = match et {
         Some((id,)) => id,
-        None => return Redirect::to("/dashboard"),
+        None => return Redirect::to("/dashboard/event-types"),
     };
 
     // Check for active bookings (confirmed or pending)
@@ -1791,7 +1791,7 @@ async fn delete_event_type(
 
     if active_count > 0 {
         // Can't delete — has active bookings. Just redirect back.
-        return Redirect::to("/dashboard");
+        return Redirect::to("/dashboard/event-types");
     }
 
     // Delete in order: availability_rules, availability_overrides, event_type_calendars, bookings (past/cancelled), then event_type
@@ -1816,7 +1816,7 @@ async fn delete_event_type(
         .execute(&state.pool)
         .await;
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard/event-types")
 }
 
 // --- Team links ---
@@ -1983,7 +1983,7 @@ async fn create_team_link(
         .await;
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/team-links").into_response()
 }
 
 async fn render_team_link_form_error(
@@ -2048,7 +2048,7 @@ async fn delete_team_link(
         .execute(&state.pool)
         .await;
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard/team-links")
 }
 
 async fn show_team_link_slots(
@@ -2614,7 +2614,7 @@ async fn create_source(
         .into_response();
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/sources").into_response()
 }
 
 fn render_source_form_error(
@@ -2666,7 +2666,7 @@ async fn remove_source(
     .execute(&state.pool)
     .await;
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard/sources")
 }
 
 async fn test_source(
@@ -2989,7 +2989,7 @@ async fn setup_write_calendar(
 
     let (_sid, source_name) = match source {
         Some(s) => s,
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return Redirect::to("/dashboard/sources").into_response(),
     };
 
     // Get calendars for this source, sorted by event count (most events first)
@@ -3005,7 +3005,7 @@ async fn setup_write_calendar(
     .unwrap_or_default();
 
     if calendars.is_empty() {
-        return Redirect::to("/dashboard").into_response();
+        return Redirect::to("/dashboard/sources").into_response();
     }
 
     let cal_values: Vec<minijinja::Value> = calendars
@@ -3063,7 +3063,7 @@ async fn set_write_calendar(
     .unwrap_or(None);
 
     if owned.is_none() {
-        return Redirect::to("/dashboard").into_response();
+        return Redirect::to("/dashboard/sources").into_response();
     }
 
     let href = if form.calendar_href.is_empty() {
@@ -3078,7 +3078,7 @@ async fn set_write_calendar(
         .execute(&state.pool)
         .await;
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/sources").into_response()
 }
 
 fn render_event_type_form_error(
@@ -3187,7 +3187,7 @@ async fn create_group_event_type(
 
     let group_id = match form.group_id.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(gid) => gid.to_string(),
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
     // Verify user belongs to this group
@@ -3213,7 +3213,7 @@ async fn create_group_event_type(
 
     let account_id = match account_id {
         Some(id) => id,
-        None => return Redirect::to("/dashboard").into_response(),
+        None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
     let slug = form.slug.trim().to_lowercase().replace(' ', "-");
@@ -3287,7 +3287,7 @@ async fn create_group_event_type(
         }
     }
 
-    Redirect::to("/dashboard").into_response()
+    Redirect::to("/dashboard/event-types").into_response()
 }
 
 // --- Group public pages ---
