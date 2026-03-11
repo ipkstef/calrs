@@ -148,6 +148,31 @@ The approval request email includes Approve and Decline action buttons (table-ba
 6. Links to existing user by email or creates new user
 7. Session created as with local auth
 
+## Testing
+
+calrs has an automated test suite with 115+ tests, run on every push and pull request via [GitHub Actions](https://github.com/olivierlambert/calrs/actions/workflows/ci.yml).
+
+**What's tested:**
+
+| Area | Examples |
+|---|---|
+| RRULE expansion | DAILY/WEEKLY/MONTHLY recurrence, INTERVAL, UNTIL, COUNT, BYDAY, EXDATE |
+| iCal parsing | Multi-VEVENT splitting, field extraction, RECURRENCE-ID handling |
+| Timezone conversion | TZID extraction, floating times, UTC suffix, all-day events |
+| Email rendering | HTML/plain text output, cancellation attribution (host vs guest), .ics attachments |
+| Availability engine | Free/busy computation, buffer times, minimum notice, conflict detection |
+| Web server | Rate limiter (allow/block/reset/per-IP isolation) |
+| Authentication | Argon2 password hashing roundtrip, hash uniqueness |
+
+```bash
+# Run the full suite
+cargo test
+
+# Check formatting and lint
+cargo fmt --check
+cargo clippy -- -D warnings
+```
+
 ## Dependencies
 
 Key crates:

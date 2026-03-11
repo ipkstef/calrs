@@ -80,6 +80,11 @@
 - **Credential encryption** — CalDAV and SMTP passwords encrypted at rest with AES-256-GCM; secret key auto-generated or provided via `CALRS_SECRET_KEY`
 - **Hidden password input** — passwords never echoed to the terminal
 
+### Quality
+
+- **Automated test suite** — 115+ tests covering RRULE expansion, iCal parsing, timezone conversion, email rendering, availability computation, rate limiting, and more
+- **CI pipeline** — every push and pull request runs `cargo fmt`, `cargo clippy`, and `cargo test` via [GitHub Actions](https://github.com/olivierlambert/calrs/actions/workflows/ci.yml)
+
 ### Infrastructure
 
 - **SQLite storage** — single-file WAL-mode database, zero ops

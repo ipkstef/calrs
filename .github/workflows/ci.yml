@@ -7,14 +7,24 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          components: rustfmt
       - run: cargo fmt --check
+
+  check:
+    name: Clippy + Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -- -D warnings
       - run: cargo test
