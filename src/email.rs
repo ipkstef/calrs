@@ -717,7 +717,10 @@ pub async fn send_guest_cancellation(
     let html = render_html_email(
         &format!("Hi {},", h(&details.guest_name)),
         &if details.cancelled_by_host {
-            format!("Your booking has been cancelled by {}.", h(&details.host_name))
+            format!(
+                "Your booking has been cancelled by {}.",
+                h(&details.host_name)
+            )
         } else {
             "Your booking has been cancelled.".to_string()
         },
@@ -1488,7 +1491,10 @@ mod tests {
 
         // Guest email should mention the host
         let guest_msg = if details.cancelled_by_host {
-            format!("Your booking has been cancelled by {}.", h(&details.host_name))
+            format!(
+                "Your booking has been cancelled by {}.",
+                h(&details.host_name)
+            )
         } else {
             "Your booking has been cancelled.".to_string()
         };
@@ -1521,7 +1527,10 @@ mod tests {
 
         // Guest email should be generic
         let guest_msg = if details.cancelled_by_host {
-            format!("Your booking has been cancelled by {}.", h(&details.host_name))
+            format!(
+                "Your booking has been cancelled by {}.",
+                h(&details.host_name)
+            )
         } else {
             "Your booking has been cancelled.".to_string()
         };
