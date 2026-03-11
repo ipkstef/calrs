@@ -70,6 +70,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.17.5] - 2026-03-11
+
+### Improved
+
+- **Test coverage** — added 35 tests for date formatting helpers, email HTML rendering, ICS generation (including injection prevention), and timezone parsing. Total: 147 → 182 tests.
+
+## [0.17.4] - 2026-03-11
+
+### Fixed
+
+- **Team link creation "duplicate field" error** — switched to `axum_extra::extract::Form` (serde_html_form) for team link handler, since HTML checkboxes with the same name produce repeated keys that `serde_urlencoded` rejects
+
 ## [0.17.3] - 2026-03-11
 
 ### Fixed
