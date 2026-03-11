@@ -4,6 +4,8 @@
 
 # calrs
 
+[![CI](https://github.com/olivierlambert/calrs/actions/workflows/ci.yml/badge.svg)](https://github.com/olivierlambert/calrs/actions/workflows/ci.yml)
+
 **Fast, self-hostable scheduling. Like Cal.com, but written in Rust.**
 
 <p align="center">
