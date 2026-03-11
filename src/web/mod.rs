@@ -104,7 +104,21 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
 
         let base_url = std::env::var("CALRS_BASE_URL").ok();
 
-        for (bid, guest_name, guest_email, guest_timezone, start_at, end_at, event_title, host_name, host_email, location_value, cancel_token, uid) in &due {
+        for (
+            bid,
+            guest_name,
+            guest_email,
+            guest_timezone,
+            start_at,
+            end_at,
+            event_title,
+            host_name,
+            host_email,
+            location_value,
+            cancel_token,
+            uid,
+        ) in &due
+        {
             let date = if start_at.len() >= 10 {
                 &start_at[..10]
             } else {
@@ -121,10 +135,7 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
                 "00:00"
             };
 
-            let location = location_value
-                .as_ref()
-                .filter(|v| !v.is_empty())
-                .cloned();
+            let location = location_value.as_ref().filter(|v| !v.is_empty()).cloned();
 
             let details = crate::email::BookingDetails {
                 event_title: event_title.clone(),
@@ -147,14 +158,20 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
                     .map(|base| format!("{}/booking/cancel/{}", base.trim_end_matches('/'), t))
             });
 
-            let _ = crate::email::send_guest_reminder(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+            let _ = crate::email::send_guest_reminder(
+                &smtp_config,
+                &details,
+                guest_cancel_url.as_deref(),
+            )
+            .await;
             let _ = crate::email::send_host_reminder(&smtp_config, &details).await;
 
             // Mark reminder as sent
-            let _ = sqlx::query("UPDATE bookings SET reminder_sent_at = datetime('now') WHERE id = ?")
-                .bind(bid)
-                .execute(&pool)
-                .await;
+            let _ =
+                sqlx::query("UPDATE bookings SET reminder_sent_at = datetime('now') WHERE id = ?")
+                    .bind(bid)
+                    .execute(&pool)
+                    .await;
         }
     }
 }
@@ -581,11 +598,20 @@ async fn confirm_booking(
         .await
         .unwrap_or(None);
 
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, location_value, cancel_token) =
-        match booking {
-            Some(b) => b,
-            None => return Redirect::to("/dashboard").into_response(),
-        };
+    let (
+        bid,
+        uid,
+        guest_name,
+        guest_email,
+        start_at,
+        end_at,
+        event_title,
+        location_value,
+        cancel_token,
+    ) = match booking {
+        Some(b) => b,
+        None => return Redirect::to("/dashboard").into_response(),
+    };
 
     // Confirm the booking
     let _ = sqlx::query("UPDATE bookings SET status = 'confirmed' WHERE id = ?")
@@ -636,7 +662,12 @@ async fn confirm_booking(
                 .ok()
                 .map(|base| format!("{}/booking/cancel/{}", base.trim_end_matches('/'), t))
         });
-        let _ = crate::email::send_guest_confirmation(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+        let _ = crate::email::send_guest_confirmation(
+            &smtp_config,
+            &details,
+            guest_cancel_url.as_deref(),
+        )
+        .await;
     }
 
     Redirect::to("/dashboard").into_response()
@@ -2225,7 +2256,11 @@ async fn handle_group_booking(
 
         let base_url = std::env::var("CALRS_BASE_URL").ok();
         let guest_cancel_url = base_url.as_ref().map(|base| {
-            format!("{}/booking/cancel/{}", base.trim_end_matches('/'), cancel_token)
+            format!(
+                "{}/booking/cancel/{}",
+                base.trim_end_matches('/'),
+                cancel_token
+            )
         });
 
         if needs_approval {
@@ -2237,9 +2272,19 @@ async fn handle_group_booking(
                 base_url.as_deref(),
             )
             .await;
-            let _ = crate::email::send_guest_pending_notice(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+            let _ = crate::email::send_guest_pending_notice(
+                &smtp_config,
+                &details,
+                guest_cancel_url.as_deref(),
+            )
+            .await;
         } else {
-            let _ = crate::email::send_guest_confirmation(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+            let _ = crate::email::send_guest_confirmation(
+                &smtp_config,
+                &details,
+                guest_cancel_url.as_deref(),
+            )
+            .await;
             let _ = crate::email::send_host_notification(&smtp_config, &details).await;
             // Push confirmed booking to assigned member's CalDAV
             caldav_push_booking(
@@ -2673,7 +2718,11 @@ async fn handle_booking_for_user(
 
             let base_url = std::env::var("CALRS_BASE_URL").ok();
             let guest_cancel_url = base_url.as_ref().map(|base| {
-                format!("{}/booking/cancel/{}", base.trim_end_matches('/'), cancel_token)
+                format!(
+                    "{}/booking/cancel/{}",
+                    base.trim_end_matches('/'),
+                    cancel_token
+                )
             });
 
             if needs_approval {
@@ -2685,9 +2734,19 @@ async fn handle_booking_for_user(
                     base_url.as_deref(),
                 )
                 .await;
-                let _ = crate::email::send_guest_pending_notice(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+                let _ = crate::email::send_guest_pending_notice(
+                    &smtp_config,
+                    &details,
+                    guest_cancel_url.as_deref(),
+                )
+                .await;
             } else {
-                let _ = crate::email::send_guest_confirmation(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+                let _ = crate::email::send_guest_confirmation(
+                    &smtp_config,
+                    &details,
+                    guest_cancel_url.as_deref(),
+                )
+                .await;
                 let _ = crate::email::send_host_notification(&smtp_config, &details).await;
                 // Push confirmed booking to CalDAV
                 let host_user_id: Option<String> =
@@ -3530,7 +3589,11 @@ async fn handle_booking(
 
             let base_url = std::env::var("CALRS_BASE_URL").ok();
             let guest_cancel_url = base_url.as_ref().map(|base| {
-                format!("{}/booking/cancel/{}", base.trim_end_matches('/'), cancel_token)
+                format!(
+                    "{}/booking/cancel/{}",
+                    base.trim_end_matches('/'),
+                    cancel_token
+                )
             });
 
             if needs_approval {
@@ -3542,9 +3605,19 @@ async fn handle_booking(
                     base_url.as_deref(),
                 )
                 .await;
-                let _ = crate::email::send_guest_pending_notice(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+                let _ = crate::email::send_guest_pending_notice(
+                    &smtp_config,
+                    &details,
+                    guest_cancel_url.as_deref(),
+                )
+                .await;
             } else {
-                let _ = crate::email::send_guest_confirmation(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+                let _ = crate::email::send_guest_confirmation(
+                    &smtp_config,
+                    &details,
+                    guest_cancel_url.as_deref(),
+                )
+                .await;
                 let _ = crate::email::send_host_notification(&smtp_config, &details).await;
                 // Push confirmed booking to CalDAV
                 let host_user_id: Option<String> = sqlx::query_scalar(
@@ -4632,7 +4705,12 @@ async fn approve_booking_by_token(
                 .ok()
                 .map(|base| format!("{}/booking/cancel/{}", base.trim_end_matches('/'), t))
         });
-        let _ = crate::email::send_guest_confirmation(&smtp_config, &details, guest_cancel_url.as_deref()).await;
+        let _ = crate::email::send_guest_confirmation(
+            &smtp_config,
+            &details,
+            guest_cancel_url.as_deref(),
+        )
+        .await;
     }
 
     let tmpl = state
