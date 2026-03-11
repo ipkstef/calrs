@@ -62,8 +62,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Sidebar navigation | 0.17.0 | Persistent left sidebar with organized nav sections, mobile hamburger menu |
 | User profile | 0.17.0 | Avatar upload, title, bio — shown in sidebar and public booking pages |
 | Dashboard pages | 0.17.0 | Split monolithic dashboard into focused Event Types, Bookings, Sources, Team Links pages |
+| Host identity on bookings | 0.17.1 | Avatar, name, and title shown on slot picker for individual bookings |
+| Team link search UX | 0.17.1 | Search + pill selection for team members with avatar previews |
+| Matrix-style initials | 0.17.1 | Two-letter avatar fallback (first+last name initials) across all pages |
 
 ## [Unreleased]
+
+## [0.17.1] - 2026-03-11
+
+### Improved
+
+- **Host identity on booking pages** — slots page now shows host avatar, name, and title above the event type card (individual bookings only; group/team links show host name in the meta line)
+- **Team link member search** — replaced checkbox list with a search bar + pill selection UX; type to filter users by name or email, click to add as a pill, remove with X; avatars shown in search results
+- **Matrix-style initials** — avatar fallback now uses two-letter initials (first letter of first name + first letter of last name, e.g. "OL" for Olivier Lambert) across sidebar, settings, public profile, and booking pages
+- **Onboarding hero block** — dashboard overview shows a prominent CTA card when no calendar sources exist, guiding users to add their first source
+
+### Fixed
+
+- Team link form validation errors now re-fetch the user list instead of showing an empty form
 
 ## [0.17.0] - 2026-03-11
 

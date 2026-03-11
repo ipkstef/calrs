@@ -67,22 +67,142 @@
     <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
       <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Team members</h2>
       <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">The slot will only be available when <strong>all</strong> selected members are free.</p>
-      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-        {% for u in users %}
-        <label style="display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;">
-          <input type="checkbox" name="members" value="{{ u.id }}" {% if u.id in form_members %}checked{% endif %} {% if u.is_self %}checked disabled{% endif %} style="accent-color: var(--accent);">
-          <div>
-            <strong style="font-size: 0.925rem;">{{ u.name }}</strong>
-            <span style="color: var(--text-muted); font-size: 0.825rem;"> &middot; {{ u.email }}</span>
-            {% if u.is_self %}<span style="color: var(--accent); font-size: 0.8rem;"> (you)</span>{% endif %}
-          </div>
-        </label>
-        {% if u.is_self %}
-        <input type="hidden" name="members" value="{{ u.id }}">
-        {% endif %}
-        {% endfor %}
+
+      <!-- Selected members (pills) -->
+      <div id="selected-pills" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;"></div>
+
+      <!-- Hidden inputs for form submission -->
+      <div id="member-inputs"></div>
+
+      <!-- Search bar -->
+      <div style="position: relative;">
+        <input type="text" id="member-search" autocomplete="off" placeholder="Search by name or email..." style="width: 100%; padding: 0.625rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; font-family: inherit; background: var(--surface); color: var(--text);">
+        <div id="search-results" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); max-height: 240px; overflow-y: auto; z-index: 10; box-shadow: var(--shadow);"></div>
       </div>
     </div>
+
+    <script>
+    (function() {
+      var allUsers = [
+        {% for u in users %}
+        { id: "{{ u.id }}", name: "{{ u.name }}", email: "{{ u.email }}", isSelf: {{ u.is_self | lower }}, hasAvatar: {{ u.has_avatar | lower }}, initials: "{{ u.initials }}" },
+        {% endfor %}
+      ];
+
+      var selected = {};
+      var preSelected = [{% for m in form_members %}"{{ m }}",{% endfor %}];
+
+      var pillsEl = document.getElementById('selected-pills');
+      var inputsEl = document.getElementById('member-inputs');
+      var searchEl = document.getElementById('member-search');
+      var resultsEl = document.getElementById('search-results');
+
+      function addMember(user) {
+        if (selected[user.id]) return;
+        selected[user.id] = user;
+        renderPills();
+        renderInputs();
+        searchEl.value = '';
+        resultsEl.style.display = 'none';
+      }
+
+      function removeMember(userId) {
+        if (selected[userId] && selected[userId].isSelf) return;
+        delete selected[userId];
+        renderPills();
+        renderInputs();
+      }
+
+      function renderPills() {
+        pillsEl.innerHTML = '';
+        Object.values(selected).forEach(function(u) {
+          var pill = document.createElement('span');
+          pill.style.cssText = 'display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.3rem 0.5rem 0.3rem 0.3rem; background: var(--accent-subtle, rgba(99,102,241,0.1)); color: var(--accent); border-radius: 999px; font-size: 0.825rem; font-weight: 500;';
+          var avatar = document.createElement('span');
+          avatar.style.cssText = 'width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 600; flex-shrink: 0; overflow: hidden;';
+          if (u.hasAvatar) {
+            avatar.innerHTML = '<img src="/avatar/' + u.id + '" style="width:100%;height:100%;object-fit:cover;">';
+          } else {
+            avatar.textContent = u.initials;
+          }
+          pill.appendChild(avatar);
+          var nameSpan = document.createElement('span');
+          nameSpan.textContent = u.name;
+          pill.appendChild(nameSpan);
+          if (u.isSelf) {
+            var youTag = document.createElement('span');
+            youTag.textContent = '(you)';
+            youTag.style.cssText = 'font-size: 0.75rem; opacity: 0.7;';
+            pill.appendChild(youTag);
+          } else {
+            var removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.textContent = '\u00d7';
+            removeBtn.style.cssText = 'background: none; border: none; color: var(--accent); font-size: 1rem; cursor: pointer; padding: 0 0.125rem; line-height: 1;';
+            removeBtn.onclick = function() { removeMember(u.id); };
+            pill.appendChild(removeBtn);
+          }
+          pillsEl.appendChild(pill);
+        });
+      }
+
+      function renderInputs() {
+        inputsEl.innerHTML = '';
+        Object.keys(selected).forEach(function(id) {
+          var inp = document.createElement('input');
+          inp.type = 'hidden'; inp.name = 'members'; inp.value = id;
+          inputsEl.appendChild(inp);
+        });
+      }
+
+      function renderResults(query) {
+        var q = query.toLowerCase();
+        var matches = allUsers.filter(function(u) {
+          if (selected[u.id]) return false;
+          return u.name.toLowerCase().indexOf(q) !== -1 || u.email.toLowerCase().indexOf(q) !== -1;
+        });
+        if (matches.length === 0 || q === '') {
+          resultsEl.style.display = 'none';
+          return;
+        }
+        resultsEl.innerHTML = '';
+        matches.forEach(function(u) {
+          var row = document.createElement('div');
+          row.style.cssText = 'display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 1rem; cursor: pointer; transition: background 0.1s;';
+          row.onmouseenter = function() { this.style.background = 'var(--surface-hover)'; };
+          row.onmouseleave = function() { this.style.background = 'none'; };
+          row.onclick = function() { addMember(u); };
+          var avatar = document.createElement('span');
+          avatar.style.cssText = 'width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; flex-shrink: 0; overflow: hidden;';
+          if (u.hasAvatar) {
+            avatar.innerHTML = '<img src="/avatar/' + u.id + '" style="width:100%;height:100%;object-fit:cover;">';
+          } else {
+            avatar.textContent = u.initials;
+          }
+          row.appendChild(avatar);
+          var info = document.createElement('div');
+          info.innerHTML = '<strong style="font-size:0.9rem;">' + u.name + '</strong><span style="color:var(--text-muted);font-size:0.825rem;"> &middot; ' + u.email + '</span>';
+          row.appendChild(info);
+          resultsEl.appendChild(row);
+        });
+        resultsEl.style.display = 'block';
+      }
+
+      searchEl.addEventListener('input', function() { renderResults(this.value); });
+      searchEl.addEventListener('focus', function() { if (this.value) renderResults(this.value); });
+      document.addEventListener('click', function(e) {
+        if (!searchEl.contains(e.target) && !resultsEl.contains(e.target)) {
+          resultsEl.style.display = 'none';
+        }
+      });
+
+      // Initialize pre-selected members
+      preSelected.forEach(function(id) {
+        var u = allUsers.find(function(x) { return x.id === id; });
+        if (u) addMember(u);
+      });
+    })();
+    </script>
 
     <button type="submit" class="btn" style="margin-top: 1.5rem;">Create team link</button>
   </form>

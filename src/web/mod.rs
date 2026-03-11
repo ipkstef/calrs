@@ -320,8 +320,26 @@ fn impersonation_ctx(auth_user: &crate::auth::AuthUser) -> (bool, String, String
     }
 }
 
+/// Compute two-letter Matrix-style initials from a name (first letter of first + last word).
+fn compute_initials(name: &str) -> String {
+    let parts: Vec<&str> = name.split_whitespace().collect();
+    let mut initials = String::new();
+    if let Some(first) = parts.first() {
+        if let Some(c) = first.chars().next() {
+            initials.extend(c.to_uppercase());
+        }
+    }
+    if parts.len() > 1 {
+        if let Some(last) = parts.last() {
+            if let Some(c) = last.chars().next() {
+                initials.extend(c.to_uppercase());
+            }
+        }
+    }
+    if initials.is_empty() { "?".to_string() } else { initials }
+}
+
 /// Build sidebar context for dashboard templates.
-/// Returns a minijinja Value with: user_name, user_title, user_id, user_role, has_avatar, active.
 fn sidebar_context(auth_user: &crate::auth::AuthUser, active: &str) -> minijinja::Value {
     let user = &auth_user.user;
     let (impersonating, _, _) = impersonation_ctx(auth_user);
@@ -336,6 +354,7 @@ fn sidebar_context(auth_user: &crate::auth::AuthUser, active: &str) -> minijinja
         user_id => user.id,
         user_role => effective_role,
         has_avatar => user.avatar_path.is_some(),
+        user_initials => compute_initials(&user.name),
         active => active,
     }
 }
@@ -742,6 +761,7 @@ fn settings_render(
         tmpl.render(context! {
             sidebar => sidebar,
             form_name => user.name,
+            form_initials => compute_initials(&user.name),
             form_title => user.title.as_deref().unwrap_or(""),
             form_bio => user.bio.as_deref().unwrap_or(""),
             form_booking_email => user.booking_email.as_deref().unwrap_or(""),
@@ -1746,16 +1766,16 @@ async fn new_team_link_form(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    let users: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT id, name, email FROM users WHERE enabled = 1 ORDER BY name")
+    let users: Vec<(String, String, String, Option<String>)> =
+        sqlx::query_as("SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name")
             .fetch_all(&state.pool)
             .await
             .unwrap_or_default();
 
     let users_ctx: Vec<minijinja::Value> = users
         .iter()
-        .map(|(id, name, email)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id }
+        .map(|(id, name, email, avatar_path)| {
+            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
         })
         .collect();
 
@@ -1796,6 +1816,7 @@ async fn create_team_link(
 
     if form.title.trim().is_empty() {
         return render_team_link_form_error(&state, &auth_user, "Title is required.", &form)
+            .await
             .into_response();
     }
 
@@ -1806,11 +1827,13 @@ async fn create_team_link(
             "Select at least one other team member.",
             &form,
         )
+        .await
         .into_response();
     }
 
     if form.days.is_empty() {
         return render_team_link_form_error(&state, &auth_user, "Select at least one day.", &form)
+            .await
             .into_response();
     }
 
@@ -1857,14 +1880,18 @@ async fn create_team_link(
     Redirect::to("/dashboard").into_response()
 }
 
-fn render_team_link_form_error(
+async fn render_team_link_form_error(
     state: &AppState,
     auth_user: &crate::auth::AuthUser,
     error: &str,
     form: &TeamLinkForm,
 ) -> Html<String> {
     let user = &auth_user.user;
-    let users: Vec<(String, String, String)> = Vec::new(); // will be empty on error, but we need the template
+    let users: Vec<(String, String, String, Option<String>)> =
+        sqlx::query_as("SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
     let tmpl = match state.templates.get_template("team_link_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -1872,8 +1899,8 @@ fn render_team_link_form_error(
 
     let users_ctx: Vec<minijinja::Value> = users
         .iter()
-        .map(|(id, name, email)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id }
+        .map(|(id, name, email, avatar_path)| {
+            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
         })
         .collect();
 
@@ -3677,7 +3704,8 @@ async fn user_profile(
 
     Html(
         tmpl.render(context! {
-            host_name => user_name,
+            host_name => &user_name,
+            host_initials => compute_initials(&user_name),
             host_title => user_title,
             host_bio => user_bio,
             host_user_id => user_id,
@@ -3696,8 +3724,8 @@ async fn show_slots_for_user(
     Path((username, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name, u.title, u.avatar_path
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          JOIN users u ON u.id = a.user_id
@@ -3722,6 +3750,8 @@ async fn show_slots_for_user(
         loc_value,
         host_user_id,
         host_name,
+        host_title,
+        host_avatar_path,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -3806,6 +3836,10 @@ async fn show_slots_for_user(
                 location_value => loc_value,
             },
             host_name => host_name,
+            host_title => host_title.as_deref().unwrap_or(""),
+            host_user_id => host_user_id,
+            host_has_avatar => host_avatar_path.is_some(),
+            host_initials => compute_initials(&host_name),
             username => username,
             days => days_ctx,
             prev_week => prev_week,
@@ -4627,16 +4661,16 @@ async fn show_slots(
         None => return Html("Event type not found.".to_string()),
     };
 
-    let host_info: Option<(String, String)> = sqlx::query_as(
-        "SELECT a.user_id, a.name FROM accounts a JOIN event_types et ON et.account_id = a.id WHERE et.id = ?",
+    let host_info: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.title, u.avatar_path FROM users u JOIN accounts a ON a.user_id = u.id JOIN event_types et ON et.account_id = a.id WHERE et.id = ?",
     )
     .bind(&et_id)
     .fetch_optional(&state.pool)
     .await
     .unwrap_or(None);
 
-    let (host_user_id, host_name) =
-        host_info.unwrap_or_else(|| ("".to_string(), "Host".to_string()));
+    let (host_user_id, host_name, host_title, host_avatar_path) =
+        host_info.unwrap_or_else(|| ("".to_string(), "Host".to_string(), None, None));
 
     // Sync calendars if stale before computing availability
     crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, &host_user_id).await;
@@ -4714,7 +4748,11 @@ async fn show_slots(
                 description => et_desc,
                 duration_min => duration,
             },
-            host_name => host_name,
+            host_name => &host_name,
+            host_title => host_title.as_deref().unwrap_or(""),
+            host_user_id => &host_user_id,
+            host_has_avatar => host_avatar_path.is_some(),
+            host_initials => compute_initials(&host_name),
             days => days_ctx,
             prev_week => prev_week,
             next_week => next_week,
@@ -5707,6 +5745,7 @@ async fn admin_dashboard(
         user_id => current_user.id,
         user_role => "admin",
         has_avatar => current_user.avatar_path.is_some(),
+        user_initials => compute_initials(&current_user.name),
         active => "admin",
     };
 
