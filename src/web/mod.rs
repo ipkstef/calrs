@@ -120,29 +120,17 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
             uid,
         ) in &due
         {
-            let date = if start_at.len() >= 10 {
-                &start_at[..10]
-            } else {
-                start_at
-            };
-            let start_time = if start_at.len() >= 16 {
-                &start_at[11..16]
-            } else {
-                "00:00"
-            };
-            let end_time = if end_at.len() >= 16 {
-                &end_at[11..16]
-            } else {
-                "00:00"
-            };
+            let date = start_at.get(..10).unwrap_or(start_at).to_string();
+            let start_time = format_time_from_dt(start_at);
+            let end_time = format_time_from_dt(end_at);
 
             let location = location_value.as_ref().filter(|v| !v.is_empty()).cloned();
 
             let details = crate::email::BookingDetails {
                 event_title: event_title.clone(),
-                date: date.to_string(),
-                start_time: start_time.to_string(),
-                end_time: end_time.to_string(),
+                date: date.clone(),
+                start_time: start_time.clone(),
+                end_time: end_time.clone(),
                 guest_name: guest_name.clone(),
                 guest_email: guest_email.clone(),
                 guest_timezone: guest_timezone.clone(),
@@ -177,13 +165,22 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
     }
 }
 
+/// Parse a datetime string from the database, handling both space and T separators.
+/// Supports: "2025-03-15 14:30:00", "2025-03-15T14:30:00", "2025-03-15T14:30:00Z"
+fn parse_booking_datetime(dt_str: &str) -> Option<NaiveDateTime> {
+    let s = dt_str.trim_end_matches('Z');
+    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
+        .ok()
+}
+
 /// Format a booking datetime string into a human-friendly label.
-/// Input: "2025-03-15 14:30:00" (SQLite datetime format)
+/// Input: "2025-03-15 14:30:00" or "2025-03-15T14:30:00"
 /// Output: "Tomorrow at 2:30 PM" or "Sat, Mar 15 at 2:30 PM" or "Sat, Mar 15, 2026 at 2:30 PM"
 fn format_booking_datetime(dt_str: &str) -> String {
-    let ndt = match NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S") {
-        Ok(d) => d,
-        Err(_) => return dt_str.to_string(),
+    let ndt = match parse_booking_datetime(dt_str) {
+        Some(d) => d,
+        None => return dt_str.to_string(),
     };
     let now = Local::now().naive_local();
     let today = now.date();
@@ -210,11 +207,35 @@ fn format_booking_datetime(dt_str: &str) -> String {
 fn format_booking_range(start_str: &str, end_str: &str) -> String {
     let start_label = format_booking_datetime(start_str);
     // For the end, only show the time (same day implied)
-    if let Ok(end_ndt) = NaiveDateTime::parse_from_str(end_str, "%Y-%m-%d %H:%M:%S") {
+    if let Some(end_ndt) = parse_booking_datetime(end_str) {
         let end_time = end_ndt.time().format("%-I:%M %p").to_string();
         format!("{} — {}", start_label, end_time)
     } else {
         format!("{} — {}", start_label, end_str)
+    }
+}
+
+/// Format a raw date string (YYYY-MM-DD or from datetime) into a human-friendly date label.
+/// Returns e.g. "Saturday, March 15, 2026"
+fn format_date_label(dt_str: &str) -> String {
+    // Try parsing as full datetime first, then as date-only
+    if let Some(ndt) = parse_booking_datetime(dt_str) {
+        return ndt.date().format("%A, %B %-d, %Y").to_string();
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(&dt_str[..10.min(dt_str.len())], "%Y-%m-%d") {
+        return d.format("%A, %B %-d, %Y").to_string();
+    }
+    dt_str.to_string()
+}
+
+/// Extract a human-friendly time (e.g. "2:30 PM") from a datetime string.
+fn format_time_from_dt(dt_str: &str) -> String {
+    if let Some(ndt) = parse_booking_datetime(dt_str) {
+        ndt.time().format("%-I:%M %p").to_string()
+    } else if dt_str.len() >= 16 {
+        dt_str[11..16].to_string()
+    } else {
+        "00:00".to_string()
     }
 }
 
@@ -1070,29 +1091,17 @@ async fn cancel_booking(
         crate::email::load_smtp_config(&state.pool, &state.secret_key).await
     {
         // Extract date and times from start_at/end_at
-        let date = if start_at.len() >= 10 {
-            &start_at[..10]
-        } else {
-            &start_at
-        };
-        let start_time = if start_at.len() >= 16 {
-            &start_at[11..16]
-        } else {
-            "00:00"
-        };
-        let end_time = if end_at.len() >= 16 {
-            &end_at[11..16]
-        } else {
-            "00:00"
-        };
+        let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+        let start_time = format_time_from_dt(&start_at);
+        let end_time = format_time_from_dt(&end_at);
 
         let reason = form.reason.filter(|r| !r.trim().is_empty());
 
         let details = crate::email::CancellationDetails {
             event_title: event_title.clone(),
-            date: date.to_string(),
-            start_time: start_time.to_string(),
-            end_time: end_time.to_string(),
+            date: date.clone(),
+            start_time: start_time.clone(),
+            end_time: end_time.clone(),
             guest_name,
             guest_email,
             host_name: user.name.clone(),
@@ -1157,21 +1166,9 @@ async fn confirm_booking(
         .execute(&state.pool)
         .await;
 
-    let date = if start_at.len() >= 10 {
-        start_at[..10].to_string()
-    } else {
-        start_at.clone()
-    };
-    let start_time = if start_at.len() >= 16 {
-        start_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
-    let end_time = if end_at.len() >= 16 {
-        end_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
+    let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let start_time = format_time_from_dt(&start_at);
+    let end_time = format_time_from_dt(&end_at);
 
     let details = crate::email::BookingDetails {
         event_title,
@@ -6150,21 +6147,10 @@ async fn approve_booking_by_token(
         .execute(&state.pool)
         .await;
 
-    let date = if start_at.len() >= 10 {
-        start_at[..10].to_string()
-    } else {
-        start_at.clone()
-    };
-    let start_time = if start_at.len() >= 16 {
-        start_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
-    let end_time = if end_at.len() >= 16 {
-        end_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
+    let date_label = format_date_label(&start_at);
+    let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let start_time = format_time_from_dt(&start_at);
+    let end_time = format_time_from_dt(&end_at);
 
     // Get host email for BookingDetails
     let host_email: String =
@@ -6216,6 +6202,7 @@ async fn approve_booking_by_token(
     let rendered = tmpl
         .render(context! {
             event_title,
+            date_label,
             date,
             start_time,
             end_time,
@@ -6257,21 +6244,10 @@ async fn decline_booking_form(
         }
     };
 
-    let date = if start_at.len() >= 10 {
-        start_at[..10].to_string()
-    } else {
-        start_at.clone()
-    };
-    let start_time = if start_at.len() >= 16 {
-        start_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
-    let end_time = if end_at.len() >= 16 {
-        end_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
+    let date_label = format_date_label(&start_at);
+    let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let start_time = format_time_from_dt(&start_at);
+    let end_time = format_time_from_dt(&end_at);
 
     let tmpl = state
         .templates
@@ -6280,6 +6256,7 @@ async fn decline_booking_form(
     let rendered = tmpl
         .render(context! {
             event_title,
+            date_label,
             date,
             start_time,
             end_time,
@@ -6340,21 +6317,10 @@ async fn decline_booking_by_token(
         .execute(&state.pool)
         .await;
 
-    let date = if start_at.len() >= 10 {
-        start_at[..10].to_string()
-    } else {
-        start_at.clone()
-    };
-    let start_time = if start_at.len() >= 16 {
-        start_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
-    let end_time = if end_at.len() >= 16 {
-        end_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
+    let date_label = format_date_label(&start_at);
+    let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let start_time = format_time_from_dt(&start_at);
+    let end_time = format_time_from_dt(&end_at);
 
     let reason = form.reason.filter(|r| !r.trim().is_empty());
 
@@ -6385,6 +6351,7 @@ async fn decline_booking_by_token(
     let rendered = tmpl
         .render(context! {
             event_title,
+            date_label,
             date,
             start_time,
             end_time,
@@ -6452,21 +6419,10 @@ async fn guest_cancel_form(
         }
     };
 
-    let date = if start_at.len() >= 10 {
-        start_at[..10].to_string()
-    } else {
-        start_at.clone()
-    };
-    let start_time = if start_at.len() >= 16 {
-        start_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
-    let end_time = if end_at.len() >= 16 {
-        end_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
+    let date_label = format_date_label(&start_at);
+    let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let start_time = format_time_from_dt(&start_at);
+    let end_time = format_time_from_dt(&end_at);
 
     let tmpl = state
         .templates
@@ -6475,6 +6431,7 @@ async fn guest_cancel_form(
     let rendered = tmpl
         .render(context! {
             event_title,
+            date_label,
             date,
             start_time,
             end_time,
@@ -6543,21 +6500,10 @@ async fn guest_cancel_booking(
         caldav_delete_booking(&state.pool, &state.secret_key, user_id, &uid).await;
     }
 
-    let date = if start_at.len() >= 10 {
-        start_at[..10].to_string()
-    } else {
-        start_at.clone()
-    };
-    let start_time = if start_at.len() >= 16 {
-        start_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
-    let end_time = if end_at.len() >= 16 {
-        end_at[11..16].to_string()
-    } else {
-        "00:00".to_string()
-    };
+    let date_label = format_date_label(&start_at);
+    let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let start_time = format_time_from_dt(&start_at);
+    let end_time = format_time_from_dt(&end_at);
 
     let reason = form.reason.filter(|r| !r.trim().is_empty());
 
@@ -6590,6 +6536,7 @@ async fn guest_cancel_booking(
     let rendered = tmpl
         .render(context! {
             event_title,
+            date_label,
             date,
             start_time,
             end_time,

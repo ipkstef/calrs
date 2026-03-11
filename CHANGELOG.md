@@ -70,6 +70,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-03-11
+
+### Fixed
+
+- **Raw dates on token-based booking pages** — approve, decline, cancel confirmation and form pages now show human-friendly dates (e.g. "Saturday, March 15, 2026") instead of raw ISO8601 strings
+- **Raw dates in reminder and cancellation emails** — time formatting now correctly parses both `T` and space datetime separators from the database
+
 ## [0.17.2] - 2026-03-11
 
 ### Fixed
