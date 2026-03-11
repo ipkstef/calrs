@@ -217,6 +217,10 @@ pub fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8; 32]) 
         .route("/dashboard/sources/{id}/test", post(test_source))
         .route("/dashboard/sources/{id}/sync", post(sync_source))
         .route(
+            "/dashboard/sources/{id}/setup-write",
+            get(setup_write_calendar),
+        )
+        .route(
             "/dashboard/sources/{id}/write-calendar",
             post(set_write_calendar),
         )
@@ -1571,6 +1575,28 @@ async fn sync_source(
         total_events
     ));
 
+    // If write_calendar_href is not yet configured and we found calendars,
+    // redirect to the write-calendar setup page (onboarding flow).
+    let write_href: Option<String> = sqlx::query_scalar(
+        "SELECT write_calendar_href FROM caldav_sources WHERE id = ?",
+    )
+    .bind(&sid)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+
+    if write_href.is_none() && !calendars.is_empty() {
+        // Store sync messages in a query param so the setup page can show them
+        let joined_messages = messages.join("\n");
+        let encoded_messages = urlencoding::encode(&joined_messages);
+        return Redirect::to(&format!(
+            "/dashboard/sources/{}/setup-write?sync_messages={}",
+            sid, encoded_messages
+        ))
+        .into_response();
+    }
+
     render_sync_result(&state, &name, &messages).into_response()
 }
 
@@ -1588,6 +1614,77 @@ fn render_sync_result(state: &AppState, source_name: &str, messages: &[String]) 
         tmpl.render(context! { result => messages.join("\n"), source_name => source_name })
             .unwrap_or_else(|e| format!("Template error: {}", e)),
     )
+}
+
+#[derive(Deserialize)]
+struct SetupWriteQuery {
+    sync_messages: Option<String>,
+}
+
+async fn setup_write_calendar(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(source_id): Path<String>,
+    Query(query): Query<SetupWriteQuery>,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+
+    // Fetch source name and verify ownership
+    let source: Option<(String, String)> = sqlx::query_as(
+        "SELECT cs.id, cs.name FROM caldav_sources cs
+         JOIN accounts a ON a.id = cs.account_id
+         WHERE cs.id = ? AND a.user_id = ?",
+    )
+    .bind(&source_id)
+    .bind(&user.id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (_sid, source_name) = match source {
+        Some(s) => s,
+        None => return Redirect::to("/dashboard").into_response(),
+    };
+
+    // Get calendars for this source
+    let calendars: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT href, display_name, color FROM calendars WHERE source_id = ? ORDER BY display_name",
+    )
+    .bind(&source_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    if calendars.is_empty() {
+        return Redirect::to("/dashboard").into_response();
+    }
+
+    let cal_values: Vec<minijinja::Value> = calendars
+        .iter()
+        .map(|(href, name, color)| {
+            context! {
+                href => href,
+                name => name.as_deref().unwrap_or(href),
+                color => color,
+            }
+        })
+        .collect();
+
+    let tmpl = match state.templates.get_template("source_write_setup.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)).into_response(),
+    };
+
+    Html(
+        tmpl.render(context! {
+            source_id => source_id,
+            source_name => source_name,
+            calendars => cal_values,
+            sync_messages => query.sync_messages,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+    .into_response()
 }
 
 #[derive(Deserialize)]
