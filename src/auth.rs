@@ -831,9 +831,9 @@ async fn find_or_create_oidc_user(
     .fetch_optional(pool)
     .await?
     {
-        // Update name/email in case they changed on the IdP
+        // Update email in case it changed on the IdP; only update name if currently empty
         sqlx::query(
-            "UPDATE users SET name = ?, email = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE users SET name = CASE WHEN name IS NULL OR name = '' THEN ? ELSE name END, email = ?, updated_at = datetime('now') WHERE id = ?",
         )
         .bind(name)
         .bind(email)

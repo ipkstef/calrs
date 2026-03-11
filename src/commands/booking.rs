@@ -236,7 +236,7 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
             if let Some(smtp_config) = crate::email::load_smtp_config(pool, key).await? {
                 // Fetch host info
                 let host: Option<(String, String)> = sqlx::query_as(
-                    "SELECT name, email FROM accounts WHERE id = (SELECT account_id FROM event_types WHERE id = ?)",
+                    "SELECT u.name, COALESCE(u.booking_email, u.email) FROM users u JOIN accounts a ON a.user_id = u.id WHERE a.id = (SELECT account_id FROM event_types WHERE id = ?)",
                 )
                 .bind(&et_id)
                 .fetch_optional(pool)
@@ -359,7 +359,8 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
                     // Send cancellation emails
                     if let Some(smtp_config) = crate::email::load_smtp_config(pool, key).await? {
                         let host: Option<(String, String)> = sqlx::query_as(
-                            "SELECT a.name, a.email FROM accounts a
+                            "SELECT u.name, COALESCE(u.booking_email, u.email) FROM users u
+                             JOIN accounts a ON a.user_id = u.id
                              JOIN event_types et ON et.account_id = a.id
                              JOIN bookings b ON b.event_type_id = et.id
                              WHERE b.id = ?",

@@ -26,6 +26,7 @@ pub struct User {
     pub created_at: String,
     pub updated_at: String,
     pub username: Option<String>,
+    pub booking_email: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

@@ -77,7 +77,7 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
         // - start_at minus reminder_minutes <= now
         // - start_at > now (don't remind for past bookings)
         let due: Vec<(String, String, String, String, String, String, String, String, String, Option<String>, Option<String>, String)> = sqlx::query_as(
-            "SELECT b.id, b.guest_name, b.guest_email, b.guest_timezone, b.start_at, b.end_at, et.title, u.name, u.email, et.location_value, b.cancel_token, b.uid
+            "SELECT b.id, b.guest_name, b.guest_email, b.guest_timezone, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email), et.location_value, b.cancel_token, b.uid
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -223,6 +223,11 @@ pub fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8; 32]) 
         .route(
             "/dashboard/sources/{id}/write-calendar",
             post(set_write_calendar),
+        )
+        // Settings
+        .route(
+            "/dashboard/settings",
+            get(settings_page).post(settings_save),
         )
         // Troubleshoot
         .route("/dashboard/troubleshoot", get(troubleshoot))
@@ -481,6 +486,89 @@ async fn dashboard(
     )
 }
 
+// --- Settings ---
+
+#[derive(Deserialize)]
+struct SettingsForm {
+    name: String,
+    booking_email: Option<String>,
+}
+
+async fn settings_page(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+) -> impl IntoResponse {
+    settings_render(&state, &auth_user.user, None, None)
+}
+
+fn settings_render(
+    state: &AppState,
+    user: &crate::models::User,
+    success: Option<&str>,
+    error: Option<&str>,
+) -> Html<String> {
+    let tmpl = state.templates.get_template("settings.html").unwrap();
+    Html(
+        tmpl.render(context! {
+            form_name => user.name,
+            form_booking_email => user.booking_email.as_deref().unwrap_or(""),
+            user_email => user.email,
+            success => success.unwrap_or(""),
+            error => error.unwrap_or(""),
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn settings_save(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Form(form): Form<SettingsForm>,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+    let name = form.name.trim().to_string();
+
+    if name.is_empty() {
+        return settings_render(&state, user, None, Some("Name cannot be empty.")).into_response();
+    }
+
+    let booking_email = form
+        .booking_email
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let result = sqlx::query(
+        "UPDATE users SET name = ?, booking_email = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&name)
+    .bind(&booking_email)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
+    match result {
+        Ok(_) => {
+            // Also update the linked account name
+            let _ = sqlx::query("UPDATE accounts SET name = ? WHERE user_id = ?")
+                .bind(&name)
+                .bind(&user.id)
+                .execute(&state.pool)
+                .await;
+
+            // Re-fetch user to show updated values
+            let updated_user = crate::auth::get_user_by_id(&state.pool, &user.id)
+                .await
+                .unwrap_or_else(|| user.clone());
+            settings_render(&state, &updated_user, Some("Settings saved."), None).into_response()
+        }
+        Err(_) => {
+            settings_render(&state, user, None, Some("Failed to save settings.")).into_response()
+        }
+    }
+}
+
 // --- Cancel booking ---
 
 #[derive(Deserialize)]
@@ -565,7 +653,10 @@ async fn cancel_booking(
             guest_name,
             guest_email,
             host_name: user.name.clone(),
-            host_email: user.email.clone(),
+            host_email: user
+                .booking_email
+                .clone()
+                .unwrap_or_else(|| user.email.clone()),
             uid,
             reason,
             cancelled_by_host: true,
@@ -648,7 +739,10 @@ async fn confirm_booking(
         guest_email,
         guest_timezone: "UTC".to_string(),
         host_name: user.name.clone(),
-        host_email: user.email.clone(),
+        host_email: user
+            .booking_email
+            .clone()
+            .unwrap_or_else(|| user.email.clone()),
         uid: uid.clone(),
         notes: None,
         location: location_value,
@@ -2810,12 +2904,13 @@ async fn handle_booking_for_user(
     if let Ok(Some(smtp_config)) =
         crate::email::load_smtp_config(&state.pool, &state.secret_key).await
     {
-        let host: Option<(String, String)> =
-            sqlx::query_as("SELECT u.name, u.email FROM users u WHERE u.username = ?")
-                .bind(&username)
-                .fetch_optional(&state.pool)
-                .await
-                .unwrap_or(None);
+        let host: Option<(String, String)> = sqlx::query_as(
+            "SELECT u.name, COALESCE(u.booking_email, u.email) FROM users u WHERE u.username = ?",
+        )
+        .bind(&username)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
 
         if let Some((host_name, host_email)) = host {
             let location_display = if loc_value.as_ref().is_some_and(|v| !v.is_empty()) {
@@ -2948,7 +3043,7 @@ async fn pick_group_member(
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
     let members: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.email FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
+        "SELECT u.id, u.name, COALESCE(u.booking_email, u.email) FROM users u JOIN user_groups ug ON ug.user_id = u.id WHERE ug.group_id = ? AND u.enabled = 1",
     )
     .bind(group_id)
     .fetch_all(pool)
@@ -3686,7 +3781,7 @@ async fn handle_booking(
         crate::email::load_smtp_config(&state.pool, &state.secret_key).await
     {
         let host: Option<(String, String)> = sqlx::query_as(
-            "SELECT name, email FROM accounts WHERE id = (SELECT account_id FROM event_types WHERE id = ?)",
+            "SELECT u.name, COALESCE(u.booking_email, u.email) FROM users u JOIN accounts a ON a.user_id = u.id WHERE a.id = (SELECT account_id FROM event_types WHERE id = ?)",
         )
         .bind(&et_id)
         .fetch_optional(&state.pool)
@@ -4794,11 +4889,12 @@ async fn approve_booking_by_token(
     };
 
     // Get host email for BookingDetails
-    let host_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = ?")
-        .bind(&user_id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or_default();
+    let host_email: String =
+        sqlx::query_scalar("SELECT COALESCE(booking_email, email) FROM users WHERE id = ?")
+            .bind(&user_id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or_default();
 
     let details = crate::email::BookingDetails {
         event_title: event_title.clone(),
@@ -4932,7 +5028,7 @@ async fn decline_booking_by_token(
         String,
         String,
     )> = sqlx::query_as(
-        "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, u.email
+        "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email)
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -5119,7 +5215,7 @@ async fn guest_cancel_booking(
 ) -> impl IntoResponse {
     let booking: Option<(String, String, String, String, String, String, String, String, String)> =
         sqlx::query_as(
-            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, u.email
+            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email)
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id

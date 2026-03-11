@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Settings — calrs{% endblock %}
+{% block content %}
+<a href="/dashboard" class="back-link">&larr; Back to dashboard</a>
+
+<div class="card">
+  <h1>Settings</h1>
+
+  {% if success %}
+    <div class="success" style="margin-top: 1rem; padding: 0.75rem 1rem; border-radius: var(--radius); background: var(--success-bg, #e6f9e6); color: var(--success, #2d7a2d); border: 1px solid var(--success, #2d7a2d);">{{ success }}</div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error" style="margin-top: 1rem;">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" style="margin-top: 1.25rem;">
+    <div class="form-group">
+      <label for="name">Display name</label>
+      <input type="text" id="name" name="name" required value="{{ form_name }}" placeholder="Your name">
+    </div>
+
+    <div class="form-group">
+      <label for="booking_email">Booking email</label>
+      <input type="email" id="booking_email" name="booking_email" value="{{ form_booking_email }}" placeholder="{{ user_email }}">
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">This email will appear on your public booking pages and in email notifications. Leave empty to use your login email.</span>
+      <span style="font-size: 0.8rem; color: var(--warning, #b08800); display: block; margin-top: 0.25rem;">Make sure this email exists on your mail provider. If it doesn't, notifications won't be delivered.</span>
+    </div>
+
+    <button type="submit" class="btn" style="margin-top: 1.5rem;">Save settings</button>
+  </form>
+</div>
+{% endblock %}
