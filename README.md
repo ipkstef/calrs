@@ -72,6 +72,7 @@
 - **Email notifications** — HTML emails with plain text fallback and `.ics` calendar invites on booking, cancellation, and approval
 - **Email approve/decline** — approve or decline pending bookings directly from the notification email (token-based, no login required)
 - **Guest self-cancellation** — guests can cancel their own bookings via a link in the confirmation email, with optional reason
+- **Booking reminders** — automated email reminders before meetings, configurable per event type (1h / 4h / 1 day / 2 days)
 - **SMTP configuration** — configure from CLI or admin dashboard
 
 ### Security

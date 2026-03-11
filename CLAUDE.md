@@ -120,10 +120,10 @@ Key tables:
 - **`caldav_sources`** — CalDAV server connections (URL, credentials, sync state, `write_calendar_href`). `enabled` flag, `ON DELETE CASCADE`
 - **`calendars`** — calendar collections discovered under a source; `is_busy=1` means events block availability
 - **`events`** — cached remote events from CalDAV sync; unique on `(uid, COALESCE(recurrence_id, ''))`, stores `raw_ical`, `etag`, `rrule`, `all_day`, `timezone`, `recurrence_id`, `status`
-- **`event_types`** — bookable meeting templates (slug unique per account, `duration_min`, `buffer_before`/`buffer_after`, `min_notice_min`, `location_type`/`location_value`, `requires_confirmation`, `group_id`, `created_by_user_id`)
+- **`event_types`** — bookable meeting templates (slug unique per account, `duration_min`, `buffer_before`/`buffer_after`, `min_notice_min`, `location_type`/`location_value`, `requires_confirmation`, `group_id`, `created_by_user_id`, `reminder_minutes`)
 - **`availability_rules`** — weekly recurring windows per event type (day_of_week 0=Sun…6=Sat, HH:MM times)
 - **`availability_overrides`** — date-specific exceptions (day off, special hours). `is_blocked` flag
-- **`bookings`** — bookings with `uid` (iCal), guest info, status (confirmed/pending/cancelled/declined), `cancel_token`/`reschedule_token`/`confirm_token`, `assigned_user_id` (for group round-robin), `caldav_calendar_href` (write-back tracking)
+- **`bookings`** — bookings with `uid` (iCal), guest info, status (confirmed/pending/cancelled/declined), `cancel_token`/`reschedule_token`/`confirm_token`, `assigned_user_id` (for group round-robin), `caldav_calendar_href` (write-back tracking), `reminder_sent_at` (tracks when reminder email was sent)
 - **`smtp_config`** — SMTP server settings (host, port, credentials, sender), one per account
 - **`event_type_calendars`** — junction table linking event types to specific calendars for per-event-type calendar selection. Empty = use all `is_busy=1` calendars (backward-compatible default)
 - **`groups`** / **`user_groups`** — group system synced from Keycloak OIDC; groups have `slug` for public URLs
@@ -209,6 +209,8 @@ File: `src/web/mod.rs`, templates in `templates/`
 **Email approve/decline:** Pending bookings generate a `confirm_token`. Host notification emails include Approve/Decline buttons linking to `/booking/approve/{token}` and `/booking/decline/{token}`. These are unauthenticated public endpoints. Requires `CALRS_BASE_URL` env var.
 
 **Guest self-cancellation:** Confirmation and pending emails include a "Cancel booking" button linking to `/booking/cancel/{cancel_token}`. Guests can cancel their own bookings with an optional reason. Cancellation updates the booking status, deletes the CalDAV event, and notifies both guest and host. Emails correctly attribute who cancelled (host vs guest).
+
+**Booking reminders:** Background task in `calrs serve` runs every 60 seconds, sends reminder emails to both guest and host before upcoming meetings. Configurable per event type via `reminder_minutes` (NULL = no reminder). Guest reminders include a cancel button. `reminder_sent_at` on bookings prevents duplicate sends. Blue accent color (#3b82f6) for reminder emails.
 
 **Email notifications:** Booking confirmation, cancellation, pending notice, approval request (with action buttons), decline notice — all HTML emails with plain text fallback. Confirmation and cancellation include `.ics` calendar invite attachments. Location included in emails and ICS.
 

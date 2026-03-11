@@ -126,6 +126,11 @@ async fn main() -> Result<()> {
         Commands::User { command } => commands::user::run(&pool, command).await?,
         Commands::Config { command } => commands::config::run(&pool, &secret_key, command).await?,
         Commands::Serve { port, host } => {
+            // Spawn background reminder task
+            let reminder_pool = pool.clone();
+            let reminder_key = secret_key;
+            tokio::spawn(web::run_reminder_loop(reminder_pool, reminder_key));
+
             let router = web::create_router(pool, data_dir, secret_key);
             let addr = std::net::SocketAddr::from((host, port));
             println!("Booking page running at http://{}:{}", host, port);

@@ -54,6 +54,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Credential encryption | 0.10.0 | AES-256-GCM encryption for stored CalDAV/SMTP passwords |
 | Per-event-type calendar selection | 0.11.0 | Choose which calendars block availability per event type |
 | Guest self-cancellation | 0.12.0 | Guests can cancel their own bookings via a link in the confirmation email |
+| Booking reminders | 0.13.0 | Automated email reminders before meetings (configurable per event type) |
+
+## [0.13.0] - 2026-03-11
+
+### Added
+
+- **Booking reminders** — automated email reminders sent to both guest and host before upcoming meetings
+  - Configurable per event type: no reminder, 1 hour, 4 hours, 1 day, or 2 days before
+  - Default for new event types: 1 day before
+  - Background task runs every 60 seconds inside `calrs serve`, no external cron needed
+  - Guest reminder includes a "Cancel booking" button (if `CALRS_BASE_URL` is set)
+  - Host reminder includes guest name and meeting details
+  - `reminder_sent_at` tracked on each booking to prevent duplicate sends
+  - Catches up on missed reminders after server restart
+  - Blue accent color (#3b82f6) to distinguish from confirmation (green) and cancellation (red) emails
 
 ## [0.12.0] - 2026-03-11
 
