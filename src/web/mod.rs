@@ -5211,6 +5211,8 @@ async fn caldav_delete_booking(
 mod tests {
     use super::*;
 
+    // --- Rate limiter tests ---
+
     #[tokio::test]
     async fn rate_limiter_allows_under_limit() {
         let limiter = RateLimiter::new(3, 60);
@@ -5242,5 +5244,585 @@ mod tests {
         assert!(!limiter.check_limited("ip1").await);
         // Window has already expired (0 seconds)
         assert!(!limiter.check_limited("ip1").await); // reset, allowed again
+    }
+
+    // --- parse_datetime tests ---
+
+    #[test]
+    fn parse_datetime_compact_format() {
+        let dt = parse_datetime("20260315T140000").unwrap();
+        assert_eq!(
+            dt,
+            NaiveDate::from_ymd_opt(2026, 3, 15)
+                .unwrap()
+                .and_hms_opt(14, 0, 0)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_datetime_iso_format() {
+        let dt = parse_datetime("2026-03-15T14:00:00").unwrap();
+        assert_eq!(
+            dt,
+            NaiveDate::from_ymd_opt(2026, 3, 15)
+                .unwrap()
+                .and_hms_opt(14, 0, 0)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_datetime_allday_compact() {
+        let dt = parse_datetime("20260315").unwrap();
+        assert_eq!(
+            dt,
+            NaiveDate::from_ymd_opt(2026, 3, 15)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_datetime_allday_iso() {
+        let dt = parse_datetime("2026-03-15").unwrap();
+        assert_eq!(
+            dt,
+            NaiveDate::from_ymd_opt(2026, 3, 15)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_datetime_invalid() {
+        assert!(parse_datetime("not-a-date").is_none());
+        assert!(parse_datetime("").is_none());
+    }
+
+    // --- has_conflict tests ---
+
+    fn dt(y: i32, m: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, mi, 0)
+            .unwrap()
+    }
+
+    #[test]
+    fn conflict_overlapping_event() {
+        let busy = vec![(dt(2026, 3, 15, 10, 0), dt(2026, 3, 15, 11, 0))];
+        // Slot 10:30-11:30 overlaps with 10:00-11:00
+        assert!(has_conflict(
+            &busy,
+            dt(2026, 3, 15, 10, 30),
+            dt(2026, 3, 15, 11, 30)
+        ));
+    }
+
+    #[test]
+    fn conflict_no_overlap() {
+        let busy = vec![(dt(2026, 3, 15, 10, 0), dt(2026, 3, 15, 11, 0))];
+        // Slot 11:00-12:00 starts exactly when event ends (no overlap)
+        assert!(!has_conflict(
+            &busy,
+            dt(2026, 3, 15, 11, 0),
+            dt(2026, 3, 15, 12, 0)
+        ));
+    }
+
+    #[test]
+    fn conflict_event_contains_slot() {
+        let busy = vec![(dt(2026, 3, 15, 9, 0), dt(2026, 3, 15, 17, 0))];
+        // Slot entirely within busy period
+        assert!(has_conflict(
+            &busy,
+            dt(2026, 3, 15, 10, 0),
+            dt(2026, 3, 15, 11, 0)
+        ));
+    }
+
+    #[test]
+    fn conflict_slot_contains_event() {
+        let busy = vec![(dt(2026, 3, 15, 10, 15), dt(2026, 3, 15, 10, 45))];
+        // Slot 10:00-11:00 contains the 10:15-10:45 event
+        assert!(has_conflict(
+            &busy,
+            dt(2026, 3, 15, 10, 0),
+            dt(2026, 3, 15, 11, 0)
+        ));
+    }
+
+    #[test]
+    fn conflict_adjacent_not_conflicting() {
+        let busy = vec![
+            (dt(2026, 3, 15, 9, 0), dt(2026, 3, 15, 10, 0)),
+            (dt(2026, 3, 15, 11, 0), dt(2026, 3, 15, 12, 0)),
+        ];
+        // Slot 10:00-11:00 is between two events (no overlap)
+        assert!(!has_conflict(
+            &busy,
+            dt(2026, 3, 15, 10, 0),
+            dt(2026, 3, 15, 11, 0)
+        ));
+    }
+
+    #[test]
+    fn conflict_empty_busy_list() {
+        let busy: Vec<(NaiveDateTime, NaiveDateTime)> = vec![];
+        assert!(!has_conflict(
+            &busy,
+            dt(2026, 3, 15, 10, 0),
+            dt(2026, 3, 15, 11, 0)
+        ));
+    }
+
+    #[test]
+    fn conflict_buffer_causes_overlap() {
+        let busy = vec![(dt(2026, 3, 15, 10, 0), dt(2026, 3, 15, 11, 0))];
+        // Slot is 11:00-12:00, but with 15min buffer before → buf_start=10:45 overlaps
+        assert!(has_conflict(
+            &busy,
+            dt(2026, 3, 15, 10, 45),
+            dt(2026, 3, 15, 12, 0)
+        ));
+    }
+
+    // --- expand_recurring_into_busy tests ---
+
+    #[test]
+    fn expand_recurring_weekly_into_busy() {
+        let recurring = vec![(
+            "20260309T100000".to_string(), // Monday 10:00
+            "20260309T110000".to_string(), // Monday 11:00
+            "FREQ=WEEKLY;BYDAY=MO".to_string(),
+            None,
+            None,
+        )];
+        let window_start = dt(2026, 3, 9, 0, 0);
+        let window_end = dt(2026, 3, 23, 23, 59);
+        let busy = expand_recurring_into_busy(&recurring, window_start, window_end, Tz::UTC);
+        // Should have 3 occurrences: Mar 9, 16, 23
+        assert_eq!(busy.len(), 3);
+        assert_eq!(busy[0].0, dt(2026, 3, 9, 10, 0));
+        assert_eq!(busy[1].0, dt(2026, 3, 16, 10, 0));
+        assert_eq!(busy[2].0, dt(2026, 3, 23, 10, 0));
+    }
+
+    #[test]
+    fn expand_recurring_with_exdate() {
+        let raw_ical = "BEGIN:VEVENT\nDTSTART:20260309T100000\nDTEND:20260309T110000\nRRULE:FREQ=WEEKLY;BYDAY=MO\nEXDATE:20260316T100000\nEND:VEVENT";
+        let recurring = vec![(
+            "20260309T100000".to_string(),
+            "20260309T110000".to_string(),
+            "FREQ=WEEKLY;BYDAY=MO".to_string(),
+            Some(raw_ical.to_string()),
+            None,
+        )];
+        let window_start = dt(2026, 3, 9, 0, 0);
+        let window_end = dt(2026, 3, 23, 23, 59);
+        let busy = expand_recurring_into_busy(&recurring, window_start, window_end, Tz::UTC);
+        // Mar 16 excluded, so only Mar 9 and 23
+        assert_eq!(busy.len(), 2);
+        assert_eq!(busy[0].0, dt(2026, 3, 9, 10, 0));
+        assert_eq!(busy[1].0, dt(2026, 3, 23, 10, 0));
+    }
+
+    // --- Integration tests with in-memory SQLite ---
+
+    async fn setup_test_db() -> SqlitePool {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::from_str("sqlite::memory:")
+                    .unwrap()
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        pool
+    }
+
+    /// Insert test fixtures: user, account, event type, availability rules
+    async fn seed_test_data(pool: &SqlitePool) -> (String, String, String) {
+        let user_id = uuid::Uuid::new_v4().to_string();
+        let account_id = uuid::Uuid::new_v4().to_string();
+        let et_id = uuid::Uuid::new_v4().to_string();
+
+        sqlx::query("INSERT INTO users (id, email, name, role, auth_provider, username, enabled) VALUES (?, 'test@example.com', 'Test User', 'admin', 'local', 'testuser', 1)")
+            .bind(&user_id)
+            .execute(pool).await.unwrap();
+
+        sqlx::query("INSERT INTO accounts (id, name, email, timezone, user_id) VALUES (?, 'Test User', 'test@example.com', 'UTC', ?)")
+            .bind(&account_id)
+            .bind(&user_id)
+            .execute(pool).await.unwrap();
+
+        sqlx::query("INSERT INTO event_types (id, account_id, slug, title, duration_min, buffer_before, buffer_after, min_notice_min, enabled) VALUES (?, ?, 'test-meeting', 'Test Meeting', 30, 0, 0, 0, 1)")
+            .bind(&et_id)
+            .bind(&account_id)
+            .execute(pool).await.unwrap();
+
+        // Mon-Fri 09:00-17:00
+        for day in [1, 2, 3, 4, 5] {
+            let rule_id = uuid::Uuid::new_v4().to_string();
+            sqlx::query("INSERT INTO availability_rules (id, event_type_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, '09:00', '17:00')")
+                .bind(&rule_id)
+                .bind(&et_id)
+                .bind(day)
+                .execute(pool).await.unwrap();
+        }
+
+        (user_id, account_id, et_id)
+    }
+
+    #[tokio::test]
+    async fn fetch_busy_times_empty_calendar() {
+        let pool = setup_test_db().await;
+        let (user_id, _, _) = seed_test_data(&pool).await;
+
+        let busy = fetch_busy_times_for_user(
+            &pool,
+            &user_id,
+            dt(2026, 3, 15, 0, 0),
+            dt(2026, 3, 21, 23, 59),
+            Tz::UTC,
+            None,
+        )
+        .await;
+
+        assert!(busy.is_empty(), "No events or bookings → no busy times");
+    }
+
+    #[tokio::test]
+    async fn fetch_busy_times_includes_bookings() {
+        let pool = setup_test_db().await;
+        let (user_id, _, et_id) = seed_test_data(&pool).await;
+
+        let booking_id = uuid::Uuid::new_v4().to_string();
+        let cancel_tok = uuid::Uuid::new_v4().to_string();
+        let resched_tok = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, start_at, end_at, status, cancel_token, reschedule_token) VALUES (?, ?, 'uid1', 'Guest', 'guest@example.com', 'UTC', '2026-03-16T10:00:00', '2026-03-16T10:30:00', 'confirmed', ?, ?)")
+            .bind(&booking_id)
+            .bind(&et_id)
+            .bind(&cancel_tok)
+            .bind(&resched_tok)
+            .execute(&pool).await.unwrap();
+
+        let busy = fetch_busy_times_for_user(
+            &pool,
+            &user_id,
+            dt(2026, 3, 15, 0, 0),
+            dt(2026, 3, 21, 23, 59),
+            Tz::UTC,
+            None,
+        )
+        .await;
+
+        assert_eq!(busy.len(), 1);
+        assert_eq!(busy[0].0, dt(2026, 3, 16, 10, 0));
+        assert_eq!(busy[0].1, dt(2026, 3, 16, 10, 30));
+    }
+
+    #[tokio::test]
+    async fn fetch_busy_times_ignores_cancelled_bookings() {
+        let pool = setup_test_db().await;
+        let (user_id, _, et_id) = seed_test_data(&pool).await;
+
+        let booking_id = uuid::Uuid::new_v4().to_string();
+        let cancel_tok = uuid::Uuid::new_v4().to_string();
+        let resched_tok = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, start_at, end_at, status, cancel_token, reschedule_token) VALUES (?, ?, 'uid1', 'Guest', 'guest@example.com', 'UTC', '2026-03-16T10:00:00', '2026-03-16T10:30:00', 'cancelled', ?, ?)")
+            .bind(&booking_id)
+            .bind(&et_id)
+            .bind(&cancel_tok)
+            .bind(&resched_tok)
+            .execute(&pool).await.unwrap();
+
+        let busy = fetch_busy_times_for_user(
+            &pool,
+            &user_id,
+            dt(2026, 3, 15, 0, 0),
+            dt(2026, 3, 21, 23, 59),
+            Tz::UTC,
+            None,
+        )
+        .await;
+
+        assert!(
+            busy.is_empty(),
+            "Cancelled bookings should not block availability"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_basic_availability() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        let busy = BusySource::Individual(vec![]);
+
+        // Compute slots for a Monday (2026-03-16 is a Monday)
+        // Use fixed date math: offset from "today" that lands on a Monday
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30, // 30 min duration
+            0,  // no buffer before
+            0,  // no buffer after
+            0,  // no min notice
+            0,  // start from today
+            14, // 14 days ahead
+            Tz::UTC,
+            Tz::UTC,
+            busy,
+        )
+        .await;
+
+        // Should have slots on weekdays only (Mon-Fri)
+        assert!(!slot_days.is_empty(), "Should have slots on weekdays");
+
+        // Each day should have 16 slots (09:00-17:00 in 30-min increments)
+        for day in &slot_days {
+            assert_eq!(
+                day.slots.len(),
+                16,
+                "09:00-17:00 with 30min = 16 slots, got {} for {}",
+                day.slots.len(),
+                day.date
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn compute_slots_with_busy_event() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Find the next Monday from now
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date();
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        // Block 10:00-11:00 on that Monday
+        let busy_start = next_monday.and_hms_opt(10, 0, 0).unwrap();
+        let busy_end = next_monday.and_hms_opt(11, 0, 0).unwrap();
+        let busy = BusySource::Individual(vec![(busy_start, busy_end)]);
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1, // just 1 day
+            Tz::UTC,
+            Tz::UTC,
+            busy,
+        )
+        .await;
+
+        assert!(!slot_days.is_empty(), "Should have the Monday");
+        let monday = &slot_days[0];
+
+        // 16 slots normally, minus 2 (10:00 and 10:30 blocked) = 14
+        assert_eq!(monday.slots.len(), 14, "10:00 and 10:30 should be blocked");
+
+        // Verify 10:00 and 10:30 are not in the slots
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        assert!(!slot_times.contains(&"10:00"), "10:00 should be blocked");
+        assert!(!slot_times.contains(&"10:30"), "10:30 should be blocked");
+    }
+
+    #[tokio::test]
+    async fn compute_slots_with_buffer() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Find the next Monday
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date();
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        // Block 10:00-10:30 on that Monday
+        let busy_start = next_monday.and_hms_opt(10, 0, 0).unwrap();
+        let busy_end = next_monday.and_hms_opt(10, 30, 0).unwrap();
+        let busy = BusySource::Individual(vec![(busy_start, busy_end)]);
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            15, // 15 min buffer before
+            15, // 15 min buffer after
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            busy,
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+
+        // Event at 10:00-10:30 with 15min buffers blocks 09:45-10:45
+        // So slots 09:30 (ends 10:00, buf_end=10:15 > 09:45), 10:00, 10:30 (buf_start=10:15 < 10:30) blocked
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        assert!(
+            !slot_times.contains(&"10:00"),
+            "10:00 should be blocked (direct conflict)"
+        );
+        assert!(
+            slot_times.contains(&"09:00"),
+            "09:00 should be free (no buffer overlap)"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_no_weekend_slots() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Find next Saturday
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_sat = now.date();
+        while next_sat.weekday() != chrono::Weekday::Sat {
+            next_sat += Duration::days(1);
+        }
+        let days_to_sat = (next_sat - now.date()).num_days() as i32;
+
+        let busy = BusySource::Individual(vec![]);
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_sat,
+            2, // just Sat + Sun
+            Tz::UTC,
+            Tz::UTC,
+            busy,
+        )
+        .await;
+
+        assert!(
+            slot_days.is_empty(),
+            "Weekends should have no slots (Mon-Fri rules only)"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_group_any_member_free() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Find the next Monday
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date();
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        let ten_am = next_monday.and_hms_opt(10, 0, 0).unwrap();
+        let ten_thirty = next_monday.and_hms_opt(10, 30, 0).unwrap();
+
+        // Member A is busy at 10:00, Member B is free
+        let mut member_busy = HashMap::new();
+        member_busy.insert("member_a".to_string(), vec![(ten_am, ten_thirty)]);
+        member_busy.insert("member_b".to_string(), vec![]); // free
+
+        let busy = BusySource::Group(member_busy);
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            busy,
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        // 10:00 should still be available because member B is free
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        assert!(
+            slot_times.contains(&"10:00"),
+            "10:00 should be available (member B is free)"
+        );
+        assert_eq!(
+            monday.slots.len(),
+            16,
+            "All slots available (at least one member free)"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_group_all_busy_blocks() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date();
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        let ten_am = next_monday.and_hms_opt(10, 0, 0).unwrap();
+        let ten_thirty = next_monday.and_hms_opt(10, 30, 0).unwrap();
+
+        // Both members busy at 10:00
+        let mut member_busy = HashMap::new();
+        member_busy.insert("member_a".to_string(), vec![(ten_am, ten_thirty)]);
+        member_busy.insert("member_b".to_string(), vec![(ten_am, ten_thirty)]);
+
+        let busy = BusySource::Group(member_busy);
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            busy,
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        assert!(
+            !slot_times.contains(&"10:00"),
+            "10:00 blocked when ALL members busy"
+        );
+        assert_eq!(monday.slots.len(), 15, "One slot blocked");
     }
 }

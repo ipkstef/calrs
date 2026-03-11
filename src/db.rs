@@ -244,3 +244,211 @@ pub async fn migrate_passwords(pool: &SqlitePool, key: &[u8; 32]) -> Result<()> 
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn memory_pool() -> SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::from_str("sqlite::memory:")
+                    .unwrap()
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn migrate_creates_all_tables() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.unwrap();
+
+        let expected_tables = [
+            "accounts",
+            "caldav_sources",
+            "calendars",
+            "events",
+            "event_types",
+            "availability_rules",
+            "availability_overrides",
+            "bookings",
+            "users",
+            "sessions",
+            "auth_config",
+            "smtp_config",
+            "groups",
+            "user_groups",
+            "event_type_calendars",
+        ];
+
+        for table in &expected_tables {
+            let exists: (i64,) = sqlx::query_as(&format!(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{}'",
+                table
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                exists.0, 1,
+                "Table '{}' should exist after migration",
+                table
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn migrate_tracks_applied_migrations() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 12, "All 12 migrations should be tracked");
+    }
+
+    #[tokio::test]
+    async fn migrate_is_idempotent() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.unwrap();
+        // Running again should not fail or double-apply
+        migrate(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 12, "Still 12 migrations after second run");
+    }
+
+    #[tokio::test]
+    async fn migrate_migration_count_matches_files() {
+        // This test catches the "forgot to register migration" bug.
+        // Count .sql files in migrations/ dir
+        let migration_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let sql_files: Vec<_> = std::fs::read_dir(&migration_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
+            .collect();
+
+        let pool = memory_pool().await;
+        migrate(&pool).await.unwrap();
+
+        let registered: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sql_files.len() as i64,
+            registered.0,
+            "Number of .sql files ({}) must match registered migrations ({}). Did you forget to register a migration in db.rs?",
+            sql_files.len(),
+            registered.0,
+        );
+    }
+
+    #[tokio::test]
+    async fn migrate_foreign_keys_work() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.unwrap();
+
+        // Insert a user and account
+        let user_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO users (id, email, name, role, auth_provider, username, enabled) VALUES (?, 'fk@test.com', 'FK Test', 'user', 'local', 'fktest', 1)")
+            .bind(&user_id)
+            .execute(&pool).await.unwrap();
+
+        let account_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO accounts (id, name, email, timezone, user_id) VALUES (?, 'FK Test', 'fk@test.com', 'UTC', ?)")
+            .bind(&account_id)
+            .bind(&user_id)
+            .execute(&pool).await.unwrap();
+
+        // Insert a caldav source referencing the account
+        let source_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO caldav_sources (id, account_id, name, url, username, enabled) VALUES (?, ?, 'Test', 'https://example.com', 'user', 1)")
+            .bind(&source_id)
+            .bind(&account_id)
+            .execute(&pool).await.unwrap();
+
+        // Deleting the account should cascade-delete the source
+        sqlx::query("DELETE FROM accounts WHERE id = ?")
+            .bind(&account_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let source_exists: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM caldav_sources WHERE id = ?")
+                .bind(&source_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            source_exists.0, 0,
+            "Source should be cascade-deleted with account"
+        );
+    }
+
+    #[tokio::test]
+    async fn migrate_orphaned_accounts_links_to_user() {
+        let pool = memory_pool().await;
+
+        // Run migrations first to get schema
+        migrate(&pool).await.unwrap();
+
+        // Insert an orphaned account (user_id = NULL)
+        let account_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO accounts (id, name, email, timezone, user_id) VALUES (?, 'Orphan', 'orphan@test.com', 'UTC', NULL)")
+            .bind(&account_id)
+            .execute(&pool).await.unwrap();
+
+        // Run migration again → should create user and link
+        migrate(&pool).await.unwrap();
+
+        // Account should now have a user_id
+        let linked: Option<(String,)> =
+            sqlx::query_as("SELECT user_id FROM accounts WHERE id = ? AND user_id IS NOT NULL")
+                .bind(&account_id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(
+            linked.is_some(),
+            "Orphaned account should be linked to a user"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_usernames_from_email() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.unwrap();
+
+        let user_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO users (id, email, name, role, auth_provider, username, enabled) VALUES (?, 'john.doe@example.com', 'John', 'user', 'local', NULL, 1)")
+            .bind(&user_id)
+            .execute(&pool).await.unwrap();
+
+        generate_missing_usernames(&pool).await.unwrap();
+
+        let username: Option<(String,)> = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+            .bind(&user_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            username.unwrap().0,
+            "john-doe",
+            "john.doe@example.com → john-doe"
+        );
+    }
+}
