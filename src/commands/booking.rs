@@ -331,8 +331,8 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
             println!("{}", Table::new(rows));
         }
         BookingCommands::Cancel { id } => {
-            let booking: Option<(String, String, String, String, String, String, String)> = sqlx::query_as(
-                "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title
+            let booking: Option<(String, String, String, String, String, String, String, String)> = sqlx::query_as(
+                "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, COALESCE(b.guest_timezone, 'UTC')
                  FROM bookings b
                  JOIN event_types et ON et.id = b.event_type_id
                  WHERE b.id LIKE ? || '%' AND b.status = 'confirmed'",
@@ -342,7 +342,7 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
             .await?;
 
             match booking {
-                Some((full_id, uid, guest_name, guest_email, start_at, end_at, event_title)) => {
+                Some((full_id, uid, guest_name, guest_email, start_at, end_at, event_title, guest_timezone)) => {
                     let reason_input =
                         prompt("Reason for cancellation (optional, press Enter to skip)");
                     let reason = if reason_input.is_empty() {
@@ -394,6 +394,7 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
                                 end_time: end_time.to_string(),
                                 guest_name: guest_name.clone(),
                                 guest_email: guest_email.clone(),
+                                guest_timezone: guest_timezone.clone(),
                                 host_name,
                                 host_email,
                                 uid,

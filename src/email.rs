@@ -1,4 +1,6 @@
 use anyhow::Result;
+use chrono::NaiveDateTime;
+use chrono_tz::Tz;
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
@@ -37,6 +39,7 @@ pub struct CancellationDetails {
     pub end_time: String,
     pub guest_name: String,
     pub guest_email: String,
+    pub guest_timezone: String,
     pub host_name: String,
     pub host_email: String,
     pub uid: String,
@@ -174,6 +177,56 @@ fn sanitize_ics(value: &str) -> String {
         .replace(',', "\\,")
 }
 
+/// Convert date + start/end times from a guest timezone to UTC ICS format (YYYYMMDDTHHMMSSZ).
+/// Falls back to floating time (no Z) if timezone parsing fails.
+fn convert_to_utc(date: &str, start_time: &str, end_time: &str, timezone: &str) -> (String, String) {
+    let fallback_start = format!(
+        "{}T{}00",
+        date.replace('-', ""),
+        start_time.replace(':', "")
+    );
+    let fallback_end = format!(
+        "{}T{}00",
+        date.replace('-', ""),
+        end_time.replace(':', "")
+    );
+
+    let tz: Tz = match timezone.parse() {
+        Ok(t) => t,
+        Err(_) => return (fallback_start, fallback_end),
+    };
+
+    let start_naive = match NaiveDateTime::parse_from_str(
+        &format!("{} {}:00", date, start_time),
+        "%Y-%m-%d %H:%M:%S",
+    ) {
+        Ok(dt) => dt,
+        Err(_) => return (fallback_start, fallback_end),
+    };
+    let end_naive = match NaiveDateTime::parse_from_str(
+        &format!("{} {}:00", date, end_time),
+        "%Y-%m-%d %H:%M:%S",
+    ) {
+        Ok(dt) => dt,
+        Err(_) => return (fallback_start, fallback_end),
+    };
+
+    use chrono::TimeZone;
+    let start_utc = match tz.from_local_datetime(&start_naive).earliest() {
+        Some(dt) => dt.with_timezone(&chrono::Utc),
+        None => return (fallback_start, fallback_end),
+    };
+    let end_utc = match tz.from_local_datetime(&end_naive).earliest() {
+        Some(dt) => dt.with_timezone(&chrono::Utc),
+        None => return (fallback_start, fallback_end),
+    };
+
+    (
+        start_utc.format("%Y%m%dT%H%M%SZ").to_string(),
+        end_utc.format("%Y%m%dT%H%M%SZ").to_string(),
+    )
+}
+
 /// Generate an .ics VCALENDAR string for a booking
 pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
     let summary = sanitize_ics(&details.event_title);
@@ -184,7 +237,7 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
     let location_line = details
         .location
         .as_ref()
-        .map(|l| format!("LOCATION:{}\r\n         ", sanitize_ics(l)))
+        .map(|l| format!("LOCATION:{}\r\n", sanitize_ics(l)))
         .unwrap_or_default();
     let valarm = details
         .reminder_minutes
@@ -200,6 +253,13 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
             )
         })
         .unwrap_or_default();
+    // Convert guest-timezone times to UTC for the ICS
+    let (dtstart, dtend) = convert_to_utc(
+        &details.date,
+        &details.start_time,
+        &details.end_time,
+        &details.guest_timezone,
+    );
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
@@ -219,14 +279,8 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
          END:VCALENDAR\r\n",
         method = method,
         uid = details.uid,
-        dtstart = details.date.replace('-', "").to_string()
-            + "T"
-            + &details.start_time.replace(':', "")
-            + "00",
-        dtend = details.date.replace('-', "").to_string()
-            + "T"
-            + &details.end_time.replace(':', "")
-            + "00",
+        dtstart = dtstart,
+        dtend = dtend,
         summary = summary,
         host_name = host_name,
         host_email = host_email,
@@ -242,6 +296,12 @@ fn generate_cancel_ics(details: &CancellationDetails) -> String {
     let guest_name = sanitize_ics(&details.guest_name);
     let host_email = sanitize_ics(&details.host_email);
     let guest_email = sanitize_ics(&details.guest_email);
+    let (dtstart, dtend) = convert_to_utc(
+        &details.date,
+        &details.start_time,
+        &details.end_time,
+        &details.guest_timezone,
+    );
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
@@ -258,14 +318,8 @@ fn generate_cancel_ics(details: &CancellationDetails) -> String {
          END:VEVENT\r\n\
          END:VCALENDAR\r\n",
         uid = details.uid,
-        dtstart = details.date.replace('-', "").to_string()
-            + "T"
-            + &details.start_time.replace(':', "")
-            + "00",
-        dtend = details.date.replace('-', "").to_string()
-            + "T"
-            + &details.end_time.replace(':', "")
-            + "00",
+        dtstart = dtstart,
+        dtend = dtend,
         summary = summary,
         host_name = host_name,
         host_email = host_email,
@@ -1323,8 +1377,9 @@ mod tests {
         assert!(ics.contains("BEGIN:VEVENT"));
         assert!(ics.contains("END:VEVENT"));
         assert!(ics.contains("UID:test-uid-123"));
-        assert!(ics.contains("DTSTART:20260310T140000"));
-        assert!(ics.contains("DTEND:20260310T143000"));
+        // Europe/Paris is UTC+1 in March (CET), so 14:00 Paris = 13:00 UTC
+        assert!(ics.contains("DTSTART:20260310T130000Z"));
+        assert!(ics.contains("DTEND:20260310T133000Z"));
         assert!(ics.contains("SUMMARY:Intro Call"));
         assert!(ics.contains("ORGANIZER;CN=Alice:mailto:alice@cal.rs"));
         assert!(ics.contains("ATTENDEE;CN=Jane Doe;RSVP=TRUE:mailto:jane@example.com"));
@@ -1351,7 +1406,9 @@ mod tests {
 
         let ics = generate_ics(&details, "REQUEST");
         assert!(ics.contains("METHOD:REQUEST"));
-        assert!(ics.contains("LOCATION:https://meet.example.com/room"));
+        assert!(ics.contains("LOCATION:https://meet.example.com/room\r\n"));
+        // ORGANIZER must be its own line, not folded into LOCATION
+        assert!(ics.contains("\r\nORGANIZER;"));
     }
 
     #[test]
@@ -1461,6 +1518,7 @@ mod tests {
             end_time: "14:30".to_string(),
             guest_name: "Jane Doe".to_string(),
             guest_email: "jane@example.com".to_string(),
+            guest_timezone: "UTC".to_string(),
             host_name: "Alice".to_string(),
             host_email: "alice@cal.rs".to_string(),
             uid: "cancel-uid-123".to_string(),
@@ -1472,8 +1530,8 @@ mod tests {
         assert!(ics.contains("METHOD:CANCEL"));
         assert!(ics.contains("STATUS:CANCELLED"));
         assert!(ics.contains("UID:cancel-uid-123"));
-        assert!(ics.contains("DTSTART:20260310T140000"));
-        assert!(ics.contains("DTEND:20260310T143000"));
+        assert!(ics.contains("DTSTART:20260310T140000Z"));
+        assert!(ics.contains("DTEND:20260310T143000Z"));
         assert!(ics.contains("SUMMARY:Intro Call"));
     }
 
@@ -1486,6 +1544,7 @@ mod tests {
             end_time: "10:00".to_string(),
             guest_name: "Bob".to_string(),
             guest_email: "bob@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
             host_name: "Alice".to_string(),
             host_email: "alice@test.com".to_string(),
             uid: "uid-1".to_string(),
@@ -1529,6 +1588,7 @@ mod tests {
             end_time: "10:00".to_string(),
             guest_name: "Bob".to_string(),
             guest_email: "bob@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
             host_name: "Alice".to_string(),
             host_email: "alice@test.com".to_string(),
             uid: "uid-2".to_string(),
@@ -1717,6 +1777,7 @@ mod tests {
             end_time: "16:45".to_string(),
             guest_name: "Bob".to_string(),
             guest_email: "bob@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
             host_name: "Alice".to_string(),
             host_email: "alice@test.com".to_string(),
             uid: "cancel-special".to_string(),
@@ -1727,8 +1788,8 @@ mod tests {
         assert!(ics.contains("SUMMARY:Team sync\\; weekly\\, recurring"));
         assert!(ics.contains("METHOD:CANCEL"));
         assert!(ics.contains("STATUS:CANCELLED"));
-        assert!(ics.contains("DTSTART:20260520T160000"));
-        assert!(ics.contains("DTEND:20260520T164500"));
+        assert!(ics.contains("DTSTART:20260520T160000Z"));
+        assert!(ics.contains("DTEND:20260520T164500Z"));
     }
 
     // --- render_html_email edge cases ---

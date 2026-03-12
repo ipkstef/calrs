@@ -458,6 +458,7 @@ fn sidebar_context(auth_user: &crate::auth::AuthUser, active: &str) -> minijinja
         has_avatar => user.avatar_path.is_some(),
         user_initials => compute_initials(&user.name),
         active => active,
+        version => env!("CARGO_PKG_VERSION"),
     }
 }
 
@@ -1130,8 +1131,9 @@ async fn cancel_booking(
         String,
         String,
         String,
+        String,
     )> = sqlx::query_as(
-        "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, a.id
+        "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, a.id, COALESCE(b.guest_timezone, 'UTC')
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -1143,7 +1145,7 @@ async fn cancel_booking(
     .await
     .unwrap_or(None);
 
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, _account_id) =
+    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, _account_id, guest_timezone) =
         match booking {
             Some(b) => b,
             None => return Redirect::to("/dashboard/bookings").into_response(),
@@ -1176,6 +1178,7 @@ async fn cancel_booking(
             end_time: end_time.clone(),
             guest_name,
             guest_email,
+            guest_timezone,
             host_name: user.name.clone(),
             host_email: user
                 .booking_email
@@ -1203,9 +1206,9 @@ async fn confirm_booking(
     let user = &auth_user.user;
 
     // Verify the booking belongs to this user and is pending
-    let booking: Option<(String, String, String, String, String, String, String, Option<String>, Option<String>)> =
+    let booking: Option<(String, String, String, String, String, String, String, Option<String>, Option<String>, String)> =
         sqlx::query_as(
-            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, et.location_value, b.cancel_token
+            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, et.location_value, b.cancel_token, COALESCE(b.guest_timezone, 'UTC')
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -1227,6 +1230,7 @@ async fn confirm_booking(
         event_title,
         location_value,
         cancel_token,
+        guest_timezone,
     ) = match booking {
         Some(b) => b,
         None => return Redirect::to("/dashboard/bookings").into_response(),
@@ -1249,7 +1253,7 @@ async fn confirm_booking(
         end_time,
         guest_name,
         guest_email,
-        guest_timezone: "UTC".to_string(),
+        guest_timezone,
         host_name: user.name.clone(),
         host_email: user
             .booking_email
@@ -5941,6 +5945,7 @@ async fn admin_dashboard(
         has_avatar => current_user.avatar_path.is_some(),
         user_initials => compute_initials(&current_user.name),
         active => "admin",
+        version => env!("CARGO_PKG_VERSION"),
     };
 
     Html(
@@ -6201,9 +6206,9 @@ async fn approve_booking_by_token(
     Path(token): Path<String>,
 ) -> impl IntoResponse {
     // Look up booking by confirm_token
-    let booking: Option<(String, String, String, String, String, String, String, String, String, Option<String>, Option<String>)> =
+    let booking: Option<(String, String, String, String, String, String, String, String, String, Option<String>, Option<String>, String)> =
         sqlx::query_as(
-            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, a.user_id, u.name, et.location_value, b.cancel_token
+            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, a.user_id, u.name, et.location_value, b.cancel_token, COALESCE(b.guest_timezone, 'UTC')
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -6227,6 +6232,7 @@ async fn approve_booking_by_token(
         host_name,
         location_value,
         cancel_token,
+        guest_timezone,
     ) = match booking {
         Some(b) => b,
         None => {
@@ -6293,7 +6299,7 @@ async fn approve_booking_by_token(
         end_time: end_time.clone(),
         guest_name: guest_name.clone(),
         guest_email: guest_email.clone(),
-        guest_timezone: "UTC".to_string(),
+        guest_timezone,
         host_name: host_name.clone(),
         host_email,
         uid: uid.clone(),
@@ -6409,8 +6415,9 @@ async fn decline_booking_by_token(
         String,
         String,
         String,
+        String,
     )> = sqlx::query_as(
-        "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email)
+        "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email), COALESCE(b.guest_timezone, 'UTC')
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -6422,7 +6429,7 @@ async fn decline_booking_by_token(
     .await
     .unwrap_or(None);
 
-    let (bid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email) =
+    let (bid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email, guest_timezone) =
         match booking {
             Some(b) => b,
             None => {
@@ -6462,6 +6469,7 @@ async fn decline_booking_by_token(
             end_time: end_time.clone(),
             guest_name: guest_name.clone(),
             guest_email: guest_email.clone(),
+            guest_timezone: guest_timezone.clone(),
             host_name: host_name.clone(),
             host_email,
             uid: String::new(),
@@ -6575,9 +6583,9 @@ async fn guest_cancel_booking(
     Path(token): Path<String>,
     Form(form): Form<CancelForm>,
 ) -> impl IntoResponse {
-    let booking: Option<(String, String, String, String, String, String, String, String, String)> =
+    let booking: Option<(String, String, String, String, String, String, String, String, String, String)> =
         sqlx::query_as(
-            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email)
+            "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title, u.name, COALESCE(u.booking_email, u.email), COALESCE(b.guest_timezone, 'UTC')
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -6589,7 +6597,7 @@ async fn guest_cancel_booking(
         .await
         .unwrap_or(None);
 
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email) =
+    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email, guest_timezone) =
         match booking {
             Some(b) => b,
             None => {
@@ -6645,6 +6653,7 @@ async fn guest_cancel_booking(
             end_time: end_time.clone(),
             guest_name: guest_name.clone(),
             guest_email: guest_email.clone(),
+            guest_timezone,
             host_name: host_name.clone(),
             host_email,
             uid,
