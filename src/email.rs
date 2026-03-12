@@ -634,10 +634,7 @@ pub async fn send_host_booking_confirmed(
 
     let html = render_html_email(
         "Booking confirmed",
-        &format!(
-            "You approved the booking with {}.",
-            h(&details.guest_name)
-        ),
+        &format!("You approved the booking with {}.", h(&details.guest_name)),
         "#16a34a",
         &rows,
         Some("The event has been added to your calendar."),
