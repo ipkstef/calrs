@@ -229,8 +229,18 @@ fn convert_to_utc(
 }
 
 /// Generate an .ics VCALENDAR string for a booking
+/// Extract first name (first word) from a full name.
+fn first_name(full_name: &str) -> &str {
+    full_name.split_whitespace().next().unwrap_or(full_name)
+}
+
 pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
-    let summary = sanitize_ics(&details.event_title);
+    let guest_first = first_name(&details.guest_name);
+    let host_first = first_name(&details.host_name);
+    let summary = sanitize_ics(&format!(
+        "{} \u{2014} {} & {}",
+        details.event_title, guest_first, host_first
+    ));
     let host_name = sanitize_ics(&details.host_name);
     let guest_name = sanitize_ics(&details.guest_name);
     let host_email = sanitize_ics(&details.host_email);
@@ -239,6 +249,12 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
         .location
         .as_ref()
         .map(|l| format!("LOCATION:{}\r\n", sanitize_ics(l)))
+        .unwrap_or_default();
+    let description_line = details
+        .notes
+        .as_ref()
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| format!("DESCRIPTION:{}\r\n", sanitize_ics(n)))
         .unwrap_or_default();
     let valarm = details
         .reminder_minutes
@@ -271,6 +287,7 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
          DTSTART:{dtstart}\r\n\
          DTEND:{dtend}\r\n\
          SUMMARY:{summary}\r\n\
+         {description_line}\
          {location_line}\
          ORGANIZER;CN={host_name}:mailto:{host_email}\r\n\
          ATTENDEE;CN={guest_name};RSVP=TRUE:mailto:{guest_email}\r\n\
@@ -283,6 +300,8 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
         dtstart = dtstart,
         dtend = dtend,
         summary = summary,
+        description_line = description_line,
+        location_line = location_line,
         host_name = host_name,
         host_email = host_email,
         guest_name = guest_name,
@@ -292,7 +311,12 @@ pub fn generate_ics(details: &BookingDetails, method: &str) -> String {
 
 /// Generate an .ics VCALENDAR for cancellation (METHOD:CANCEL)
 fn generate_cancel_ics(details: &CancellationDetails) -> String {
-    let summary = sanitize_ics(&details.event_title);
+    let guest_first = first_name(&details.guest_name);
+    let host_first = first_name(&details.host_name);
+    let summary = sanitize_ics(&format!(
+        "{} \u{2014} {} & {}",
+        details.event_title, guest_first, host_first
+    ));
     let host_name = sanitize_ics(&details.host_name);
     let guest_name = sanitize_ics(&details.guest_name);
     let host_email = sanitize_ics(&details.host_email);
@@ -1479,7 +1503,7 @@ mod tests {
         // Europe/Paris is UTC+1 in March (CET), so 14:00 Paris = 13:00 UTC
         assert!(ics.contains("DTSTART:20260310T130000Z"));
         assert!(ics.contains("DTEND:20260310T133000Z"));
-        assert!(ics.contains("SUMMARY:Intro Call"));
+        assert!(ics.contains("SUMMARY:Intro Call \u{2014} Jane & Alice"));
         assert!(ics.contains("ORGANIZER;CN=Alice:mailto:alice@cal.rs"));
         assert!(ics.contains("ATTENDEE;CN=Jane Doe;RSVP=TRUE:mailto:jane@example.com"));
         assert!(ics.contains("STATUS:CONFIRMED"));
@@ -1506,8 +1530,53 @@ mod tests {
         let ics = generate_ics(&details, "REQUEST");
         assert!(ics.contains("METHOD:REQUEST"));
         assert!(ics.contains("LOCATION:https://meet.example.com/room\r\n"));
+        assert!(ics.contains("DESCRIPTION:Discuss roadmap\r\n"));
         // ORGANIZER must be its own line, not folded into LOCATION
         assert!(ics.contains("\r\nORGANIZER;"));
+    }
+
+    #[test]
+    fn generate_ics_no_description_when_no_notes() {
+        let details = BookingDetails {
+            event_title: "Call".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "09:00".to_string(),
+            end_time: "10:00".to_string(),
+            guest_name: "Bob".to_string(),
+            guest_email: "bob@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
+            host_name: "Alice".to_string(),
+            host_email: "alice@test.com".to_string(),
+            uid: "uid-no-notes".to_string(),
+            notes: None,
+            location: None,
+            reminder_minutes: None,
+        };
+
+        let ics = generate_ics(&details, "PUBLISH");
+        assert!(!ics.contains("DESCRIPTION:"));
+    }
+
+    #[test]
+    fn generate_ics_summary_includes_first_names() {
+        let details = BookingDetails {
+            event_title: "30min call".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "09:00".to_string(),
+            end_time: "09:30".to_string(),
+            guest_name: "Jean-Baptiste Piacentino".to_string(),
+            guest_email: "jb@test.com".to_string(),
+            guest_timezone: "UTC".to_string(),
+            host_name: "Olivier Lambert".to_string(),
+            host_email: "olivier@test.com".to_string(),
+            uid: "uid-names".to_string(),
+            notes: None,
+            location: None,
+            reminder_minutes: None,
+        };
+
+        let ics = generate_ics(&details, "PUBLISH");
+        assert!(ics.contains("SUMMARY:30min call \u{2014} Jean-Baptiste & Olivier"));
     }
 
     #[test]
@@ -1529,7 +1598,7 @@ mod tests {
         };
 
         let ics = generate_ics(&details, "PUBLISH");
-        assert!(ics.contains("SUMMARY:Meet\\; discuss\\, plan"));
+        assert!(ics.contains("SUMMARY:Meet\\; discuss\\, plan \u{2014} O'Brien & Host"));
     }
 
     // --- h (HTML escaping) ---
@@ -1631,7 +1700,7 @@ mod tests {
         assert!(ics.contains("UID:cancel-uid-123"));
         assert!(ics.contains("DTSTART:20260310T140000Z"));
         assert!(ics.contains("DTEND:20260310T143000Z"));
-        assert!(ics.contains("SUMMARY:Intro Call"));
+        assert!(ics.contains("SUMMARY:Intro Call \u{2014} Jane & Alice"));
     }
 
     #[test]
@@ -1884,7 +1953,7 @@ mod tests {
             cancelled_by_host: true,
         };
         let ics = generate_cancel_ics(&details);
-        assert!(ics.contains("SUMMARY:Team sync\\; weekly\\, recurring"));
+        assert!(ics.contains("SUMMARY:Team sync\\; weekly\\, recurring \u{2014} Bob & Alice"));
         assert!(ics.contains("METHOD:CANCEL"));
         assert!(ics.contains("STATUS:CANCELLED"));
         assert!(ics.contains("DTSTART:20260520T160000Z"));
