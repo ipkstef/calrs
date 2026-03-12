@@ -1417,6 +1417,9 @@ async fn confirm_booking(
             guest_cancel_url.as_deref(),
         )
         .await;
+
+        // Also send host a confirmation email with ICS attachment
+        let _ = crate::email::send_host_notification(&smtp_config, &details).await;
     }
 
     Redirect::to("/dashboard/bookings").into_response()
@@ -6886,6 +6889,9 @@ async fn approve_booking_by_token(
             guest_cancel_url.as_deref(),
         )
         .await;
+
+        // Also send host a confirmation email with ICS attachment
+        let _ = crate::email::send_host_notification(&smtp_config, &details).await;
     }
 
     let tmpl = match state.templates.get_template("booking_approved.html") {
