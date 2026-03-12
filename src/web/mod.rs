@@ -1145,11 +1145,20 @@ async fn cancel_booking(
     .await
     .unwrap_or(None);
 
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, _account_id, guest_timezone) =
-        match booking {
-            Some(b) => b,
-            None => return Redirect::to("/dashboard/bookings").into_response(),
-        };
+    let (
+        bid,
+        uid,
+        guest_name,
+        guest_email,
+        start_at,
+        end_at,
+        event_title,
+        _account_id,
+        guest_timezone,
+    ) = match booking {
+        Some(b) => b,
+        None => return Redirect::to("/dashboard/bookings").into_response(),
+    };
 
     // Cancel the booking
     let _ = sqlx::query("UPDATE bookings SET status = 'cancelled' WHERE id = ?")
@@ -6429,21 +6438,30 @@ async fn decline_booking_by_token(
     .await
     .unwrap_or(None);
 
-    let (bid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email, guest_timezone) =
-        match booking {
-            Some(b) => b,
-            None => {
-                let tmpl = state
-                    .templates
-                    .get_template("booking_action_error.html")
-                    .unwrap();
-                let rendered = tmpl.render(context! {
+    let (
+        bid,
+        guest_name,
+        guest_email,
+        start_at,
+        end_at,
+        event_title,
+        host_name,
+        host_email,
+        guest_timezone,
+    ) = match booking {
+        Some(b) => b,
+        None => {
+            let tmpl = state
+                .templates
+                .get_template("booking_action_error.html")
+                .unwrap();
+            let rendered = tmpl.render(context! {
                     title => "Invalid link",
                     message => "This decline link is invalid, has expired, or the booking has already been processed.",
                 }).unwrap_or_else(|e| format!("Template error: {}", e));
-                return Html(rendered).into_response();
-            }
-        };
+            return Html(rendered).into_response();
+        }
+    };
 
     // Decline the booking
     let _ = sqlx::query("UPDATE bookings SET status = 'declined' WHERE id = ?")
@@ -6597,23 +6615,33 @@ async fn guest_cancel_booking(
         .await
         .unwrap_or(None);
 
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title, host_name, host_email, guest_timezone) =
-        match booking {
-            Some(b) => b,
-            None => {
-                let tmpl = state
-                    .templates
-                    .get_template("booking_action_error.html")
-                    .unwrap();
-                let rendered = tmpl
+    let (
+        bid,
+        uid,
+        guest_name,
+        guest_email,
+        start_at,
+        end_at,
+        event_title,
+        host_name,
+        host_email,
+        guest_timezone,
+    ) = match booking {
+        Some(b) => b,
+        None => {
+            let tmpl = state
+                .templates
+                .get_template("booking_action_error.html")
+                .unwrap();
+            let rendered = tmpl
                     .render(context! {
                         title => "Invalid link",
                         message => "This cancellation link is invalid, has expired, or the booking has already been cancelled.",
                     })
                     .unwrap_or_else(|e| format!("Template error: {}", e));
-                return Html(rendered).into_response();
-            }
-        };
+            return Html(rendered).into_response();
+        }
+    };
 
     // Cancel the booking
     let _ = sqlx::query("UPDATE bookings SET status = 'cancelled' WHERE id = ?")

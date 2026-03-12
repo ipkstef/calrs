@@ -179,17 +179,18 @@ fn sanitize_ics(value: &str) -> String {
 
 /// Convert date + start/end times from a guest timezone to UTC ICS format (YYYYMMDDTHHMMSSZ).
 /// Falls back to floating time (no Z) if timezone parsing fails.
-fn convert_to_utc(date: &str, start_time: &str, end_time: &str, timezone: &str) -> (String, String) {
+fn convert_to_utc(
+    date: &str,
+    start_time: &str,
+    end_time: &str,
+    timezone: &str,
+) -> (String, String) {
     let fallback_start = format!(
         "{}T{}00",
         date.replace('-', ""),
         start_time.replace(':', "")
     );
-    let fallback_end = format!(
-        "{}T{}00",
-        date.replace('-', ""),
-        end_time.replace(':', "")
-    );
+    let fallback_end = format!("{}T{}00", date.replace('-', ""), end_time.replace(':', ""));
 
     let tz: Tz = match timezone.parse() {
         Ok(t) => t,

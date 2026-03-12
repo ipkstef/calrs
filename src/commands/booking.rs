@@ -342,7 +342,16 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
             .await?;
 
             match booking {
-                Some((full_id, uid, guest_name, guest_email, start_at, end_at, event_title, guest_timezone)) => {
+                Some((
+                    full_id,
+                    uid,
+                    guest_name,
+                    guest_email,
+                    start_at,
+                    end_at,
+                    event_title,
+                    guest_timezone,
+                )) => {
                     let reason_input =
                         prompt("Reason for cancellation (optional, press Enter to skip)");
                     let reason = if reason_input.is_empty() {
