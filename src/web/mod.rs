@@ -5203,6 +5203,9 @@ fn compute_slots_from_rules(
     }
 
     result.sort_by(|a, b| a.date.cmp(&b.date));
+    for day in &mut result {
+        day.slots.sort_by(|a, b| a.start.cmp(&b.start));
+    }
     result
 }
 

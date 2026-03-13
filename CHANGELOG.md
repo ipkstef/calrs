@@ -86,6 +86,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-03-13
+
+### Fixed
+
+- **Slot ordering** — available time slots are now sorted by time within each day ([#10](https://github.com/olivierlambert/calrs/issues/10)). Previously, slots could appear out of order (e.g. afternoon before morning) when multiple availability windows were defined. Fixed in both web UI and CLI.
+
 ## [0.20.1] - 2026-03-13
 
 ### Changed

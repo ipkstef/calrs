@@ -330,6 +330,7 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
                 }
 
                 if !slots.is_empty() {
+                    slots.sort();
                     let day_name = date.format("%a %Y-%m-%d").to_string();
                     println!("{}:", day_name.bold());
                     for slot in &slots {
