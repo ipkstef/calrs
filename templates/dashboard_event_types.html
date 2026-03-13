@@ -12,8 +12,8 @@
       <div class="et-info">
         <strong>{{ et.title }}</strong>
         <span style="color: var(--text-muted); font-size: 0.85rem;">&middot; {{ et.duration_min }}min</span>
-        {% if not et.enabled %}<span style="color: var(--error-text); font-size: 0.8rem;"> (disabled)</span>{% endif %}
-        {% if et.requires_confirmation %}<span style="color: var(--text-muted); font-size: 0.8rem;"> (requires confirmation)</span>{% endif %}
+        {% if not et.enabled %}<span class="badge badge-disabled">disabled</span>{% endif %}
+        {% if et.requires_confirmation %}<span class="badge badge-requires">requires confirmation</span>{% endif %}
       </div>
       <div class="et-actions">
         <a href="/dashboard/event-types/{{ et.slug }}/edit" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Edit</a>
@@ -31,7 +31,10 @@
     </div>
     {% endfor %}
   {% else %}
-    <p class="empty" style="padding: 1rem;">No event types yet. <a href="/dashboard/event-types/new" style="color: var(--accent); text-decoration: none;">Create one</a> to start accepting bookings.</p>
+    <div class="empty" style="padding: 2rem 1rem;">
+      <div class="empty-icon">&#128197;</div>
+      <div class="empty-text">No event types yet. <a href="/dashboard/event-types/new" style="color: var(--accent); text-decoration: none;">Create one</a> to start accepting bookings.</div>
+    </div>
   {% endif %}
 </div>
 
@@ -46,7 +49,7 @@
     <div class="et-info">
       <strong>{{ et.title }}</strong>
       <span style="color: var(--text-muted); font-size: 0.85rem;">&middot; {{ et.group_name }} &middot; {{ et.duration_min }}min</span>
-      {% if not et.enabled %}<span style="color: var(--error-text); font-size: 0.8rem;"> (disabled)</span>{% endif %}
+      {% if not et.enabled %}<span class="badge badge-disabled">disabled</span>{% endif %}
     </div>
     <div class="et-actions">
       <a href="/g/{{ et.group_slug }}/{{ et.slug }}" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">View</a>
@@ -60,7 +63,10 @@
     <h2 style="margin-bottom: 0;">Group event types</h2>
     <a href="/dashboard/group-event-types/new" class="slot-btn" style="text-decoration: none; font-size: 0.85rem; font-weight: 600; color: var(--accent); border-color: var(--accent);">+ New</a>
   </div>
-  <p class="empty" style="padding: 1rem;">No group event types yet.</p>
+  <div class="empty" style="padding: 2rem 1rem;">
+    <div class="empty-icon">&#128101;</div>
+    <div class="empty-text">No group event types yet.</div>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

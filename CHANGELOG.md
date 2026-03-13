@@ -81,9 +81,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Regression tests | 0.19.0 | 28 new tests (191 → 219) covering ICS, validation, CSRF |
 | ICS attendee names | 0.19.0 | Calendar events show "{title} — {guest} & {host}" with guest notes in description |
 | Host confirmation email | 0.19.0 | Host receives booking confirmed email (without ICS) after approving pending bookings |
+| UX polish | 0.20.0 | Clickable dashboard cards, hover animations, status badges, gradient profile header, admin search/filter |
 | ICS time fix | 0.19.0 | Correct UTC times in ICS when confirming/cancelling bookings from the database |
 
 ## [Unreleased]
+
+## [0.20.0] - 2026-03-13
+
+### Added
+
+- **Clickable dashboard cards** — stat tiles (Event Types, Upcoming Bookings, Pending Approval, Calendar Sources) are now links to their respective dashboard pages
+- **Public page link opens in new tab** — the `/u/{username}` link on the dashboard overview now opens in a new tab
+- **Admin search/filter** — users list has a live filter by name or email; groups list has a live filter by name
+- **Status badges** — "disabled" and "requires confirmation" on event types are now colored pill badges (red/amber) instead of plain text; pending bookings show an amber "pending" badge
+- **Card hover lift** — interactive cards (stat tiles, profile event types, group event types) lift with a shadow on hover
+- **Page fade-in animation** — subtle 0.3s fade-in + slide-up on every page load
+- **Slot button hover scale** — time slot buttons scale up slightly (1.03×) on hover for a tactile feel
+- **Colored left border** — event type cards on public profile and group pages have a 3px accent-colored left border
+- **Profile gradient banner** — public profile page has a blue-to-purple gradient header behind the avatar
+- **Animated checkmark** — confirmation page checkmark bounces in with a scale animation
+- **Better empty states** — empty listings (bookings, event types, slots) show a larger icon + descriptive text instead of a plain line
+- **Rust crab branding** — "Powered by calrs" footer now includes the 🦀 emoji on all pages
 
 ## [0.19.1] - 2026-03-13
 

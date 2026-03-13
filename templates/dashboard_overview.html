@@ -8,7 +8,7 @@
   </p>
   {% if username %}
   <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
-    Public page: <a href="/u/{{ username }}" style="color: var(--accent); text-decoration: none;">/u/{{ username }}</a>
+    Public page: <a href="/u/{{ username }}" target="_blank" rel="noopener" style="color: var(--accent); text-decoration: none;">/u/{{ username }}</a>
   </p>
   {% endif %}
 </div>
@@ -23,22 +23,22 @@
 {% endif %}
 
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
-  <div class="card" style="text-align: center; padding: 1.25rem;">
+  <a href="/dashboard/event-types" class="card" style="text-align: center; padding: 1.25rem; text-decoration: none; color: inherit;">
     <div style="font-size: 1.75rem; font-weight: 700; color: var(--accent);">{{ event_type_count }}</div>
     <div style="font-size: 0.85rem; color: var(--text-muted);">Event Types</div>
-  </div>
-  <div class="card" style="text-align: center; padding: 1.25rem;">
+  </a>
+  <a href="/dashboard/bookings" class="card" style="text-align: center; padding: 1.25rem; text-decoration: none; color: inherit;">
     <div style="font-size: 1.75rem; font-weight: 700; color: var(--accent);">{{ upcoming_count }}</div>
     <div style="font-size: 0.85rem; color: var(--text-muted);">Upcoming Bookings</div>
-  </div>
-  <div class="card" style="text-align: center; padding: 1.25rem;">
+  </a>
+  <a href="/dashboard/bookings" class="card" style="text-align: center; padding: 1.25rem; text-decoration: none; color: inherit;">
     <div style="font-size: 1.75rem; font-weight: 700; color: var(--accent);">{{ pending_count }}</div>
     <div style="font-size: 0.85rem; color: var(--text-muted);">Pending Approval</div>
-  </div>
-  <div class="card" style="text-align: center; padding: 1.25rem;">
+  </a>
+  <a href="/dashboard/sources" class="card" style="text-align: center; padding: 1.25rem; text-decoration: none; color: inherit;">
     <div style="font-size: 1.75rem; font-weight: 700; color: var(--accent);">{{ source_count }}</div>
     <div style="font-size: 0.85rem; color: var(--text-muted);">Calendar Sources</div>
-  </div>
+  </a>
 </div>
 
 {% if pending_bookings %}
@@ -47,7 +47,7 @@
   {% for b in pending_bookings %}
   <div class="booking-row" {% if not loop.last %}style="border-bottom: 1px solid var(--border);"{% endif %}>
     <div class="booking-info">
-      <div><strong>{{ b.event_title }}</strong> with {{ b.guest_name }}</div>
+      <div><strong>{{ b.event_title }}</strong> with {{ b.guest_name }} <span class="badge badge-pending">pending</span></div>
       <div style="color: var(--text-muted); font-size: 0.85rem;">{{ b.start_at }}</div>
     </div>
     <div class="booking-actions">

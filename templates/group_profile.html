@@ -10,7 +10,7 @@
 
 {% if event_types %}
   {% for et in event_types %}
-  <a href="/g/{{ group_slug }}/{{ et.slug }}" class="card" style="display: block; text-decoration: none; color: inherit; transition: border-color 0.15s ease;">
+  <a href="/g/{{ group_slug }}/{{ et.slug }}" class="card" style="display: block; text-decoration: none; color: inherit; border-left: 3px solid var(--accent); padding-left: 1.75rem;">
     <div style="display: flex; justify-content: space-between; align-items: center;">
       <div>
         <strong>{{ et.title }}</strong>
@@ -19,13 +19,16 @@
         <p style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.25rem; margin-bottom: 0;">{{ et.description }}</p>
         {% endif %}
       </div>
-      <span style="color: var(--accent); font-size: 1.25rem;">&rarr;</span>
+      <span style="color: var(--accent); font-size: 1.25rem; transition: transform 0.15s ease;">&rarr;</span>
     </div>
   </a>
   {% endfor %}
 {% else %}
   <div class="card">
-    <p class="empty">No event types available.</p>
+    <div class="empty">
+      <div class="empty-icon">&#128197;</div>
+      <div class="empty-text">No event types available yet.</div>
+    </div>
   </div>
 {% endif %}
 {% endblock %}

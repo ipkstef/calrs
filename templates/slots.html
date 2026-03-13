@@ -80,7 +80,10 @@
     </div>
     {% endfor %}
   {% else %}
-    <p class="empty">No available slots this week. Try the next one.</p>
+    <div class="empty">
+      <div class="empty-icon">&#128347;</div>
+      <div class="empty-text">No available slots this week. Try the next one.</div>
+    </div>
   {% endif %}
 </div>
 

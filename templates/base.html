@@ -190,6 +190,7 @@
       color: var(--accent);
       background: var(--accent-subtle);
       box-shadow: var(--shadow);
+      transform: scale(1.03);
     }
 
     /* Form */
@@ -261,7 +262,22 @@
     .detail { margin-bottom: 0.625rem; color: var(--text-secondary); font-size: 0.925rem; }
     .detail strong { color: var(--text); }
 
-    .empty { color: var(--text-muted); text-align: center; padding: 2.5rem 1rem; }
+    .empty {
+      color: var(--text-muted);
+      text-align: center;
+      padding: 2.5rem 1rem;
+    }
+    .empty-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.75rem;
+      opacity: 0.5;
+    }
+    .empty-text {
+      font-size: 0.925rem;
+      max-width: 320px;
+      margin: 0 auto;
+      line-height: 1.5;
+    }
 
     .logo { text-align: center; margin-bottom: 1.5rem; }
     .logo img { max-height: 80px; max-width: 280px; object-fit: contain; }
@@ -318,6 +334,62 @@
       .week-nav { flex-wrap: wrap; gap: 0.5rem; }
       .week-nav .range { font-size: 0.8rem; }
     }
+
+    /* Page fade-in */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    body {
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    /* Interactive card hover lift */
+    a.card {
+      transition: border-color 0.15s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    }
+    a.card:hover {
+      border-color: var(--accent-border);
+      box-shadow: var(--shadow-lg);
+      transform: translateY(-2px);
+    }
+
+    /* Status badges */
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      letter-spacing: 0.02em;
+      vertical-align: middle;
+    }
+    .badge-disabled {
+      background: var(--error-bg);
+      color: var(--error-text);
+    }
+    .badge-pending {
+      background: rgba(245, 158, 11, 0.12);
+      color: #d97706;
+    }
+    .badge-confirmed {
+      background: rgba(22, 163, 74, 0.1);
+      color: var(--success);
+    }
+    .badge-requires {
+      background: rgba(245, 158, 11, 0.12);
+      color: #d97706;
+    }
+
+    /* Checkmark animation */
+    @keyframes checkPop {
+      0% { transform: scale(0); opacity: 0; }
+      60% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .check {
+      animation: checkPop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -333,7 +405,7 @@
   {% endif %}
   <div class="container">
     {% block content %}{% endblock %}
-    <p class="powered">Powered by <a href="https://github.com/olivierlambert/calrs">calrs</a></p>
+    <p class="powered">Powered by <a href="https://github.com/olivierlambert/calrs">calrs</a> 🦀</p>
   </div>
 <script>
 // CSRF protection: inject _csrf hidden field into all POST forms

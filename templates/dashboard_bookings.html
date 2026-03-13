@@ -45,7 +45,10 @@
     </div>
     {% endfor %}
   {% else %}
-    <p class="empty" style="padding: 1rem;">No upcoming bookings.</p>
+    <div class="empty" style="padding: 2rem 1rem;">
+      <div class="empty-icon">&#128203;</div>
+      <div class="empty-text">No upcoming bookings yet. They'll show up here once someone books a time with you.</div>
+    </div>
   {% endif %}
 </div>
 {% endblock %}
