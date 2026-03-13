@@ -4,4 +4,5 @@ target/
 *.db-wal
 .env
 .git/
-assets/
+assets/screenshot.png
+assets/screenshots/
