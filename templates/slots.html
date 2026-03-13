@@ -744,24 +744,9 @@
       icon.textContent = isDark() ? '\u2600\uFE0F' : '\uD83C\uDF19';
     }
     btn.addEventListener('click', function() {
-      var current = getTheme();
-      var next;
-      if (current === 'system') {
-        next = isDark() ? 'light' : 'dark';
-      } else {
-        var systemDark = matchMedia('(prefers-color-scheme:dark)').matches;
-        if ((current === 'dark' && !systemDark) || (current === 'light' && systemDark)) {
-          next = current === 'dark' ? 'light' : 'dark';
-        } else {
-          next = 'system';
-        }
-      }
-      if (next === 'system') {
-        localStorage.removeItem('calrs_theme');
-      } else {
-        localStorage.setItem('calrs_theme', next);
-      }
-      if (isDark()) {
+      var next = isDark() ? 'light' : 'dark';
+      localStorage.setItem('calrs_theme', next);
+      if (next === 'dark') {
         document.documentElement.classList.add('dark');
       } else {
         document.documentElement.classList.remove('dark');

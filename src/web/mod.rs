@@ -8391,7 +8391,7 @@ async fn serve_accent_css(State(state): State<Arc<AppState>>) -> impl IntoRespon
     axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "text/css; charset=utf-8")
-        .header("Cache-Control", "public, max-age=60")
+        .header("Cache-Control", "no-cache")
         .body(axum::body::Body::from(css))
         .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty()))
         .into_response()
