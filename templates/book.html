@@ -29,7 +29,7 @@
   </div>
 
   <div class="selected-summary">
-    <strong>{{ date_label }}</strong> &middot; {{ time_start }} – {{ time_end }}
+    <strong>{{ date_label }}</strong> &middot; <span class="book-time" data-time="{{ time_start }}">{{ time_start }}</span> – <span class="book-time" data-time="{{ time_end }}">{{ time_end }}</span>
   </div>
 
   {% if error %}
@@ -59,4 +59,19 @@
     <button type="submit" class="btn">Confirm booking</button>
   </form>
 </div>
+<script>
+(function() {
+  var fmt = localStorage.getItem('calrs_time_format') || '24';
+  if (fmt !== '12') return;
+  document.querySelectorAll('.book-time').forEach(function(el) {
+    var parts = el.dataset.time.split(':');
+    var h = parseInt(parts[0], 10);
+    var m = parts[1];
+    var suffix = h >= 12 ? 'PM' : 'AM';
+    if (h === 0) h = 12;
+    else if (h > 12) h -= 12;
+    el.textContent = h + ':' + m + ' ' + suffix;
+  });
+})();
+</script>
 {% endblock %}

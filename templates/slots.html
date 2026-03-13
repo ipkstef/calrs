@@ -45,13 +45,17 @@
   </div>
 
   {% if tz_options is defined and tz_options %}
-  <div style="margin: 1rem 0 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+  <div style="margin: 1rem 0 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
     <label for="tz-select" style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;">Timezone:</label>
     <select id="tz-select" style="padding: 0.375rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text); flex: 1; max-width: 300px;">
       {% for tz in tz_options %}
         <option value="{{ tz.value }}" {% if tz.selected %}selected{% endif %}>{{ tz.label }}</option>
       {% endfor %}
     </select>
+    <div id="time-format-toggle" style="display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; font-size: 0.8rem; margin-left: auto;">
+      <button type="button" data-format="24" style="padding: 0.3rem 0.6rem; border: none; cursor: pointer; font-family: inherit; font-size: 0.8rem; transition: all 0.15s ease;">24h</button>
+      <button type="button" data-format="12" style="padding: 0.3rem 0.6rem; border: none; border-left: 1px solid var(--border); cursor: pointer; font-family: inherit; font-size: 0.8rem; transition: all 0.15s ease;">12h</button>
+    </div>
   </div>
   {% endif %}
 
@@ -74,7 +78,7 @@
       <div class="slots">
         {% for slot in day.slots %}
           <a href="{{ base }}/book?date={{ slot.host_date | default(value=day.date) }}&time={{ slot.host_time | default(value=slot.start) }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}"
-             class="slot-btn">{{ slot.start }}</a>
+             class="slot-btn slot-time" data-time="{{ slot.start }}">{{ slot.start }}</a>
         {% endfor %}
       </div>
     </div>
@@ -112,6 +116,46 @@
     params.set('tz', select.value);
     window.location.search = params.toString();
   });
+
+  // --- 12/24h time format toggle ---
+  var toggle = document.getElementById('time-format-toggle');
+  if (!toggle) return;
+  var btns = toggle.querySelectorAll('button');
+  var format = localStorage.getItem('calrs_time_format') || '24';
+
+  function to12h(t) {
+    var parts = t.split(':');
+    var h = parseInt(parts[0], 10);
+    var m = parts[1];
+    var suffix = h >= 12 ? 'PM' : 'AM';
+    if (h === 0) h = 12;
+    else if (h > 12) h -= 12;
+    return h + ':' + m + ' ' + suffix;
+  }
+
+  function applyFormat(fmt) {
+    format = fmt;
+    localStorage.setItem('calrs_time_format', fmt);
+    btns.forEach(function(b) {
+      if (b.dataset.format === fmt) {
+        b.style.background = 'var(--accent)';
+        b.style.color = '#fff';
+      } else {
+        b.style.background = 'var(--surface)';
+        b.style.color = 'var(--text)';
+      }
+    });
+    document.querySelectorAll('.slot-time').forEach(function(el) {
+      var t24 = el.dataset.time;
+      el.textContent = fmt === '12' ? to12h(t24) : t24;
+    });
+  }
+
+  btns.forEach(function(b) {
+    b.addEventListener('click', function() { applyFormat(b.dataset.format); });
+  });
+
+  applyFormat(format);
 })();
 </script>
 {% endblock %}

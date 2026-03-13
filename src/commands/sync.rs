@@ -110,7 +110,7 @@ pub async fn sync_source(
                         sqlx::query(
                             "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id, timezone)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                             ON CONFLICT(uid, COALESCE(recurrence_id, '')) DO UPDATE SET
+                             ON CONFLICT(calendar_id, uid, COALESCE(recurrence_id, '')) DO UPDATE SET
                                summary = excluded.summary,
                                start_at = excluded.start_at,
                                end_at = excluded.end_at,

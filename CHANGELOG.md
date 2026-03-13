@@ -86,6 +86,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-03-13
+
+### Fixed
+
+- **Shared event visibility** — recurring events synced by multiple users (attendees of the same meeting) were invisible to some users' availability. The unique constraint on events was global instead of per-calendar, causing `ON CONFLICT` upserts to overwrite the `calendar_id` to whichever user synced last. Now each user's calendar gets its own copy of the event.
+
+### Added
+
+- **12/24h time format toggle** — slot pages show a 24h/12h toggle (default: 24h), persisted in `localStorage`. Applies to slot picker, booking form, and confirmation page.
+- **Minimum notice unit selector** — event type and team link forms now show a number + unit dropdown (minutes/hours/days) instead of raw minutes. Auto-detects the best unit when editing.
+- **Group event type management** — Edit, Disable/Enable, and Delete buttons for group event types ([#11](https://github.com/olivierlambert/calrs/issues/11)).
+
 ## [0.20.3] - 2026-03-13
 
 ### Added

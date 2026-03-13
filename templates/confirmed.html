@@ -20,7 +20,7 @@
 <div class="card">
   <div class="detail"><strong>Event:</strong> {{ event_title }}</div>
   <div class="detail"><strong>Date:</strong> {{ date_label }}</div>
-  <div class="detail"><strong>Time:</strong> {{ time_start }} – {{ time_end }}</div>
+  <div class="detail"><strong>Time:</strong> <span class="book-time" data-time="{{ time_start }}">{{ time_start }}</span> – <span class="book-time" data-time="{{ time_end }}">{{ time_end }}</span></div>
   <div class="detail"><strong>With:</strong> {{ host_name }}</div>
   {% if location_value %}
     <div class="detail"><strong>Location:</strong> {% if location_type == "link" %}<a href="{{ location_value }}" target="_blank" style="color: var(--accent); text-decoration: none;">{{ location_value }}</a>{% else %}{{ location_value }}{% endif %}</div>
@@ -29,4 +29,19 @@
     <div class="detail"><strong>Notes:</strong> {{ notes }}</div>
   {% endif %}
 </div>
+<script>
+(function() {
+  var fmt = localStorage.getItem('calrs_time_format') || '24';
+  if (fmt !== '12') return;
+  document.querySelectorAll('.book-time').forEach(function(el) {
+    var parts = el.dataset.time.split(':');
+    var h = parseInt(parts[0], 10);
+    var m = parts[1];
+    var suffix = h >= 12 ? 'PM' : 'AM';
+    if (h === 0) h = 12;
+    else if (h > 12) h -= 12;
+    el.textContent = h + ':' + m + ' ' + suffix;
+  });
+})();
+</script>
 {% endblock %}
