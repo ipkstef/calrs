@@ -240,7 +240,11 @@
     <span>{{ event_type.duration_min }} min</span>
     {% if not (host_user_id is defined and host_user_id) %}<span>{{ host_name }}</span>{% endif %}
     {% if event_type.location_value is defined and event_type.location_value %}
-      <span>{{ event_type.location_value }}</span>
+      {% if event_type.location_type is defined and event_type.location_type == "in_person" %}
+        <span>{{ event_type.location_value }}</span>
+      {% else %}
+        <span>{% if event_type.location_type == "link" %}Video call{% elif event_type.location_type == "phone" %}Phone call{% else %}{{ event_type.location_type }}{% endif %}</span>
+      {% endif %}
     {% endif %}
   </div>
 
