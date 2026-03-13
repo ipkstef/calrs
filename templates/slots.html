@@ -16,11 +16,211 @@
 
 <div class="logo"><img src="/logo" alt="" onerror="this.parentElement.style.display='none'"></div>
 
+<style>
+  .slots-layout {
+    display: flex;
+    gap: 2rem;
+    margin-top: 1.25rem;
+  }
+  .cal-panel {
+    flex: 1;
+    min-width: 0;
+  }
+  .cal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .cal-header-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+  .cal-header-title span {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+  .cal-nav {
+    display: flex;
+    gap: 0.25rem;
+  }
+  .cal-nav a, .cal-nav span.disabled {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.85rem;
+    transition: all 0.15s ease;
+  }
+  .cal-nav a:hover {
+    border-color: var(--border-hover);
+    background: var(--surface-hover);
+  }
+  .cal-nav span.disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  .cal-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 0;
+    margin-bottom: 0.25rem;
+  }
+  .cal-weekday {
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 0.375rem 0;
+  }
+  .cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+  .cal-cell {
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: default;
+    position: relative;
+    transition: all 0.15s ease;
+    color: var(--text-muted);
+  }
+  .cal-cell.has-slots {
+    color: var(--text);
+    background: var(--surface-hover);
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .cal-cell.has-slots:hover {
+    background: var(--accent-subtle);
+  }
+  .cal-cell.selected {
+    background: var(--accent) !important;
+    color: #fff !important;
+  }
+  .cal-cell.today:not(.selected) {
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .cal-cell.past {
+    opacity: 0.3;
+  }
+  .cal-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--success);
+    position: absolute;
+    bottom: 4px;
+  }
+  .cal-cell.selected .cal-dot {
+    background: rgba(255,255,255,0.7);
+  }
+
+  /* Slot panel */
+  .slot-panel {
+    flex: 0 0 280px;
+    min-width: 0;
+  }
+  .slot-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .slot-panel-title {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .slot-panel-title span {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+  }
+  .slot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .slot-pill {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.925rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+  .slot-pill:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-subtle);
+    box-shadow: var(--shadow);
+  }
+  .slot-pill:active {
+    transform: scale(0.97);
+  }
+  .slot-pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    flex-shrink: 0;
+  }
+  .slot-empty {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+  }
+  .slot-empty-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+  }
+
+  @media (max-width: 640px) {
+    .slots-layout {
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .slot-panel {
+      flex: none;
+      width: 100%;
+    }
+    .slot-list {
+      max-height: none;
+    }
+  }
+</style>
+
 <div class="card">
-  {% if host_user_id %}
+  {% if host_user_id is defined and host_user_id %}
   <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
     <div style="width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.85rem; flex-shrink: 0; overflow: hidden;">
-      {% if host_has_avatar %}
+      {% if host_has_avatar is defined and host_has_avatar %}
         <img src="/avatar/{{ host_user_id }}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
       {% else %}
         {{ host_initials }}
@@ -28,18 +228,18 @@
     </div>
     <div style="min-width: 0;">
       <div style="font-weight: 600; font-size: 0.925rem;">{{ host_name }}</div>
-      {% if host_title %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ host_title }}</div>{% endif %}
+      {% if host_title is defined and host_title %}<div style="font-size: 0.8rem; color: var(--text-muted);">{{ host_title }}</div>{% endif %}
     </div>
   </div>
   {% endif %}
   <h1>{{ event_type.title }}</h1>
-  {% if event_type.description %}
+  {% if event_type.description is defined and event_type.description %}
     <p class="subtitle">{{ event_type.description }}</p>
   {% endif %}
   <div class="meta">
     <span>{{ event_type.duration_min }} min</span>
-    {% if not host_user_id %}<span>{{ host_name }}</span>{% endif %}
-    {% if event_type.location_value %}
+    {% if not (host_user_id is defined and host_user_id) %}<span>{{ host_name }}</span>{% endif %}
+    {% if event_type.location_value is defined and event_type.location_value %}
       <span>{{ event_type.location_value }}</span>
     {% endif %}
   </div>
@@ -59,69 +259,75 @@
   </div>
   {% endif %}
 
-  <div class="week-nav">
-    <span class="range">{{ range_label }}</span>
-    <div class="nav-links">
-      {% if prev_week is defined and prev_week is not none %}
-        <a href="{{ base }}?week={{ prev_week }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}">&larr;</a>
-      {% else %}
-        <span class="disabled">&larr;</span>
-      {% endif %}
-      <a href="{{ base }}?week={{ next_week }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}">&rarr;</a>
-    </div>
-  </div>
+  <div class="slots-layout">
+    <!-- Month calendar panel -->
+    <div class="cal-panel">
+      <div class="cal-header">
+        <div class="cal-header-title">{{ month_label }}</div>
+        <div class="cal-nav">
+          {% if prev_month is defined and prev_month %}
+            <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}">&larr;</a>
+          {% else %}
+            <span class="disabled">&larr;</span>
+          {% endif %}
+          <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}">&rarr;</a>
+        </div>
+      </div>
 
-  {% if days %}
-    {% for day in days %}
-    <div class="day">
-      <div class="day-label">{{ day.label }}</div>
-      <div class="slots">
-        {% for slot in day.slots %}
-          <a href="{{ base }}/book?date={{ slot.host_date | default(value=day.date) }}&time={{ slot.host_time | default(value=slot.start) }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}"
-             class="slot-btn slot-time" data-time="{{ slot.start }}">{{ slot.start }}</a>
-        {% endfor %}
+      <div class="cal-weekdays">
+        <div class="cal-weekday">Mon</div>
+        <div class="cal-weekday">Tue</div>
+        <div class="cal-weekday">Wed</div>
+        <div class="cal-weekday">Thu</div>
+        <div class="cal-weekday">Fri</div>
+        <div class="cal-weekday">Sat</div>
+        <div class="cal-weekday">Sun</div>
+      </div>
+
+      <div class="cal-grid" id="cal-grid"></div>
+    </div>
+
+    <!-- Slot list panel -->
+    <div class="slot-panel">
+      <div class="slot-panel-header">
+        <div class="slot-panel-title" id="slot-panel-title">Select a date</div>
+      </div>
+      <div class="slot-list" id="slot-list">
+        <div class="slot-empty">
+          <div class="slot-empty-icon">&#128197;</div>
+          <div>Click a highlighted date to see available times</div>
+        </div>
       </div>
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty">
-      <div class="empty-icon">&#128347;</div>
-      <div class="empty-text">No available slots this week. Try the next one.</div>
-    </div>
-  {% endif %}
+  </div>
 </div>
 
 <script>
 (function() {
-  var select = document.getElementById('tz-select');
-  if (!select) return;
+  var slotData = {
+    {% for day in days %}
+    "{{ day.date }}": [
+      {% for slot in day.slots %}
+      { start: "{{ slot.start }}", hostDate: "{{ slot.host_date }}", hostTime: "{{ slot.host_time }}" }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]{% if not loop.last %},{% endif %}
+    {% endfor %}
+  };
 
-  var params = new URLSearchParams(window.location.search);
-  if (!params.has('tz')) {
-    var detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (detected) {
-      var found = false;
-      for (var i = 0; i < select.options.length; i++) {
-        if (select.options[i].value === detected) { found = true; break; }
-      }
-      if (found && detected !== select.value) {
-        params.set('tz', detected);
-        window.location.search = params.toString();
-        return;
-      }
-    }
-  }
+  var availableDates = {
+    {% for d in available_dates %}"{{ d }}": true{% if not loop.last %},{% endif %}{% endfor %}
+  };
 
-  select.addEventListener('change', function() {
-    params.set('tz', select.value);
-    window.location.search = params.toString();
-  });
+  var firstWeekday = {{ first_weekday }};
+  var daysInMonth = {{ days_in_month }};
+  var todayDate = "{{ today_date }}";
+  var monthYear = "{{ month_year }}";
+  var basePath = "{{ base }}";
+  var guestTz = "{{ guest_tz }}";
+  var inviteToken = "{{ invite_token | default(value='') }}";
 
-  // --- 12/24h time format toggle ---
-  var toggle = document.getElementById('time-format-toggle');
-  if (!toggle) return;
-  var btns = toggle.querySelectorAll('button');
   var format = localStorage.getItem('calrs_time_format') || '24';
+  var dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   function to12h(t) {
     var parts = t.split(':');
@@ -133,29 +339,139 @@
     return h + ':' + m + ' ' + suffix;
   }
 
-  function applyFormat(fmt) {
-    format = fmt;
-    localStorage.setItem('calrs_time_format', fmt);
+  function formatTime(t) {
+    return format === '12' ? to12h(t) : t;
+  }
+
+  // Time format toggle
+  var toggle = document.getElementById('time-format-toggle');
+  if (toggle) {
+    var btns = toggle.querySelectorAll('button');
+    function applyToggleStyle() {
+      btns.forEach(function(b) {
+        if (b.dataset.format === format) {
+          b.style.background = 'var(--accent)';
+          b.style.color = '#fff';
+        } else {
+          b.style.background = 'var(--surface)';
+          b.style.color = 'var(--text)';
+        }
+      });
+    }
     btns.forEach(function(b) {
-      if (b.dataset.format === fmt) {
-        b.style.background = 'var(--accent)';
-        b.style.color = '#fff';
-      } else {
-        b.style.background = 'var(--surface)';
-        b.style.color = 'var(--text)';
-      }
+      b.addEventListener('click', function() {
+        format = b.dataset.format;
+        localStorage.setItem('calrs_time_format', format);
+        applyToggleStyle();
+        if (selectedDate) selectDay(selectedDate);
+      });
     });
-    document.querySelectorAll('.slot-time').forEach(function(el) {
-      var t24 = el.dataset.time;
-      el.textContent = fmt === '12' ? to12h(t24) : t24;
+    applyToggleStyle();
+  }
+
+  // Timezone auto-detect + change
+  var select = document.getElementById('tz-select');
+  if (select) {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has('tz')) {
+      var detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (detected) {
+        var found = false;
+        for (var i = 0; i < select.options.length; i++) {
+          if (select.options[i].value === detected) { found = true; break; }
+        }
+        if (found && detected !== select.value) {
+          params.set('tz', detected);
+          window.location.search = params.toString();
+          return;
+        }
+      }
+    }
+    select.addEventListener('change', function() {
+      params.set('tz', select.value);
+      window.location.search = params.toString();
     });
   }
 
-  btns.forEach(function(b) {
-    b.addEventListener('click', function() { applyFormat(b.dataset.format); });
-  });
+  // Build calendar grid
+  var grid = document.getElementById('cal-grid');
+  var selectedDate = null;
 
-  applyFormat(format);
+  for (var i = 0; i < firstWeekday; i++) {
+    var empty = document.createElement('div');
+    empty.className = 'cal-cell';
+    grid.appendChild(empty);
+  }
+
+  for (var d = 1; d <= daysInMonth; d++) {
+    var dateStr = monthYear + '-' + (d < 10 ? '0' : '') + d;
+    var cell = document.createElement('div');
+    cell.className = 'cal-cell';
+    cell.textContent = d;
+    cell.dataset.date = dateStr;
+
+    if (dateStr < todayDate) {
+      cell.classList.add('past');
+    } else if (availableDates[dateStr]) {
+      cell.classList.add('has-slots');
+      var dot = document.createElement('div');
+      dot.className = 'cal-dot';
+      cell.appendChild(dot);
+    }
+
+    if (dateStr === todayDate) {
+      cell.classList.add('today');
+    }
+
+    if (cell.classList.contains('has-slots')) {
+      cell.addEventListener('click', (function(ds) {
+        return function() { selectDay(ds); };
+      })(dateStr));
+    }
+
+    grid.appendChild(cell);
+  }
+
+  // Select day and show slots
+  function selectDay(dateStr) {
+    selectedDate = dateStr;
+
+    var cells = grid.querySelectorAll('.cal-cell');
+    cells.forEach(function(c) { c.classList.remove('selected'); });
+    var target = grid.querySelector('[data-date="' + dateStr + '"]');
+    if (target) target.classList.add('selected');
+
+    var parts = dateStr.split('-');
+    var dt = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    var dayName = dayLabels[dt.getDay()];
+    var titleEl = document.getElementById('slot-panel-title');
+    titleEl.innerHTML = dayName + ' <span>' + parts[2] + '</span>';
+
+    var listEl = document.getElementById('slot-list');
+    var slots = slotData[dateStr];
+
+    if (!slots || slots.length === 0) {
+      listEl.innerHTML = '<div class="slot-empty"><div class="slot-empty-icon">&#128347;</div><div>No available times this day</div></div>';
+      return;
+    }
+
+    var html = '';
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      var href = basePath + '/book?date=' + encodeURIComponent(s.hostDate) + '&time=' + encodeURIComponent(s.hostTime);
+      if (guestTz) href += '&tz=' + encodeURIComponent(guestTz);
+      if (inviteToken) href += '&invite=' + encodeURIComponent(inviteToken);
+      html += '<a href="' + href + '" class="slot-pill"><span class="slot-pill-dot"></span>' + formatTime(s.start) + '</a>';
+    }
+    listEl.innerHTML = html;
+  }
+
+  // Auto-select first available date
+  var firstAvail = null;
+  for (var key in availableDates) {
+    if (!firstAvail || key < firstAvail) firstAvail = key;
+  }
+  if (firstAvail) selectDay(firstAvail);
 })();
 </script>
 {% endblock %}

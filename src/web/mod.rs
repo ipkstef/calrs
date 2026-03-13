@@ -2387,9 +2387,18 @@ async fn show_team_link_slots(
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let guest_tz_name = guest_tz.name().to_string();
 
-    let week = query.week.unwrap_or(0).max(0);
-    let days_per_page = 7;
-    let start_offset = week * days_per_page;
+    let (year, mo) = parse_month_param(query.month.as_deref(), guest_tz);
+    let (
+        start_offset,
+        days_ahead,
+        month_label,
+        prev_month,
+        next_month,
+        first_weekday,
+        days_in_month,
+        today_date,
+        month_year,
+    ) = build_month_params(year, mo, host_tz, guest_tz);
 
     // Sync all members' calendars if stale
     for (uid, _) in &members {
@@ -2398,7 +2407,7 @@ async fn show_team_link_slots(
 
     // Build Team busy source: fetch busy times per member
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
 
     let mut member_busy = HashMap::new();
@@ -2427,14 +2436,11 @@ async fn show_team_link_slots(
         buf_after,
         min_notice,
         start_offset,
-        days_per_page,
+        days_ahead,
         host_tz,
         guest_tz,
         busy,
     );
-
-    let prev_week = if week > 0 { Some(week - 1) } else { None };
-    let next_week = week + 1;
 
     let days_ctx: Vec<minijinja::Value> = slot_days
         .iter()
@@ -2450,14 +2456,7 @@ async fn show_team_link_slots(
         })
         .collect();
 
-    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
-    let range_start = now_guest.date() + Duration::days(start_offset as i64);
-    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
-    let range_label = format!(
-        "{} – {}",
-        range_start.format("%b %-d"),
-        range_end.format("%b %-d, %Y")
-    );
+    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
 
     let tz_options: Vec<minijinja::Value> = common_timezones()
         .iter()
@@ -2480,9 +2479,14 @@ async fn show_team_link_slots(
             host_name => host_name,
             team_token => token,
             days => days_ctx,
-            prev_week => prev_week,
-            next_week => next_week,
-            range_label => range_label,
+            available_dates => available_dates,
+            month_label => month_label,
+            month_year => month_year,
+            prev_month => prev_month,
+            next_month => next_month,
+            first_weekday => first_weekday,
+            days_in_month => days_in_month,
+            today_date => today_date,
             guest_tz => guest_tz_name,
             tz_options => tz_options,
         })
@@ -4381,13 +4385,22 @@ async fn show_group_slots(
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let guest_tz_name = guest_tz.name().to_string();
 
-    let week = query.week.unwrap_or(0).max(0);
-    let days_per_page = 7;
-    let start_offset = week * days_per_page;
+    let (year, month) = parse_month_param(query.month.as_deref(), guest_tz);
+    let (
+        start_offset,
+        days_ahead,
+        month_label,
+        prev_month,
+        next_month,
+        first_weekday,
+        days_in_month,
+        today_date,
+        month_year,
+    ) = build_month_params(year, month, host_tz, guest_tz);
 
     // Build group busy source: fetch busy times per member
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
 
     let group_id: Option<String> =
@@ -4452,14 +4465,12 @@ async fn show_group_slots(
         buf_after,
         min_notice,
         start_offset,
-        days_per_page,
+        days_ahead,
         host_tz,
         guest_tz,
         busy,
     )
     .await;
-    let prev_week = if week > 0 { Some(week - 1) } else { None };
-    let next_week = week + 1;
 
     let days_ctx: Vec<minijinja::Value> = slot_days
         .iter()
@@ -4473,14 +4484,7 @@ async fn show_group_slots(
         })
         .collect();
 
-    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
-    let range_start = now_guest.date() + Duration::days(start_offset as i64);
-    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
-    let range_label = format!(
-        "{} – {}",
-        range_start.format("%b %-d"),
-        range_end.format("%b %-d, %Y")
-    );
+    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
 
     let tz_options: Vec<minijinja::Value> = common_timezones()
         .iter()
@@ -4504,9 +4508,14 @@ async fn show_group_slots(
             host_name => group_name,
             group_slug => group_slug,
             days => days_ctx,
-            prev_week => prev_week,
-            next_week => next_week,
-            range_label => range_label,
+            available_dates => available_dates,
+            month_label => month_label,
+            month_year => month_year,
+            prev_month => prev_month,
+            next_month => next_month,
+            first_weekday => first_weekday,
+            days_in_month => days_in_month,
+            today_date => today_date,
             guest_tz => guest_tz_name,
             tz_options => tz_options,
             invite_token => query.invite.as_deref().unwrap_or(""),
@@ -5085,11 +5094,21 @@ async fn show_slots_for_user(
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let guest_tz_name = guest_tz.name().to_string();
 
-    let week = query.week.unwrap_or(0).max(0);
-    let days_per_page = 7;
-    let start_offset = week * days_per_page;
+    let (year, month) = parse_month_param(query.month.as_deref(), guest_tz);
+    let (
+        start_offset,
+        days_ahead,
+        month_label,
+        prev_month,
+        next_month,
+        first_weekday,
+        days_in_month,
+        today_date,
+        month_year,
+    ) = build_month_params(year, month, host_tz, guest_tz);
+
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
     let busy = BusySource::Individual(
         fetch_busy_times_for_user(
@@ -5110,14 +5129,12 @@ async fn show_slots_for_user(
         buf_after,
         min_notice,
         start_offset,
-        days_per_page,
+        days_ahead,
         host_tz,
         guest_tz,
         busy,
     )
     .await;
-    let prev_week = if week > 0 { Some(week - 1) } else { None };
-    let next_week = week + 1;
 
     let days_ctx: Vec<minijinja::Value> = slot_days
         .iter()
@@ -5131,14 +5148,7 @@ async fn show_slots_for_user(
         })
         .collect();
 
-    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
-    let range_start = now_guest.date() + Duration::days(start_offset as i64);
-    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
-    let range_label = format!(
-        "{} – {}",
-        range_start.format("%b %-d"),
-        range_end.format("%b %-d, %Y")
-    );
+    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
 
     let tz_options: Vec<minijinja::Value> = common_timezones()
         .iter()
@@ -5166,9 +5176,14 @@ async fn show_slots_for_user(
             host_initials => compute_initials(&host_name),
             username => username,
             days => days_ctx,
-            prev_week => prev_week,
-            next_week => next_week,
-            range_label => range_label,
+            available_dates => available_dates,
+            month_label => month_label,
+            month_year => month_year,
+            prev_month => prev_month,
+            next_month => next_month,
+            first_weekday => first_weekday,
+            days_in_month => days_in_month,
+            today_date => today_date,
             guest_tz => guest_tz_name,
             tz_options => tz_options,
             invite_token => query.invite.as_deref().unwrap_or(""),
@@ -6070,11 +6085,119 @@ fn compute_slots_from_rules(
 #[derive(Deserialize)]
 struct SlotsQuery {
     #[serde(default)]
-    week: Option<i32>,
+    month: Option<String>,
     #[serde(default)]
     tz: Option<String>,
     #[serde(default)]
     invite: Option<String>,
+}
+
+/// Parse a "YYYY-MM" month param, returning (year, month_1indexed). Defaults to current month in guest TZ.
+fn parse_month_param(param: Option<&str>, guest_tz: Tz) -> (i32, u32) {
+    if let Some(s) = param {
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() == 2 {
+            if let (Ok(y), Ok(m)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>()) {
+                if (1..=12).contains(&m) {
+                    return (y, m);
+                }
+            }
+        }
+    }
+    let now = Utc::now().with_timezone(&guest_tz).naive_local();
+    (now.date().year(), now.date().month())
+}
+
+/// Build month-based slot computation parameters and context variables.
+/// Returns (start_offset, days_ahead, month_label, prev_month, next_month, first_weekday, days_in_month, today_date, month_year)
+fn build_month_params(
+    year: i32,
+    month: u32,
+    host_tz: Tz,
+    guest_tz: Tz,
+) -> (
+    i32,
+    i32,
+    String,
+    Option<String>,
+    String,
+    u32,
+    u32,
+    String,
+    String,
+) {
+    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let today_guest = now_guest.date();
+
+    let month_start = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let month_end = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+    } - Duration::days(1);
+
+    let days_in_month = (month_end - month_start).num_days() as u32 + 1;
+
+    // Compute start_offset and days_ahead relative to host's today
+    let host_today = now_host.date();
+    let start_offset = (month_start - host_today).num_days().max(0) as i32;
+    let end_offset = (month_end - host_today).num_days() as i32 + 2; // +2 buffer for TZ edge cases
+    let days_ahead = (end_offset - start_offset).max(1);
+
+    let month_names = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let month_label = format!("{} {}", month_names[(month - 1) as usize], year);
+    let month_year = format!("{}-{:02}", year, month);
+
+    // prev_month: None if viewing current month or earlier
+    let current_month_start =
+        NaiveDate::from_ymd_opt(today_guest.year(), today_guest.month(), 1).unwrap();
+    let prev_month = if month_start > current_month_start {
+        let (py, pm) = if month == 1 {
+            (year - 1, 12)
+        } else {
+            (year, month - 1)
+        };
+        Some(format!("{}-{:02}", py, pm))
+    } else {
+        None
+    };
+
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let next_month = format!("{}-{:02}", ny, nm);
+
+    // Monday = 0 for the grid
+    let first_weekday = month_start.weekday().num_days_from_monday();
+    let today_date = today_guest.format("%Y-%m-%d").to_string();
+
+    (
+        start_offset,
+        days_ahead,
+        month_label,
+        prev_month,
+        next_month,
+        first_weekday,
+        days_in_month,
+        today_date,
+        month_year,
+    )
 }
 
 /// Parse a timezone string into a Tz, falling back to server local.
@@ -6175,11 +6298,21 @@ async fn show_slots(
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let guest_tz_name = guest_tz.name().to_string();
 
-    let week = query.week.unwrap_or(0).max(0);
-    let days_per_page = 7;
-    let start_offset = week * days_per_page;
+    let (year, mo) = parse_month_param(query.month.as_deref(), guest_tz);
+    let (
+        start_offset,
+        days_ahead,
+        month_label,
+        prev_month,
+        next_month,
+        first_weekday,
+        days_in_month,
+        today_date,
+        month_year,
+    ) = build_month_params(year, mo, host_tz, guest_tz);
+
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_per_page) as i64);
+    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
     let busy = BusySource::Individual(
         fetch_busy_times_for_user(
@@ -6200,14 +6333,12 @@ async fn show_slots(
         buf_after,
         min_notice,
         start_offset,
-        days_per_page,
+        days_ahead,
         host_tz,
         guest_tz,
         busy,
     )
     .await;
-    let prev_week = if week > 0 { Some(week - 1) } else { None };
-    let next_week = week + 1;
 
     let days_ctx: Vec<minijinja::Value> = slot_days
         .iter()
@@ -6221,14 +6352,7 @@ async fn show_slots(
         })
         .collect();
 
-    let now_guest = Utc::now().with_timezone(&guest_tz).naive_local();
-    let range_start = now_guest.date() + Duration::days(start_offset as i64);
-    let range_end = now_guest.date() + Duration::days((start_offset + days_per_page - 1) as i64);
-    let range_label = format!(
-        "{} – {}",
-        range_start.format("%b %-d"),
-        range_end.format("%b %-d, %Y")
-    );
+    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
 
     let tz_options: Vec<minijinja::Value> = common_timezones()
         .iter()
@@ -6253,9 +6377,14 @@ async fn show_slots(
             host_has_avatar => host_avatar_path.is_some(),
             host_initials => compute_initials(&host_name),
             days => days_ctx,
-            prev_week => prev_week,
-            next_week => next_week,
-            range_label => range_label,
+            available_dates => available_dates,
+            month_label => month_label,
+            month_year => month_year,
+            prev_month => prev_month,
+            next_month => next_month,
+            first_weekday => first_weekday,
+            days_in_month => days_in_month,
+            today_date => today_date,
             guest_tz => guest_tz_name,
             tz_options => tz_options,
         })
