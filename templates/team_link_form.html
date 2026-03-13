@@ -16,6 +16,11 @@
       <input type="text" id="title" name="title" required value="{{ form_title }}" placeholder="e.g. Product demo with sales team">
     </div>
 
+    <div class="form-group">
+      <label for="description">Description <span class="hint">(optional)</span></label>
+      <textarea id="description" name="description" rows="2" maxlength="2000" placeholder="What this meeting is about...">{{ form_description }}</textarea>
+    </div>
+
     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;" class="form-grid-2">
       <div class="form-group">
         <label for="duration_min">Duration (min)</label>
@@ -307,12 +312,67 @@
     </script>
 
     <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
+      <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Location</h2>
+      <div class="form-group">
+        <label for="location_type">Location type</label>
+        <select id="location_type" name="location_type" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+          <option value="" {% if not form_location_type %}selected{% endif %}>No location</option>
+          <option value="link" {% if form_location_type == "link" %}selected{% endif %}>Video call link</option>
+          <option value="phone" {% if form_location_type == "phone" %}selected{% endif %}>Phone call</option>
+          <option value="in_person" {% if form_location_type == "in_person" %}selected{% endif %}>In person</option>
+          <option value="custom" {% if form_location_type == "custom" %}selected{% endif %}>Custom</option>
+        </select>
+      </div>
+      <div class="form-group" id="location-value-group" style="{% if not form_location_type %}display: none;{% endif %}">
+        <label for="location_value" id="location-label">Location details</label>
+        <input type="text" id="location_value" name="location_value" value="{{ form_location_value }}" placeholder="https://meet.example.com/room">
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
+      <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Reminders</h2>
+      <div class="form-group">
+        <label for="reminder_minutes">Send reminder before meeting</label>
+        <select id="reminder_minutes" name="reminder_minutes" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+          <option value="0" {% if not form_reminder_minutes or form_reminder_minutes == 0 %}selected{% endif %}>No reminder</option>
+          <option value="15" {% if form_reminder_minutes == 15 %}selected{% endif %}>15 minutes</option>
+          <option value="30" {% if form_reminder_minutes == 30 %}selected{% endif %}>30 minutes</option>
+          <option value="60" {% if form_reminder_minutes == 60 %}selected{% endif %}>1 hour</option>
+          <option value="120" {% if form_reminder_minutes == 120 %}selected{% endif %}>2 hours</option>
+          <option value="1440" {% if form_reminder_minutes == 1440 %}selected{% endif %}>1 day</option>
+        </select>
+        <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Requires SMTP to be configured.</span>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
       <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
         <input type="checkbox" name="one_time_use" {% if form_one_time_use is defined and form_one_time_use %}checked{% endif %} style="accent-color: var(--accent); width: 1rem; height: 1rem;">
         <span style="font-size: 0.925rem; font-weight: 500;">One-time use</span>
       </label>
       <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem; margin-left: 1.5rem;">Automatically delete this link after one booking. Leave unchecked to keep the link reusable.</span>
     </div>
+
+    <script>
+    (function() {
+      var typeEl = document.getElementById('location_type');
+      var valueGroup = document.getElementById('location-value-group');
+      var valueEl = document.getElementById('location_value');
+      var labelEl = document.getElementById('location-label');
+      var placeholders = { link: 'https://meet.example.com/room', phone: '+1 555-0123', in_person: '123 Main St, City', custom: 'Enter location details' };
+      var labels = { link: 'Video call URL', phone: 'Phone number', in_person: 'Address', custom: 'Location details' };
+      function toggle() {
+        var v = typeEl.value;
+        valueGroup.style.display = v ? '' : 'none';
+        if (v) {
+          labelEl.textContent = labels[v] || 'Location details';
+          valueEl.placeholder = placeholders[v] || '';
+        }
+      }
+      typeEl.addEventListener('change', toggle);
+      toggle();
+    })();
+    </script>
 
     <button type="submit" class="btn" style="margin-top: 1.5rem;">{% if editing is defined and editing %}Save changes{% else %}Create team link{% endif %}</button>
   </form>
