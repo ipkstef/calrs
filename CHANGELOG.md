@@ -85,6 +85,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | ICS time fix | 0.19.0 | Correct UTC times in ICS when confirming/cancelling bookings from the database |
 | Private event types | 0.21.0 | Hide event types from public profile, accessible only via invite links |
 | Booking invites | 0.21.0 | Send tokenized invite links with pre-filled guest info, expiration, and usage limits |
+| Cal.com-style slot picker | 0.21.0 | Month calendar with 3-panel layout, meeting info sidebar |
+| Reusable team links | 0.21.0 | Team links are reusable by default, with opt-in one-time use |
+| Team link editing | 0.21.0 | Edit existing team links (title, duration, members, settings) |
+| Dark/light theme toggle | 0.21.0 | Manual theme switching on public pages and in dashboard settings |
+| Additional attendees | 0.21.0 | Guests can invite additional people to bookings (configurable per event type) |
+| Stale event cleanup | 0.21.0 | Cancelled and deleted CalDAV events removed from local cache |
 
 ## [Unreleased]
 
@@ -104,6 +110,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - Works with both personal and group event types (round-robin assignment preserved)
   - Any user with dashboard access can create invites for private event types they can see (enables sales reps to invite guests to demo team event types)
   - New migration: `is_private` column on `event_types`, `booking_invites` table with token, expiration, usage tracking
+- **Cal.com-style slot picker** — redesigned booking page with a 3-panel layout
+  - Left sidebar with meeting info (host avatar, name, title, event details, duration, location)
+  - Month calendar navigation (replaces week-by-week arrows)
+  - Slot pills on the right, compact height for less scrolling
+  - Responsive: stacks vertically on mobile
+- **Reusable team links** — team links are now reusable by default (can be booked multiple times). Opt-in "one-time use" checkbox auto-deletes the link after a single booking. Existing one-time links are preserved via migration default.
+- **Team link editing** — edit existing team links from the dashboard (title, duration, buffers, minimum notice, availability window, team members, one-time use toggle)
+- **Dark/light theme toggle** — manual System/Light/Dark theme switcher
+  - Public pages: sun/moon toggle in the footer, persisted in `localStorage`
+  - Dashboard: appearance picker in Profile & Settings
+  - Flash-free: inline `<head>` script applies theme before CSS loads
+  - Defaults to system preference (`prefers-color-scheme`)
+- **Additional attendees** — guests can invite additional people to bookings
+  - Configurable per event type: 0, 1, 3, 5, or 10 max additional guests
+  - Dynamic email input rows with add/remove on the booking form
+  - Additional attendees stored in `booking_attendees` table
+  - ICS calendar invites include ATTENDEE lines for all guests
+  - Confirmation emails sent to each additional attendee with ICS attachment
+  - Shown on the confirmation page
+  - New migration: `max_additional_guests` on event types, `booking_attendees` table
+
+### Fixed
+
+- **Stale cancelled events** — cancelling a booking in calrs now also removes the cached event from the local database, so it no longer blocks availability in troubleshoot or slot computation
+- **Stale deleted events on sync** — full sync (`calrs sync --full`) now compares local events against the server and deletes orphans that were removed remotely
+- **Hidden meeting details before booking** — video call links and phone numbers are no longer visible on the public slot picker page (only shown after booking)
+- **24h time selects** — availability time inputs in event type and team link forms now use 24h select dropdowns instead of free-text input
+- **XSS in team link form** — replaced `innerHTML` with DOM methods for user-supplied data in the member search UI
 
 ## [0.20.4] - 2026-03-13
 

@@ -63,7 +63,10 @@ calrs/
 │   ├── 014_team_links.sql        ← team_links, team_link_members, team_link_bookings tables
 │   ├── 015_user_profile.sql      ← title, bio, avatar_path on users
 │   ├── 016_booking_unique.sql    ← partial unique index for double-booking prevention
-│   └── 018_private_invites.sql   ← is_private on event_types, booking_invites table
+│   ├── 017_events_per_calendar.sql ← per-calendar event uniqueness (uid, calendar_id)
+│   ├── 018_private_invites.sql   ← is_private on event_types, booking_invites table
+│   ├── 019_team_link_reusable.sql ← one_time_use column on team_links
+│   └── 020_booking_attendees.sql ← max_additional_guests on event_types, booking_attendees table
 ├── templates/
 │   ├── base.html                 ← base layout + CSS (light/dark mode)
 │   ├── dashboard_base.html       ← sidebar layout (extends base.html, all dashboard pages extend this)
@@ -82,7 +85,7 @@ calrs/
 │   ├── invite_form.html          ← invite management for private event types (extends dashboard_base)
 │   ├── source_form.html          ← add CalDAV source (extends dashboard_base)
 │   ├── source_test.html          ← connection test / sync results (extends dashboard_base)
-│   ├── team_link_form.html       ← create team link (extends dashboard_base)
+│   ├── team_link_form.html       ← create/edit team link (extends dashboard_base)
 │   ├── troubleshoot.html         ← availability troubleshoot timeline (extends dashboard_base)
 │   ├── profile.html              ← public user profile (with avatar, title, bio)
 │   ├── group_profile.html        ← public group page
@@ -136,14 +139,16 @@ Key tables:
 - **`accounts`** — scheduling accounts linked to users via `user_id`
 - **`caldav_sources`** — CalDAV server connections (URL, credentials, sync state, `write_calendar_href`). `enabled` flag, `ON DELETE CASCADE`
 - **`calendars`** — calendar collections discovered under a source; `is_busy=1` means events block availability
-- **`events`** — cached remote events from CalDAV sync; unique on `(uid, COALESCE(recurrence_id, ''))`, stores `raw_ical`, `etag`, `rrule`, `all_day`, `timezone`, `recurrence_id`, `status`
-- **`event_types`** — bookable meeting templates (slug unique per account, `duration_min`, `buffer_before`/`buffer_after`, `min_notice_min`, `location_type`/`location_value`, `requires_confirmation`, `is_private`, `group_id`, `created_by_user_id`, `reminder_minutes`)
+- **`events`** — cached remote events from CalDAV sync; unique on `(uid, calendar_id, COALESCE(recurrence_id, ''))`, stores `raw_ical`, `etag`, `rrule`, `all_day`, `timezone`, `recurrence_id`, `status`
+- **`event_types`** — bookable meeting templates (slug unique per account, `duration_min`, `buffer_before`/`buffer_after`, `min_notice_min`, `location_type`/`location_value`, `requires_confirmation`, `is_private`, `max_additional_guests`, `group_id`, `created_by_user_id`, `reminder_minutes`)
 - **`availability_rules`** — weekly recurring windows per event type (day_of_week 0=Sun…6=Sat, HH:MM times)
 - **`availability_overrides`** — date-specific exceptions (day off, special hours). `is_blocked` flag
 - **`bookings`** — bookings with `uid` (iCal), guest info, status (confirmed/pending/cancelled/declined), `cancel_token`/`reschedule_token`/`confirm_token`, `assigned_user_id` (for group round-robin), `caldav_calendar_href` (write-back tracking), `reminder_sent_at` (tracks when reminder email was sent)
 - **`smtp_config`** — SMTP server settings (host, port, credentials, sender), one per account
 - **`event_type_calendars`** — junction table linking event types to specific calendars for per-event-type calendar selection. Empty = use all `is_busy=1` calendars (backward-compatible default)
 - **`booking_invites`** — tokenized invite links for private event types: `token` (unique), `event_type_id`, `guest_name`, `guest_email`, `message`, `expires_at`, `max_uses`, `used_count`, `created_by_user_id`
+- **`booking_attendees`** — additional attendees per booking: `booking_id` (FK), `email`, `created_at`
+- **`team_links`** — ad-hoc team booking links with `one_time_use` flag (default 0 = reusable)
 - **`groups`** / **`user_groups`** — group system synced from Keycloak OIDC; groups have `slug` for public URLs
 
 All primary keys are UUID v4 strings. Datetimes are ISO8601 strings.
@@ -213,11 +218,13 @@ File: `src/web/mod.rs`, templates in `templates/`
 - `/dashboard/event-types` — Personal + group event types (create/edit/toggle/delete/view)
 - `/dashboard/bookings` — Pending approval + upcoming bookings (cancel with optional reason)
 - `/dashboard/sources` — Calendar sources (add/test/sync/remove/write-back)
-- `/dashboard/team-links` — Team links (create/copy/delete)
+- `/dashboard/team-links` — Team links (create/edit/copy/delete)
 
 **Admin panel** (`/dashboard/admin`): User management (promote/demote, enable/disable), auth settings (registration toggle, allowed domains), OIDC config, SMTP status, groups overview, impersonation. Requires `AdminUser`.
 
-**Public pages:** User profile (`/u/{username}`), group profile (`/g/{group-slug}`), time slot picker (with timezone selector), booking form, confirmation page. Event types support location (video link, phone, in-person, custom).
+**Public pages:** User profile (`/u/{username}`), group profile (`/g/{group-slug}`), time slot picker (Cal.com-style 3-panel layout with month calendar), booking form (with optional additional attendees), confirmation page. Event types support location (video link, phone, in-person, custom). Dark/light theme toggle on all public pages.
+
+**Theme toggle:** Class-based dark mode (`html.dark`) with inline `<head>` script for flash-free loading from `localStorage`. Public pages have a sun/moon toggle in the footer. Dashboard users can set System/Light/Dark in Profile & Settings.
 
 **Availability troubleshoot** (`/dashboard/troubleshoot/{event_type_id}`): Visual timeline showing why slots are available or blocked, with event details. Helps debug availability issues.
 

@@ -2397,4 +2397,62 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn generate_ics_includes_additional_attendees() {
+        let details = BookingDetails {
+            event_title: "Team Sync".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "14:00".to_string(),
+            end_time: "14:30".to_string(),
+            guest_name: "Jane".to_string(),
+            guest_email: "jane@example.com".to_string(),
+            guest_timezone: "UTC".to_string(),
+            host_name: "Alice".to_string(),
+            host_email: "alice@test.com".to_string(),
+            uid: "uid-attendees".to_string(),
+            notes: None,
+            location: None,
+            reminder_minutes: None,
+            additional_attendees: vec![
+                "bob@example.com".to_string(),
+                "carol@example.com".to_string(),
+            ],
+        };
+
+        let ics = generate_ics(&details, "REQUEST");
+        assert!(ics.contains("ATTENDEE;RSVP=TRUE:mailto:bob@example.com"));
+        assert!(ics.contains("ATTENDEE;RSVP=TRUE:mailto:carol@example.com"));
+        // Primary guest should also be present
+        assert!(ics.contains("ATTENDEE;CN=Jane;RSVP=TRUE:mailto:jane@example.com"));
+    }
+
+    #[test]
+    fn generate_ics_no_extra_attendees_when_empty() {
+        let details = BookingDetails {
+            event_title: "Solo".to_string(),
+            date: "2026-03-10".to_string(),
+            start_time: "10:00".to_string(),
+            end_time: "10:30".to_string(),
+            guest_name: "Jane".to_string(),
+            guest_email: "jane@example.com".to_string(),
+            guest_timezone: "UTC".to_string(),
+            host_name: "Alice".to_string(),
+            host_email: "alice@test.com".to_string(),
+            uid: "uid-no-extra".to_string(),
+            notes: None,
+            location: None,
+            reminder_minutes: None,
+            additional_attendees: vec![],
+        };
+
+        let ics = generate_ics(&details, "PUBLISH");
+        let attendee_count = ics.matches("ATTENDEE;").count();
+        // Only 1 ATTENDEE line: the primary guest (CN=Jane)
+        assert_eq!(
+            attendee_count, 1,
+            "Expected exactly 1 ATTENDEE line, got {}",
+            attendee_count
+        );
+    }
 }

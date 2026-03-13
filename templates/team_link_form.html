@@ -231,7 +231,16 @@
           }
           row.appendChild(avatar);
           var info = document.createElement('div');
-          info.innerHTML = '<strong style="font-size:0.9rem;">' + u.name + '</strong><span style="color:var(--text-muted);font-size:0.825rem;"> &middot; ' + u.email + '</span>';
+          var nameEl = document.createElement('strong');
+          nameEl.style.fontSize = '0.9rem';
+          nameEl.textContent = u.name;
+          var sep = document.createTextNode(' \u00b7 ');
+          var emailEl = document.createElement('span');
+          emailEl.style.cssText = 'color:var(--text-muted);font-size:0.825rem;';
+          emailEl.textContent = u.email;
+          info.appendChild(nameEl);
+          info.appendChild(sep);
+          info.appendChild(emailEl);
           row.appendChild(info);
           resultsEl.appendChild(row);
         });

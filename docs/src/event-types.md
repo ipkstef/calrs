@@ -14,6 +14,7 @@ Go to **Dashboard > Event types > + New** and fill in:
 - **Buffer before/after** — padding between meetings (prevents back-to-back bookings)
 - **Minimum notice** — how far in advance guests must book (in minutes)
 - **Requires confirmation** — if checked, bookings start as "pending" and you approve from the dashboard
+- **Additional guests** — allow guests to invite additional attendees (0, 1, 3, 5, or 10 max)
 - **Location** — video link, phone number, in-person address, or custom text
 - **Availability schedule** — which days and hours you're available
 

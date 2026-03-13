@@ -95,14 +95,15 @@
 - **Admin dashboard** — user management, auth settings, OIDC config, SMTP status, user impersonation
 - **Event type management** — create/edit from the dashboard with availability schedule, location, and confirmation toggle
 - **Location support** — video link, phone, in-person, or custom — displayed on booking pages, emails, and `.ics` invites
-- **Dark mode** — automatic via `prefers-color-scheme`, clean responsive design
+- **Dark/light theme** — automatic via system preference, with manual toggle (System/Light/Dark) on public pages and dashboard settings
+- **Cal.com-style slot picker** — month calendar with 3-panel layout (meeting info sidebar, calendar, time slots)
 
 ### Groups & team links
 
 - **OIDC group sync** — groups synced from Keycloak `groups` JWT claim on SSO login
 - **Group event types** — combined availability (any member free) with round-robin assignment
 - **Public group pages** — bookable at `/g/{group-slug}/{slug}`
-- **Ad-hoc team links** — create shareable booking links across hand-picked users, no admin-managed group needed. Finds slots where ALL selected members are free. One-time use, auto-deleted after booking. CalDAV write-back to every member's calendar
+- **Ad-hoc team links** — create shareable booking links across hand-picked users, no admin-managed group needed. Finds slots where ALL selected members are free. Reusable by default (opt-in one-time use). Editable after creation. CalDAV write-back to every member's calendar
 
 ### Private event types & invites
 
@@ -121,6 +122,7 @@
 - **Email notifications** — HTML emails with plain text fallback and `.ics` calendar invites on booking, cancellation, and approval
 - **Email approve/decline** — approve or decline pending bookings directly from the notification email (token-based, no login required)
 - **Guest self-cancellation** — guests can cancel their own bookings via a link in the confirmation email, with optional reason
+- **Additional attendees** — guests can invite additional people to bookings (configurable per event type: 0/1/3/5/10 max). Additional guests receive ICS invites and appear on the confirmation page
 - **Booking reminders** — automated email reminders before meetings, configurable per event type (1h / 4h / 1 day / 2 days)
 - **SMTP configuration** — configure from CLI or admin dashboard
 
@@ -131,7 +133,7 @@
 
 ### Quality
 
-- **Automated test suite** — 147+ tests covering RRULE expansion, iCal parsing, timezone conversion, email rendering, availability computation, slot generation, database migrations, rate limiting, and more
+- **Automated test suite** — 225+ tests covering RRULE expansion, iCal parsing, timezone conversion, email rendering, availability computation, slot generation, database migrations, rate limiting, and more
 - **CI pipeline** — every push and pull request runs `cargo fmt`, `cargo clippy`, `cargo test`, and template validation via [GitHub Actions](https://github.com/olivierlambert/calrs/actions/workflows/ci.yml)
 - **Docker images** — pre-built multi-arch images (`amd64` + `arm64`) published to [GHCR](https://github.com/olivierlambert/calrs/pkgs/container/calrs) on every release
 
@@ -473,6 +475,9 @@ calrs/
 - [x] Per-event-type calendar selection
 - [x] Ad-hoc team links (shareable booking across multiple users)
 - [x] Private event types with invite links
+- [x] Cal.com-style slot picker (month calendar, 3-panel layout)
+- [x] Dark/light theme toggle
+- [x] Additional attendees on bookings
 - [ ] Webhooks (per-event-type HTTP callbacks on new/cancelled bookings)
 - [ ] Reschedule flow (change date/time without cancelling)
 - [ ] Availability overrides (block specific dates, add special hours)

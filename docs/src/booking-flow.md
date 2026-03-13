@@ -7,9 +7,10 @@
 3. **Browse available slots** — displayed as a week view, navigate with Previous/Next buttons
 4. **Click a slot** — opens the booking form
 5. **Fill in details** — name, email, optional notes (pre-filled from invite if applicable)
-6. **Submit** — booking is created
-7. **Confirmation page** — shows booking summary
-8. **Email** — guest receives a confirmation email with an `.ics` calendar invite attached
+6. **Add guests** — optionally invite additional attendees (if the event type allows it)
+7. **Submit** — booking is created
+8. **Confirmation page** — shows booking summary (including any additional attendees)
+9. **Email** — guest and any additional attendees receive a confirmation email with an `.ics` calendar invite attached
 
 ![Available time slots](images/slots.png)
 

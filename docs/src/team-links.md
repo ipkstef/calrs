@@ -5,11 +5,12 @@ Team links let you create ad-hoc, shareable booking links across any combination
 ## How team links work
 
 - Any user can create a team link from the dashboard
-- Pick team members from all enabled calrs users (checkboxes)
+- Pick team members from all enabled calrs users (search + pill selection)
 - A slot is available only when **all** selected members are free
 - The guest books via a public link (`/t/{token}`)
 - The booking is pushed to every member's CalDAV calendar
-- The link is **one-time use** — it auto-deletes after a successful booking
+- Links are **reusable** by default — they can be booked multiple times
+- Optional **one-time use** mode — auto-deletes the link after a single booking
 
 ## Team links vs groups
 
@@ -19,7 +20,7 @@ Team links let you create ad-hoc, shareable booking links across any combination
 | **Members** | Hand-picked from all users | Synced from OIDC groups claim |
 | **Availability logic** | ALL members must be free | ANY member free (round-robin) |
 | **Assignment** | Everyone is booked | One member assigned |
-| **Lifetime** | One-time use, auto-deleted | Permanent |
+| **Lifetime** | Reusable (or one-time use) | Permanent |
 | **Use case** | Ad-hoc meetings with specific people | Recurring team booking pages |
 
 ## Creating a team link
@@ -44,7 +45,18 @@ The link appears in the "Team links" section of your dashboard. Use the **Copy l
    - Event pushed to every member's CalDAV calendar
    - Email notification sent to all members
    - Confirmation email sent to the guest
-5. The team link is automatically deleted
+5. If one-time use is enabled, the team link is automatically deleted
+
+## Editing a team link
+
+Click the **Edit** button on an existing team link to change:
+
+- Title, duration, buffer times, minimum notice
+- Availability window (days and hours)
+- Team members
+- One-time use toggle
+
+Only the link creator can edit it.
 
 ## Configuration options
 
@@ -57,6 +69,7 @@ The link appears in the "Team links" section of your dashboard. Use the **Copy l
 | Availability start | 09:00 | Earliest bookable time |
 | Availability end | 17:00 | Latest bookable time |
 | Days | Mon–Fri | Which days are bookable |
+| One-time use | Off | Auto-delete link after one booking |
 
 ## Dashboard
 
@@ -66,6 +79,7 @@ Team links appear in a dedicated "Team links" section showing:
 - Member names
 - **Copy link** — copies the public URL to clipboard
 - **View** — opens the public slot page
+- **Edit** — change settings and members (only the creator can edit)
 - **Delete** — removes the link (only the creator can delete)
 
 ## Technical details

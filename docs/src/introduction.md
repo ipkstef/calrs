@@ -18,6 +18,7 @@ calrs is an open-source scheduling platform. Connect your CalDAV calendar (Nextc
 - **Timezone support** — guest timezone picker with browser auto-detection; CalDAV events are converted from their original timezone to your host timezone, so availability is always accurate regardless of where your calendar events were created
 - **Authentication** — local accounts (Argon2) or OIDC/SSO (Keycloak, Authentik, etc.)
 - **Web dashboard** — manage event types, calendar sources, pending approvals, bookings
+- **Dark/light theme** — manual toggle (System/Light/Dark) on public pages and dashboard settings
 - **Admin panel** — user management, auth settings, OIDC config, SMTP status, impersonation
 - **Structured logging** — `tracing` + `tower-http` for production observability, configurable via `RUST_LOG`
 - **Security hardening** — CSRF protection, booking rate limiting, input validation, double-booking prevention
