@@ -3678,8 +3678,19 @@ async fn edit_group_event_type_form(
     .unwrap_or(None);
 
     let (
-        et_id, et_slug, et_title, et_desc, duration, buf_before, buf_after,
-        min_notice, requires_conf, loc_type, loc_value, reminder_min, _group_id,
+        et_id,
+        et_slug,
+        et_title,
+        et_desc,
+        duration,
+        buf_before,
+        buf_after,
+        min_notice,
+        requires_conf,
+        loc_type,
+        loc_value,
+        reminder_min,
+        _group_id,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -3698,7 +3709,10 @@ async fn edit_group_event_type_form(
         let mut days: Vec<i32> = all_rules.iter().map(|(d, _, _)| *d).collect();
         days.sort();
         days.dedup();
-        days.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(",")
+        days.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     };
 
     let mut windows: Vec<(String, String)> = Vec::new();
@@ -3808,7 +3822,10 @@ async fn update_group_event_type(
     }
 
     let location_type = form.location_type.as_deref().unwrap_or("link");
-    let location_value = form.location_value.as_deref().filter(|s| !s.trim().is_empty());
+    let location_value = form
+        .location_value
+        .as_deref()
+        .filter(|s| !s.trim().is_empty());
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
     let _ = sqlx::query(
