@@ -44,6 +44,18 @@ When a booking is submitted for a group event type:
 4. The booking is assigned to that member
 5. If no member is available, the booking is rejected
 
+## Multi-timezone teams
+
+The availability window on a group event type (e.g., Mon–Fri 09:00–17:00) is defined once for the whole group and interpreted in the server's timezone. For teams spread across timezones, this window may not cover everyone's working hours.
+
+**Recommended setup for multi-TZ teams:** Set a wide availability window (e.g., 06:00–23:00 or even 00:00–23:59) and let each member's CalDAV calendar handle the actual blocking. Because calrs syncs each member's calendar independently and converts events from their original timezone, the slot picker naturally shows the **union** of all members' real availability:
+
+- Alice (Paris, 09:00–17:00 CET) → her calendar blocks evenings and weekends
+- Bob (New York, 09:00–17:00 EST) → his calendar blocks his mornings (CET afternoon/evening)
+- A guest sees slots from 09:00–23:00 CET, with Alice covering the morning and Bob covering the evening
+
+This approach requires no per-member configuration — just sync your calendars and set a wide window.
+
 ## Dashboard
 
 Group event types appear in a separate "Group event types" section on the dashboard, showing the group name and a link to the public page.

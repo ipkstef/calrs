@@ -16,6 +16,8 @@ calrs supports five distinct booking scenarios:
 
 **Personal vs group:** Personal event types book time on your calendar only. Group event types show combined availability (any member free) and assign the booking to the least-busy member via round-robin.
 
+**Multi-timezone groups:** For teams spread across timezones, set a wide availability window (e.g., 06:00–23:00) and let each member's synced CalDAV calendar handle the blocking. The slot picker naturally shows the union of all members' real availability — see [Groups > Multi-timezone teams](./groups.md#multi-timezone-teams) for details.
+
 **Ad-hoc team links** are a separate concept: pick specific users, find slots where ALL are free (not just one). Use team links for one-off multi-person meetings with external guests.
 
 > **Note:** "Internal" visibility is only available for group event types. For personal event types, choose public or private.

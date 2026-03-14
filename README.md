@@ -122,6 +122,7 @@ calrs supports five distinct booking scenarios. Each serves a different use case
 
 - **OIDC group sync** — groups synced from Keycloak `groups` JWT claim on SSO login
 - **Group event types** — combined availability (any member free) with round-robin assignment to the least-busy member
+- **Multi-timezone groups** — for teams across timezones, set a wide availability window (e.g., 06:00–23:00) and let each member's synced calendar handle the actual blocking. CalDAV events are timezone-aware, so the slot picker naturally shows the union of all members' real availability
 - **Public group pages** — bookable at `/g/{group-slug}/{slug}`
 - **Ad-hoc team links** — for one-off multi-person meetings. Pick specific users, find slots where ALL are free. No admin-managed group needed. Different from group event types: team links require everyone to be available (not just one member)
 
