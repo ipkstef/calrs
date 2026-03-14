@@ -9899,11 +9899,12 @@ async fn guest_reschedule_booking(
         Option<String>,
         Option<String>,
         i32,
+        i32,
     )> = sqlx::query_as(
         "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at,
                     et.id, et.title, u.id, u.name, et.duration_min,
                     et.location_value, b.caldav_calendar_href, COALESCE(b.guest_timezone, 'UTC'),
-                    et.min_notice_min
+                    et.min_notice_min, b.reschedule_by_host
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -9931,6 +9932,7 @@ async fn guest_reschedule_booking(
         caldav_href,
         _guest_timezone_str,
         min_notice,
+        reschedule_by_host,
     ) = match booking {
         Some(b) => b,
         None => {
@@ -9991,32 +9993,42 @@ async fn guest_reschedule_booking(
     let guest_tz = parse_guest_tz(form.tz.as_deref());
     let new_guest_timezone = guest_tz.name().to_string();
 
-    // Guest reschedule always goes to pending
-    // Delete CalDAV event if it was pushed (now pending, will be re-pushed on approval)
+    // If host-initiated reschedule: stay confirmed. Otherwise: go to pending.
+    let host_initiated = reschedule_by_host != 0;
+    let new_status = if host_initiated {
+        "confirmed"
+    } else {
+        "pending"
+    };
+    let new_confirm = if host_initiated {
+        None
+    } else {
+        Some(new_confirm_token.clone())
+    };
+
     let _ = sqlx::query(
-        "UPDATE bookings SET start_at = ?, end_at = ?, status = 'pending',
+        "UPDATE bookings SET start_at = ?, end_at = ?, status = ?,
                 reschedule_token = ?, cancel_token = ?, confirm_token = ?,
-                reminder_sent_at = NULL, guest_timezone = ?
+                reminder_sent_at = NULL, guest_timezone = ?, reschedule_by_host = 0
          WHERE id = ?",
     )
     .bind(&new_start_at)
     .bind(&new_end_at)
+    .bind(new_status)
     .bind(&new_reschedule_token)
     .bind(&new_cancel_token)
-    .bind(&new_confirm_token)
+    .bind(&new_confirm)
     .bind(&new_guest_timezone)
     .bind(&booking_id)
     .execute(&state.pool)
     .await;
 
-    tracing::info!(booking_id = %booking_id, old_start = %old_start_at, new_start = %new_start_at, "booking rescheduled by guest (now pending)");
-
-    // If was confirmed and had CalDAV event, delete old one (now pending)
-    if caldav_href.is_some() {
-        caldav_delete_for_user(&state.pool, &state.secret_key, &host_user_id, &uid).await;
+    if host_initiated {
+        tracing::info!(booking_id = %booking_id, old_start = %old_start_at, new_start = %new_start_at, "booking rescheduled by guest (host-initiated, confirmed)");
+    } else {
+        tracing::info!(booking_id = %booking_id, old_start = %old_start_at, new_start = %new_start_at, "booking rescheduled by guest (now pending)");
     }
 
-    // Send emails
     let host_email: String =
         sqlx::query_scalar("SELECT COALESCE(booking_email, email) FROM users WHERE id = ?")
             .bind(&host_user_id)
@@ -10028,74 +10040,155 @@ async fn guest_reschedule_booking(
     let old_start_time = extract_time_24h(&old_start_at);
     let old_end_time = extract_time_24h(&old_end_at);
 
-    if let Ok(Some(smtp_config)) =
-        crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-    {
-        let base_url = std::env::var("CALRS_BASE_URL").ok();
-
-        // Send host reschedule approval request
-        let reschedule_details = crate::email::RescheduleDetails {
-            event_title: et_title.clone(),
-            old_date: old_date.clone(),
-            old_start_time: old_start_time.clone(),
-            old_end_time: old_end_time.clone(),
-            new_date: form.date.clone(),
-            new_start_time: form.time.clone(),
-            new_end_time: slot_end.time().format("%H:%M").to_string(),
-            guest_name: guest_name.clone(),
-            guest_email: guest_email.clone(),
-            guest_timezone: new_guest_timezone.clone(),
-            host_name: host_name.clone(),
-            host_email,
-            uid: uid.clone(),
-            location: loc_value.clone(),
-        };
-        let _ = crate::email::send_host_reschedule_request(
-            &smtp_config,
-            &reschedule_details,
-            Some(&new_confirm_token),
-            base_url.as_deref(),
-        )
-        .await;
-
-        // Send guest pending notice with new tokens
-        let guest_cancel_url = base_url.as_ref().map(|base| {
-            format!(
-                "{}/booking/cancel/{}",
-                base.trim_end_matches('/'),
-                new_cancel_token
-            )
-        });
-        let guest_reschedule_url = base_url.as_ref().map(|base| {
-            format!(
-                "{}/booking/reschedule/{}",
-                base.trim_end_matches('/'),
-                new_reschedule_token
-            )
-        });
-        let pending_details = crate::email::BookingDetails {
+    if host_initiated {
+        // Host asked for reschedule, guest picked a slot → confirmed, push CalDAV, notify host
+        let push_details = crate::email::BookingDetails {
             event_title: et_title.clone(),
             date: form.date.clone(),
             start_time: form.time.clone(),
             end_time: slot_end.time().format("%H:%M").to_string(),
             guest_name: guest_name.clone(),
             guest_email: guest_email.clone(),
-            guest_timezone: new_guest_timezone,
+            guest_timezone: new_guest_timezone.clone(),
             host_name: host_name.clone(),
-            host_email: String::new(),
-            uid,
+            host_email: host_email.clone(),
+            uid: uid.clone(),
             notes: None,
-            location: loc_value,
+            location: loc_value.clone(),
             reminder_minutes: None,
             additional_attendees: vec![],
         };
-        let _ = crate::email::send_guest_pending_notice_ex(
-            &smtp_config,
-            &pending_details,
-            guest_cancel_url.as_deref(),
-            guest_reschedule_url.as_deref(),
+        caldav_push_booking(
+            &state.pool,
+            &state.secret_key,
+            &host_user_id,
+            &uid,
+            &push_details,
         )
         .await;
+
+        if let Ok(Some(smtp_config)) =
+            crate::email::load_smtp_config(&state.pool, &state.secret_key).await
+        {
+            let base_url = std::env::var("CALRS_BASE_URL").ok();
+            let guest_cancel_url = base_url.as_ref().map(|base| {
+                format!(
+                    "{}/booking/cancel/{}",
+                    base.trim_end_matches('/'),
+                    new_cancel_token
+                )
+            });
+            let guest_reschedule_url = base_url.as_ref().map(|base| {
+                format!(
+                    "{}/booking/reschedule/{}",
+                    base.trim_end_matches('/'),
+                    new_reschedule_token
+                )
+            });
+
+            // Notify guest with confirmation + ICS
+            let _ = crate::email::send_guest_reschedule_notification(
+                &smtp_config,
+                &crate::email::RescheduleDetails {
+                    event_title: et_title.clone(),
+                    old_date,
+                    old_start_time,
+                    old_end_time,
+                    new_date: form.date.clone(),
+                    new_start_time: form.time.clone(),
+                    new_end_time: slot_end.time().format("%H:%M").to_string(),
+                    guest_name: guest_name.clone(),
+                    guest_email: guest_email.clone(),
+                    guest_timezone: new_guest_timezone,
+                    host_name: host_name.clone(),
+                    host_email: host_email.clone(),
+                    uid,
+                    location: loc_value,
+                },
+                guest_cancel_url.as_deref(),
+                guest_reschedule_url.as_deref(),
+            )
+            .await;
+
+            // Notify host that the guest picked a new time
+            let _ = crate::email::send_host_booking_confirmed(&smtp_config, &push_details).await;
+        }
+    } else {
+        // Guest-initiated reschedule → pending, needs host approval
+        // Delete CalDAV event if it was pushed (now pending, will be re-pushed on approval)
+        if caldav_href.is_some() {
+            caldav_delete_for_user(&state.pool, &state.secret_key, &host_user_id, &uid).await;
+        }
+
+        if let Ok(Some(smtp_config)) =
+            crate::email::load_smtp_config(&state.pool, &state.secret_key).await
+        {
+            let base_url = std::env::var("CALRS_BASE_URL").ok();
+
+            // Send host reschedule approval request
+            let reschedule_details = crate::email::RescheduleDetails {
+                event_title: et_title.clone(),
+                old_date,
+                old_start_time,
+                old_end_time,
+                new_date: form.date.clone(),
+                new_start_time: form.time.clone(),
+                new_end_time: slot_end.time().format("%H:%M").to_string(),
+                guest_name: guest_name.clone(),
+                guest_email: guest_email.clone(),
+                guest_timezone: new_guest_timezone.clone(),
+                host_name: host_name.clone(),
+                host_email,
+                uid: uid.clone(),
+                location: loc_value.clone(),
+            };
+            let _ = crate::email::send_host_reschedule_request(
+                &smtp_config,
+                &reschedule_details,
+                Some(&new_confirm_token),
+                base_url.as_deref(),
+            )
+            .await;
+
+            // Send guest pending notice with new tokens
+            let guest_cancel_url = base_url.as_ref().map(|base| {
+                format!(
+                    "{}/booking/cancel/{}",
+                    base.trim_end_matches('/'),
+                    new_cancel_token
+                )
+            });
+            let guest_reschedule_url = base_url.as_ref().map(|base| {
+                format!(
+                    "{}/booking/reschedule/{}",
+                    base.trim_end_matches('/'),
+                    new_reschedule_token
+                )
+            });
+            let pending_details = crate::email::BookingDetails {
+                event_title: et_title.clone(),
+                date: form.date.clone(),
+                start_time: form.time.clone(),
+                end_time: slot_end.time().format("%H:%M").to_string(),
+                guest_name: guest_name.clone(),
+                guest_email: guest_email.clone(),
+                guest_timezone: new_guest_timezone,
+                host_name: host_name.clone(),
+                host_email: String::new(),
+                uid,
+                notes: None,
+                location: loc_value,
+                reminder_minutes: None,
+                additional_attendees: vec![],
+            };
+            let _ = crate::email::send_guest_pending_notice_ex(
+                &smtp_config,
+                &pending_details,
+                guest_cancel_url.as_deref(),
+                guest_reschedule_url.as_deref(),
+            )
+            .await;
+        }
     }
 
     let date_label = date.format("%A, %B %-d, %Y").to_string();
@@ -10113,7 +10206,7 @@ async fn guest_reschedule_booking(
             time_end => end_time_str,
             host_name => host_name,
             guest_email => guest_email,
-            pending => true,
+            pending => !host_initiated,
             rescheduled => true,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
@@ -10121,40 +10214,21 @@ async fn guest_reschedule_booking(
     Html(rendered).into_response()
 }
 
-/// Host reschedule: show slot picker or confirmation page
+/// Host reschedule: send the guest a link to pick a new time.
+/// GET shows a confirmation page, POST sends the email.
 async fn host_reschedule_slots(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     Path(booking_id): Path<String>,
-    Query(query): Query<RescheduleQuery>,
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    let booking: Option<(
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        i32,
-        i32,
-        i32,
-        i32,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
-        "SELECT b.id, b.guest_name, b.start_at, b.end_at,
-                    et.id, et.slug, et.title, et.duration_min, et.buffer_before,
-                    et.buffer_after, et.min_notice_min, et.location_type, et.location_value,
-                    u.username
-             FROM bookings b
-             JOIN event_types et ON et.id = b.event_type_id
-             JOIN accounts a ON a.id = et.account_id
-             JOIN users u ON u.id = a.user_id
-             WHERE b.id = ? AND a.user_id = ? AND b.status IN ('confirmed', 'pending')",
+    let booking: Option<(String, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.end_at, et.title
+         FROM bookings b
+         JOIN event_types et ON et.id = b.event_type_id
+         JOIN accounts a ON a.id = et.account_id
+         WHERE b.id = ? AND a.user_id = ? AND b.status IN ('confirmed', 'pending')",
     )
     .bind(&booking_id)
     .bind(&user.id)
@@ -10162,195 +10236,42 @@ async fn host_reschedule_slots(
     .await
     .unwrap_or(None);
 
-    let (
-        bid,
-        _guest_name,
-        start_at,
-        end_at,
-        et_id,
-        et_slug,
-        et_title,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        loc_type,
-        loc_value,
-        _username,
-    ) = match booking {
+    let (bid, guest_name, guest_email, start_at, end_at, event_title) = match booking {
         Some(b) => b,
         None => return Redirect::to("/dashboard/bookings").into_response(),
     };
 
-    let old_date_label = format_date_label(&start_at);
-    let old_start_time = extract_time_24h(&start_at);
-    let old_end_time = extract_time_24h(&end_at);
-    let old_date = start_at.get(..10).unwrap_or(&start_at).to_string();
+    let date_label = format_date_label(&start_at);
+    let start_time = extract_time_24h(&start_at);
+    let end_time = extract_time_24h(&end_at);
 
-    // If date + time + tz are present, show confirmation page
-    if let (Some(date), Some(time)) = (&query.date, &query.time) {
-        let guest_tz = parse_guest_tz(query.tz.as_deref());
-        let new_date = match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-            Ok(d) => d,
-            Err(_) => return Html("Invalid date.".to_string()).into_response(),
-        };
-        let new_time = match NaiveTime::parse_from_str(time, "%H:%M") {
-            Ok(t) => t,
-            Err(_) => return Html("Invalid time.".to_string()).into_response(),
-        };
-        let new_end = new_date.and_time(new_time) + Duration::minutes(duration as i64);
-        let new_date_label = new_date.format("%A, %B %-d, %Y").to_string();
-        let new_start_time_str = new_time.format("%H:%M").to_string();
-        let new_end_time_str = new_end.time().format("%H:%M").to_string();
-
-        let back_url = format!(
-            "/dashboard/bookings/{}/reschedule?tz={}",
-            bid,
-            guest_tz.name()
-        );
-
-        let tmpl = match state
-            .templates
-            .get_template("booking_reschedule_confirm.html")
-        {
-            Ok(t) => t,
-            Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-        };
-        let rendered = tmpl
-            .render(context! {
-                event_title => et_title,
-                old_date_label => old_date_label,
-                old_start_time => old_start_time,
-                old_end_time => old_end_time,
-                new_date_label => new_date_label,
-                new_start_time => new_start_time_str,
-                new_end_time => new_end_time_str,
-                host_name => user.name,
-                date => date,
-                time => time,
-                tz => guest_tz.name(),
-                back_url => back_url,
-            })
-            .unwrap_or_else(|e| format!("Template error: {}", e));
-        return Html(rendered).into_response();
-    }
-
-    // Show slot picker with reschedule context
-    crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, &user.id).await;
-
-    let guest_tz = parse_guest_tz(query.tz.as_deref());
-    let host_tz = get_host_tz(&state.pool, &et_id).await;
-    let guest_tz_name = guest_tz.name().to_string();
-
-    let (year, month) = parse_month_param(query.month.as_deref(), guest_tz);
-    let (
-        start_offset,
-        days_ahead,
-        month_label,
-        prev_month,
-        next_month,
-        first_weekday,
-        days_in_month,
-        today_date,
-        month_year,
-    ) = build_month_params(year, month, host_tz, guest_tz);
-
-    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
-    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-    let busy = BusySource::Individual(
-        fetch_busy_times_for_user_ex(
-            &state.pool,
-            &user.id,
-            now_host,
-            window_end,
-            host_tz,
-            Some(&et_id),
-            Some(&bid),
-        )
-        .await,
-    );
-    let slot_days = compute_slots(
-        &state.pool,
-        &et_id,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        start_offset,
-        days_ahead,
-        host_tz,
-        guest_tz,
-        busy,
-    )
-    .await;
-
-    let days_ctx: Vec<minijinja::Value> = slot_days.iter().map(|d| {
-        let slots: Vec<minijinja::Value> = d.slots.iter().map(|s| {
-            context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time }
-        }).collect();
-        context! { date => d.date, label => d.label, slots => slots }
-    }).collect();
-    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
-
-    let tz_options: Vec<minijinja::Value> = common_timezones()
-        .iter()
-        .map(|(iana, label)| {
-            context! { value => iana, label => label, selected => (*iana == guest_tz_name) }
-        })
-        .collect();
-
-    let reschedule_base = format!("/dashboard/bookings/{}/reschedule", bid);
-
-    let tmpl = match state.templates.get_template("slots.html") {
+    let tmpl = match state.templates.get_template("booking_host_reschedule.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
     };
     let rendered = tmpl
         .render(context! {
-            event_type => context! {
-                slug => et_slug,
-                title => et_title.clone(),
-                description => Option::<String>::None,
-                duration_min => duration,
-                location_type => loc_type,
-                location_value => loc_value,
-            },
-            host_name => user.name,
-            host_title => user.title.as_deref().unwrap_or(""),
-            host_user_id => user.id,
-            host_has_avatar => user.avatar_path.is_some(),
-            host_initials => compute_initials(&user.name),
-            days => days_ctx,
-            available_dates => available_dates,
-            month_label => month_label,
-            month_year => month_year,
-            prev_month => prev_month,
-            next_month => next_month,
-            first_weekday => first_weekday,
-            days_in_month => days_in_month,
-            today_date => today_date,
-            guest_tz => guest_tz_name,
-            tz_options => tz_options,
-            reschedule_base => reschedule_base,
-            reschedule_info => context! {
-                event_title => et_title,
-                old_date => old_date,
-                old_time => old_start_time,
-            },
+            sidebar => sidebar_context(&auth_user, "bookings"),
+            booking_id => bid,
+            event_title => event_title,
+            guest_name => guest_name,
+            guest_email => guest_email,
+            date_label => date_label,
+            start_time => start_time,
+            end_time => end_time,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
 
     Html(rendered).into_response()
 }
 
-/// Host reschedule: process the reschedule (stays confirmed)
+/// Host reschedule: set reschedule_by_host flag, regenerate token, email guest
 async fn host_reschedule_booking(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
     Path(booking_id): Path<String>,
-    Form(form): Form<RescheduleForm>,
+    Form(form): Form<CancelForm>,
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
         return resp;
@@ -10365,12 +10286,10 @@ async fn host_reschedule_booking(
         String,
         String,
         String,
-        i32,
-        Option<String>,
         String,
     )> = sqlx::query_as(
         "SELECT b.id, b.uid, b.guest_name, b.guest_email, b.start_at, b.end_at,
-                    et.id, et.duration_min, et.location_value, COALESCE(b.guest_timezone, 'UTC')
+                    et.title, COALESCE(b.guest_timezone, 'UTC')
              FROM bookings b
              JOIN event_types et ON et.id = b.event_type_id
              JOIN accounts a ON a.id = et.account_id
@@ -10382,162 +10301,81 @@ async fn host_reschedule_booking(
     .await
     .unwrap_or(None);
 
-    let (
-        bid,
-        uid,
-        guest_name,
-        guest_email,
-        old_start_at,
-        old_end_at,
-        et_id,
-        duration,
-        loc_value,
-        guest_timezone_str,
-    ) = match booking {
-        Some(b) => b,
-        None => return Redirect::to("/dashboard/bookings").into_response(),
-    };
+    let (bid, _uid, guest_name, guest_email, start_at, end_at, event_title, guest_timezone) =
+        match booking {
+            Some(b) => b,
+            None => return Redirect::to("/dashboard/bookings").into_response(),
+        };
 
-    let date = match NaiveDate::parse_from_str(&form.date, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return Html("Invalid date.".to_string()).into_response(),
-    };
-    if let Err(e) = validate_date_not_too_far(date) {
-        return Html(e).into_response();
-    }
-    let start_time = match NaiveTime::parse_from_str(&form.time, "%H:%M") {
-        Ok(t) => t,
-        Err(_) => return Html("Invalid time.".to_string()).into_response(),
-    };
-
-    let slot_start = date.and_time(start_time);
-    let slot_end = slot_start + Duration::minutes(duration as i64);
-
-    // Check conflicts excluding this booking
-    let host_tz = get_host_tz(&state.pool, &et_id).await;
-    let busy = fetch_busy_times_for_user_ex(
-        &state.pool,
-        &user.id,
-        slot_start,
-        slot_end,
-        host_tz,
-        Some(&et_id),
-        Some(&bid),
-    )
-    .await;
-    if has_conflict(&busy, slot_start, slot_end) {
-        return Html("This slot is no longer available.".to_string()).into_response();
-    }
-
-    let new_start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let new_end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+    // Generate new reschedule token and set the host-initiated flag
     let new_reschedule_token = uuid::Uuid::new_v4().to_string();
-    let new_cancel_token = uuid::Uuid::new_v4().to_string();
-
-    // Host reschedule stays confirmed, no confirm_token needed
     let _ = sqlx::query(
-        "UPDATE bookings SET start_at = ?, end_at = ?, status = 'confirmed',
-                reschedule_token = ?, cancel_token = ?, confirm_token = NULL,
-                reminder_sent_at = NULL
-         WHERE id = ?",
+        "UPDATE bookings SET reschedule_token = ?, reschedule_by_host = 1 WHERE id = ?",
     )
-    .bind(&new_start_at)
-    .bind(&new_end_at)
     .bind(&new_reschedule_token)
-    .bind(&new_cancel_token)
     .bind(&bid)
     .execute(&state.pool)
     .await;
 
-    tracing::info!(booking_id = %bid, old_start = %old_start_at, new_start = %new_start_at, "booking rescheduled by host (confirmed)");
+    tracing::info!(booking_id = %bid, guest = %guest_email, "host requested reschedule — guest will pick new time");
 
-    // Update CalDAV event in place (same UID)
-    let host_email: String =
-        sqlx::query_scalar("SELECT COALESCE(booking_email, email) FROM users WHERE id = ?")
-            .bind(&user.id)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or_default();
-
-    // Read the event_type title for email
-    let et_title: String = sqlx::query_scalar("SELECT title FROM event_types WHERE id = ?")
-        .bind(&et_id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or_default();
-
-    let push_details = crate::email::BookingDetails {
-        event_title: et_title.clone(),
-        date: form.date.clone(),
-        start_time: form.time.clone(),
-        end_time: slot_end.time().format("%H:%M").to_string(),
-        guest_name: guest_name.clone(),
-        guest_email: guest_email.clone(),
-        guest_timezone: guest_timezone_str.clone(),
-        host_name: user.name.clone(),
-        host_email: host_email.clone(),
-        uid: uid.clone(),
-        notes: None,
-        location: loc_value.clone(),
-        reminder_minutes: None,
-        additional_attendees: vec![],
-    };
-    caldav_push_booking(
-        &state.pool,
-        &state.secret_key,
-        &user.id,
-        &uid,
-        &push_details,
-    )
-    .await;
-
-    // Send notification email to guest
-    let old_date = old_start_at.get(..10).unwrap_or(&old_start_at).to_string();
-    let old_start_time = extract_time_24h(&old_start_at);
-    let old_end_time = extract_time_24h(&old_end_at);
-
+    // Send email to guest asking them to pick a new time
     if let Ok(Some(smtp_config)) =
         crate::email::load_smtp_config(&state.pool, &state.secret_key).await
     {
         let base_url = std::env::var("CALRS_BASE_URL").ok();
-        let guest_cancel_url = base_url.as_ref().map(|base| {
-            format!(
-                "{}/booking/cancel/{}",
-                base.trim_end_matches('/'),
-                new_cancel_token
-            )
-        });
-        let guest_reschedule_url = base_url.as_ref().map(|base| {
+        let reschedule_url = base_url.as_ref().map(|base| {
             format!(
                 "{}/booking/reschedule/{}",
                 base.trim_end_matches('/'),
                 new_reschedule_token
             )
         });
+        let cancel_url: Option<String> =
+            sqlx::query_scalar("SELECT cancel_token FROM bookings WHERE id = ?")
+                .bind(&bid)
+                .fetch_optional(&state.pool)
+                .await
+                .unwrap_or(None)
+                .and_then(|t: String| {
+                    base_url
+                        .as_ref()
+                        .map(|base| format!("{}/booking/cancel/{}", base.trim_end_matches('/'), t))
+                });
 
-        let reschedule_details = crate::email::RescheduleDetails {
-            event_title: et_title,
-            old_date,
-            old_start_time,
-            old_end_time,
-            new_date: form.date.clone(),
-            new_start_time: form.time.clone(),
-            new_end_time: slot_end.time().format("%H:%M").to_string(),
+        let date = start_at.get(..10).unwrap_or(&start_at).to_string();
+        let start_time = extract_time_24h(&start_at);
+        let end_time = extract_time_24h(&end_at);
+
+        let details = crate::email::BookingDetails {
+            event_title,
+            date,
+            start_time,
+            end_time,
             guest_name,
             guest_email,
-            guest_timezone: guest_timezone_str,
+            guest_timezone,
             host_name: user.name.clone(),
-            host_email,
-            uid,
-            location: loc_value,
+            host_email: user
+                .booking_email
+                .clone()
+                .unwrap_or_else(|| user.email.clone()),
+            uid: String::new(),
+            notes: None,
+            location: None,
+            reminder_minutes: None,
+            additional_attendees: vec![],
         };
-        let _ = crate::email::send_guest_reschedule_notification(
-            &smtp_config,
-            &reschedule_details,
-            guest_cancel_url.as_deref(),
-            guest_reschedule_url.as_deref(),
-        )
-        .await;
+
+        if let Some(url) = &reschedule_url {
+            let _ = crate::email::send_guest_pick_new_time(
+                &smtp_config,
+                &details,
+                url,
+                cancel_url.as_deref(),
+            )
+            .await;
+        }
     }
 
     Redirect::to("/dashboard/bookings").into_response()
@@ -12203,7 +12041,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_reschedule_stays_confirmed() {
+    async fn host_initiated_reschedule_stays_confirmed() {
         let pool = setup_test_db().await;
         let (_, _, et_id) = seed_test_data(&pool).await;
 
@@ -12216,38 +12054,61 @@ mod tests {
         )
         .await;
 
-        // Simulate host reschedule: update times but keep confirmed, no confirm_token
+        // Step 1: Host initiates reschedule (sets flag, regenerates token)
         let new_resched = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "UPDATE bookings SET reschedule_token = ?, reschedule_by_host = 1 WHERE id = ?",
+        )
+        .bind(&new_resched)
+        .bind(&bid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let by_host: i32 =
+            sqlx::query_scalar("SELECT reschedule_by_host FROM bookings WHERE id = ?")
+                .bind(&bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(by_host, 1, "reschedule_by_host should be set");
+
+        // Step 2: Guest picks a new time — should stay confirmed since host initiated
         let new_cancel = uuid::Uuid::new_v4().to_string();
         sqlx::query(
             "UPDATE bookings SET start_at = ?, end_at = ?, status = 'confirmed',
                     reschedule_token = ?, cancel_token = ?, confirm_token = NULL,
-                    reminder_sent_at = NULL
+                    reminder_sent_at = NULL, reschedule_by_host = 0
              WHERE id = ?",
         )
         .bind("2026-03-18T09:00:00")
         .bind("2026-03-18T09:30:00")
-        .bind(&new_resched)
+        .bind(&uuid::Uuid::new_v4().to_string())
         .bind(&new_cancel)
         .bind(&bid)
         .execute(&pool)
         .await
         .unwrap();
 
-        let (status, confirm_tok): (String, Option<String>) =
-            sqlx::query_as("SELECT status, confirm_token FROM bookings WHERE id = ?")
-                .bind(&bid)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (status, confirm_tok, by_host2): (String, Option<String>, i32) = sqlx::query_as(
+            "SELECT status, confirm_token, reschedule_by_host FROM bookings WHERE id = ?",
+        )
+        .bind(&bid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         assert_eq!(
             status, "confirmed",
-            "Host reschedule should keep confirmed status"
+            "Host-initiated reschedule should keep confirmed status after guest picks time"
         );
         assert!(
             confirm_tok.is_none(),
-            "Host reschedule should clear confirm_token"
+            "No confirm_token needed for host-initiated reschedule"
+        );
+        assert_eq!(
+            by_host2, 0,
+            "reschedule_by_host should be reset after completion"
         );
     }
 

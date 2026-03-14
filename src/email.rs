@@ -1646,6 +1646,96 @@ pub struct RescheduleDetails {
     pub location: Option<String>,
 }
 
+/// Ask the guest to pick a new time (host-initiated reschedule).
+/// The guest clicks the link to choose a slot — no time is pre-selected.
+pub async fn send_guest_pick_new_time(
+    config: &SmtpConfig,
+    details: &BookingDetails,
+    reschedule_url: &str,
+    cancel_url: Option<&str>,
+) -> Result<()> {
+    let from_display = config.from_name.as_deref().unwrap_or(&config.from_email);
+    let from = format!("{} <{}>", from_display, config.from_email).parse()?;
+    let to = format!("{} <{}>", details.guest_name, details.guest_email).parse()?;
+
+    let time_display = format!(
+        "{} \u{2013} {} ({})",
+        details.start_time, details.end_time, details.guest_timezone
+    );
+
+    let plain = format!(
+        "Hi {},\n\n\
+         {} needs to reschedule your booking.\n\n\
+         Event: {}\n\
+         Originally: {} at {}\n\n\
+         Please pick a new time: {}\n\
+         {}\n\
+         \u{2014} calrs",
+        details.guest_name,
+        details.host_name,
+        details.event_title,
+        details.date,
+        time_display,
+        reschedule_url,
+        cancel_url
+            .map(|u| format!("\nOr cancel: {}\n", u))
+            .unwrap_or_default(),
+    );
+
+    let rows = vec![
+        EmailRow {
+            label: "Event",
+            value: details.event_title.clone(),
+        },
+        EmailRow {
+            label: "Originally",
+            value: format!("{} at {}", details.date, time_display),
+        },
+        EmailRow {
+            label: "Host",
+            value: details.host_name.clone(),
+        },
+    ];
+
+    let mut actions = vec![EmailAction {
+        label: "Pick a new time".to_string(),
+        url: reschedule_url.to_string(),
+        color: "#d97706".to_string(),
+    }];
+    if let Some(u) = cancel_url {
+        actions.push(EmailAction {
+            label: "Cancel booking".to_string(),
+            url: u.to_string(),
+            color: "#dc2626".to_string(),
+        });
+    }
+
+    let html = render_html_email_with_actions(
+        &format!("Hi {},", h(&details.guest_name)),
+        &format!(
+            "{} needs to reschedule your booking. Please pick a new time.",
+            h(&details.host_name)
+        ),
+        "#d97706",
+        &rows,
+        None,
+        &actions,
+    );
+
+    let body = build_multipart_body(&plain, &html);
+
+    let email = Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!(
+            "Reschedule: {} \u{2014} please pick a new time",
+            details.event_title
+        ))
+        .multipart(body)?;
+
+    send_email(config, email).await
+}
+
 /// Notify the guest that their booking was rescheduled by the host.
 /// Includes updated ICS calendar invite.
 pub async fn send_guest_reschedule_notification(
