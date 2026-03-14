@@ -12719,4 +12719,301 @@ mod tests {
             total_slots
         );
     }
+
+    // --- HTTP integration tests ---
+
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    async fn setup_test_app() -> (Router, SqlitePool, String, String) {
+        let pool = setup_test_db().await;
+        let (user_id, _account_id, et_id) = seed_test_data(&pool).await;
+
+        // Create a session for the test user
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let expires_at = (Utc::now() + Duration::days(30))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        sqlx::query("INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)")
+            .bind(&session_token)
+            .bind(&user_id)
+            .bind(&expires_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let data_dir = std::env::temp_dir().join(format!("calrs_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let router = create_router(pool.clone(), data_dir, [0u8; 32]).await;
+        (router, pool, session_token, et_id)
+    }
+
+    fn get(uri: &str) -> axum::http::Request<Body> {
+        axum::http::Request::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn get_authed(uri: &str, session: &str) -> axum::http::Request<Body> {
+        axum::http::Request::builder()
+            .uri(uri)
+            .header("cookie", format!("calrs_session={}", session))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    async fn body_string(response: axum::http::Response<Body>) -> String {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn root_redirects_to_login() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app.oneshot(get("/")).await.unwrap();
+        assert_eq!(response.status(), 303);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/auth/login"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_page_returns_200() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app.oneshot(get("/auth/login")).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Sign in"),
+            "Login page should contain Sign in"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_page_hides_register_when_disabled() {
+        let (app, pool, _, _) = setup_test_app().await;
+
+        // Disable registration
+        sqlx::query("UPDATE auth_config SET registration_enabled = 0 WHERE id = 'singleton'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = app.oneshot(get("/auth/login")).await.unwrap();
+        let body = body_string(response).await;
+        assert!(
+            !body.contains("Register"),
+            "Register link should be hidden when registration is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn dashboard_redirects_unauthenticated() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app.oneshot(get("/dashboard")).await.unwrap();
+        assert_eq!(response.status(), 303);
+    }
+
+    #[tokio::test]
+    async fn dashboard_returns_200_for_authenticated_user() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(body.contains("Welcome"), "Dashboard should contain Welcome");
+    }
+
+    #[tokio::test]
+    async fn event_types_page_returns_200() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard/event-types", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Test Meeting"),
+            "Event types page should list seeded event type"
+        );
+    }
+
+    #[tokio::test]
+    async fn bookings_page_returns_200() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard/bookings", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Upcoming bookings"),
+            "Bookings page should render"
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_page_returns_200() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard/sources", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn settings_page_returns_200() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard/settings", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(body.contains("Test User"), "Settings should show user name");
+    }
+
+    #[tokio::test]
+    async fn admin_page_returns_200_for_admin() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard/admin", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(body.contains("Admin"), "Admin page should render");
+    }
+
+    #[tokio::test]
+    async fn overrides_page_returns_200() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed(
+                "/dashboard/event-types/test-meeting/overrides",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Date overrides"),
+            "Overrides page should render"
+        );
+        assert!(
+            body.contains("Test Meeting"),
+            "Should show event type title"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_profile_returns_200() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app.oneshot(get("/u/testuser")).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Test Meeting"),
+            "Public profile should list event types"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_slots_page_returns_200() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app.oneshot(get("/u/testuser/test-meeting")).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Test Meeting"),
+            "Slots page should show event type title"
+        );
+    }
+
+    #[tokio::test]
+    async fn troubleshoot_returns_200() {
+        let (app, _, session, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get_authed("/dashboard/troubleshoot", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("Troubleshoot"),
+            "Troubleshoot page should render"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonexistent_profile_returns_404_or_empty() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app.oneshot(get("/u/nonexistent")).await.unwrap();
+        // Should return 404 or a page indicating no user found
+        let status = response.status();
+        assert!(
+            status == 404 || status == 200,
+            "Nonexistent user should return 404 or 200 with empty page"
+        );
+    }
+
+    #[tokio::test]
+    async fn booking_with_invalid_cancel_token_shows_error() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get("/booking/cancel/invalid-token-123"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("invalid") || body.contains("Invalid") || body.contains("expired"),
+            "Invalid cancel token should show error"
+        );
+    }
+
+    #[tokio::test]
+    async fn booking_with_invalid_approve_token_shows_error() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get("/booking/approve/invalid-token-123"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("invalid") || body.contains("Invalid") || body.contains("expired"),
+            "Invalid approve token should show error"
+        );
+    }
+
+    #[tokio::test]
+    async fn booking_with_invalid_reschedule_token_shows_error() {
+        let (app, _, _, _) = setup_test_app().await;
+        let response = app
+            .oneshot(get("/booking/reschedule/invalid-token-123"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = body_string(response).await;
+        assert!(
+            body.contains("invalid") || body.contains("Invalid") || body.contains("expired"),
+            "Invalid reschedule token should show error"
+        );
+    }
 }
