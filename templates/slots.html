@@ -97,30 +97,6 @@
     text-align: center;
   }
 
-  /* Theme toggle floating in the card */
-  .slots-theme-toggle {
-    position: absolute;
-    top: 0.75rem;
-    right: 0.75rem;
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    width: 32px;
-    height: 32px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.9rem;
-    color: var(--text-muted);
-    transition: all 0.15s ease;
-    z-index: 5;
-  }
-  .slots-theme-toggle:hover {
-    border-color: var(--text-muted);
-    color: var(--text);
-    background: var(--surface-hover);
-  }
 
   /* Right: calendar + slots */
   .slots-main {
@@ -429,9 +405,6 @@
 {% endif %}
 
 <div class="slots-outer" style="position: relative;">
-  <button id="slots-theme-btn" type="button" class="slots-theme-toggle" title="Toggle theme" aria-label="Toggle theme">
-    <span id="slots-theme-icon"></span>
-  </button>
   <!-- Left: meeting info -->
   <div class="slots-info">
     {% if host_user_id is defined and host_user_id %}
@@ -769,39 +742,6 @@
     });
   });
 
-  // Theme toggle in the card
-  (function() {
-    var btn = document.getElementById('slots-theme-btn');
-    var icon = document.getElementById('slots-theme-icon');
-    if (!btn || !icon) return;
-    function getTheme() { return localStorage.getItem('calrs_theme') || 'system'; }
-    function isDark() {
-      var t = getTheme();
-      return t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme:dark)').matches);
-    }
-    function apply() {
-      icon.textContent = isDark() ? '\u2600\uFE0F' : '\uD83C\uDF19';
-    }
-    btn.addEventListener('click', function() {
-      var next = isDark() ? 'light' : 'dark';
-      localStorage.setItem('calrs_theme', next);
-      if (next === 'dark') {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-      apply();
-      // Sync the footer toggle if it exists
-      var footerIcon = document.getElementById('theme-icon');
-      if (footerIcon) footerIcon.textContent = icon.textContent;
-    });
-    apply();
-    matchMedia('(prefers-color-scheme:dark)').addEventListener('change', function() {
-      if (getTheme() === 'system') apply();
-    });
-  })();
 })();
 </script>
 {% endblock %}
-
-{% block footer %}<div class="powered"><span>Powered by <a href="https://cal.rs">calrs</a> 🦀</span></div>{% endblock %}

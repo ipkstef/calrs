@@ -3,31 +3,6 @@
 {% block title %}Book {{ event_type.title }}{% endblock %}
 
 {% block content %}
-<style>
-  .book-theme-toggle {
-    position: fixed;
-    top: 0.75rem;
-    right: 0.75rem;
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    width: 32px;
-    height: 32px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.9rem;
-    color: var(--text-muted);
-    transition: all 0.15s ease;
-    z-index: 10;
-  }
-  .book-theme-toggle:hover {
-    border-color: var(--text-muted);
-    color: var(--text);
-    background: var(--surface-hover);
-  }
-</style>
 {# Compute base path: /t/token, /g/group_slug/slug, /u/username/slug, or /slug #}
 {% if team_token is defined and team_token %}
   {% set base = "/t/" ~ team_token %}
@@ -38,10 +13,6 @@
 {% else %}
   {% set base = "/" ~ event_type.slug %}
 {% endif %}
-
-<button id="book-theme-btn" type="button" class="book-theme-toggle" title="Toggle theme" aria-label="Toggle theme">
-  <span id="book-theme-icon"></span>
-</button>
 
 <div class="logo"><img src="/logo" alt="" onerror="this.parentElement.style.display='none'"></div>
 
@@ -165,31 +136,4 @@
   });
 })();
 </script>
-<script>
-(function() {
-  var btn = document.getElementById('book-theme-btn');
-  var icon = document.getElementById('book-theme-icon');
-  if (!btn || !icon) return;
-  function getTheme() { return localStorage.getItem('calrs_theme') || 'system'; }
-  function isDark() {
-    var t = getTheme();
-    return t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme:dark)').matches);
-  }
-  function apply() {
-    icon.textContent = isDark() ? '\u2600\uFE0F' : '\uD83C\uDF19';
-  }
-  btn.addEventListener('click', function() {
-    var next = isDark() ? 'light' : 'dark';
-    localStorage.setItem('calrs_theme', next);
-    if (next === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    apply();
-  });
-  apply();
-})();
-</script>
 {% endblock %}
-{% block footer %}<div class="powered"><span>Powered by <a href="https://cal.rs">calrs</a> 🦀</span></div>{% endblock %}
