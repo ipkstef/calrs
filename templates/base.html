@@ -406,9 +406,29 @@
   <div class="container">
     {% block content %}{% endblock %}
     {% block footer %}<div class="powered"><span>Powered by <a href="https://cal.rs">calrs</a> 🦀</span></div>{% endblock %}
-    {% block theme_toggle %}<button id="theme-toggle" type="button" title="Toggle theme" style="position: fixed; top: 0.75rem; right: 0.75rem; background: none; border: 1px solid var(--border); border-radius: 50%; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; color: var(--text-muted); transition: all 0.15s ease; z-index: 10;" aria-label="Toggle theme">
-      <span id="theme-icon"></span>
-    </button>{% endblock %}
+    {% block theme_toggle %}
+    <button id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme" class="theme-pill">
+      <span class="theme-pill-track">
+        <svg class="theme-pill-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="theme-pill-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span class="theme-pill-knob"></span>
+      </span>
+    </button>
+    <style>
+      .theme-pill { position: fixed; top: 0.75rem; right: 0.75rem; background: none; border: none; cursor: pointer; padding: 0; z-index: 10; }
+      .theme-pill-track { display: flex; align-items: center; justify-content: space-between; width: 52px; height: 28px; background: var(--border); border-radius: 999px; padding: 0 5px; position: relative; transition: background 0.3s ease; }
+      .theme-pill:hover .theme-pill-track { background: var(--text-muted); }
+      .theme-pill-sun, .theme-pill-moon { width: 14px; height: 14px; flex-shrink: 0; transition: opacity 0.3s ease; }
+      .theme-pill-sun { color: #f59e0b; }
+      .theme-pill-moon { color: #94a3b8; }
+      .theme-pill-knob { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; background: var(--surface, #fff); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+      html.dark .theme-pill-knob { transform: translateX(24px); }
+      html.dark .theme-pill-track { background: #374151; }
+      html.dark .theme-pill:hover .theme-pill-track { background: #4b5563; }
+      html.dark .theme-pill-sun { opacity: 0.4; }
+      html:not(.dark) .theme-pill-moon { opacity: 0.4; }
+    </style>
+    {% endblock %}
   </div>
 <script>
 // CSRF protection: inject _csrf hidden field into all POST forms
@@ -449,8 +469,7 @@
 // Theme toggle (light / dark / system)
 (function() {
   var btn = document.getElementById('theme-toggle');
-  var icon = document.getElementById('theme-icon');
-  if (!btn || !icon) return;
+  if (!btn) return;
   function getTheme() { return localStorage.getItem('calrs_theme') || 'system'; }
   function isDark() {
     var t = getTheme();
@@ -459,10 +478,8 @@
   function apply() {
     if (isDark()) {
       document.documentElement.classList.add('dark');
-      icon.textContent = '\u2600\uFE0F'; // sun = click to go light
     } else {
       document.documentElement.classList.remove('dark');
-      icon.textContent = '\uD83C\uDF19'; // moon = click to go dark
     }
   }
   btn.addEventListener('click', function() {
@@ -471,7 +488,6 @@
     apply();
   });
   apply();
-  // Listen for system changes when set to 'system'
   matchMedia('(prefers-color-scheme:dark)').addEventListener('change', function() {
     if (getTheme() === 'system') apply();
   });
