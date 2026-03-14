@@ -87,6 +87,7 @@ calrs/
 │   ├── source_test.html          ← connection test / sync results (extends dashboard_base)
 │   ├── team_link_form.html       ← create/edit team link (extends dashboard_base)
 │   ├── troubleshoot.html         ← availability troubleshoot timeline (extends dashboard_base)
+│   ├── overrides.html            ← date overrides management per event type (extends dashboard_base)
 │   ├── profile.html              ← public user profile (with avatar, title, bio)
 │   ├── group_profile.html        ← public group page
 │   ├── slots.html                ← available time slots (with timezone picker)
@@ -230,6 +231,8 @@ File: `src/web/mod.rs`, templates in `templates/`
 
 **Per-event-type calendar selection:** Event type form includes calendar checkboxes (from `is_busy=1` calendars). Selected calendars are stored in `event_type_calendars` junction table. When computing busy times, if no calendars are selected all `is_busy=1` calendars are checked (backward-compatible). The filter uses `NOT EXISTS / IN` subquery on `event_type_calendars` and is applied in `fetch_busy_times_for_user()`, troubleshoot handler, and CLI commands.
 
+**Availability overrides:** Per-event-type date overrides at `/dashboard/event-types/{slug}/overrides`. Two types: blocked days (entire day off) and custom hours (replace weekly rules with specific time windows). Overrides are checked in `compute_slots_from_rules()` — blocked overrides skip the day, custom hours replace weekly rules. Also wired into CLI slot computation and troubleshoot view. Stored in `availability_overrides` table.
+
 **Group event types:** Created under a group from the dashboard. Combined availability shows slots where ANY group member is free. Round-robin assignment picks the least-busy available member. Public URLs: `/g/{group-slug}/{slug}`.
 
 **Private event types & invites:** Event types with `is_private=1` are hidden from public profiles and group pages. Access is granted via `booking_invites` — tokenized links sent by email. The invite token is propagated through the booking flow via query params (`?invite=TOKEN`) and hidden form fields. Guest name/email are pre-filled from the invite. Token validation checks expiration and usage limits at every step. Any dashboard user can send invites for private event types. Invite management at `/dashboard/invites/{event_type_id}`. Invite emails use indigo accent (#6366f1).
@@ -283,8 +286,6 @@ File: `src/web/mod.rs`, templates in `templates/`
 
 ### Features not yet implemented
 - Full delta sync using CalDAV `sync-token` and `ctag` (time-range filtering is implemented for on-demand sync)
-- Reschedule flow (change date/time without cancelling)
-- Availability overrides (block specific dates, add special hours)
 - REST API for third-party integrations
 
 ### Test coverage roadmap

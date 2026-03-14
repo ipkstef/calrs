@@ -167,6 +167,14 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
             .fetch_all(pool)
             .await?;
 
+            let overrides: Vec<(String, Option<String>, Option<String>, i32)> = sqlx::query_as(
+                "SELECT date, start_time, end_time, is_blocked FROM availability_overrides WHERE event_type_id = ? ORDER BY date, start_time",
+            )
+            .bind(&et_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
             // Get busy events for the period
             let now = Local::now().naive_local();
             let min_start = now + Duration::minutes(min_notice as i64);
@@ -278,18 +286,42 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
 
             for day_offset in 0..days {
                 let date = now.date() + Duration::days(day_offset as i64);
-                let weekday = date.weekday().num_days_from_sunday() as i32;
+                let date_str = date.format("%Y-%m-%d").to_string();
 
-                let day_rules: Vec<&(i32, String, String)> =
-                    rules.iter().filter(|(d, _, _)| *d == weekday).collect();
+                // Check availability overrides for this date
+                let day_overrides: Vec<&(String, Option<String>, Option<String>, i32)> = overrides
+                    .iter()
+                    .filter(|(d, _, _, _)| *d == date_str)
+                    .collect();
 
-                if day_rules.is_empty() {
+                if day_overrides.iter().any(|(_, _, _, blocked)| *blocked != 0) {
+                    continue;
+                }
+
+                let windows: Vec<(String, String)> = if !day_overrides.is_empty() {
+                    day_overrides
+                        .iter()
+                        .filter_map(|(_, s, e, _)| match (s, e) {
+                            (Some(start), Some(end)) => Some((start.clone(), end.clone())),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    let weekday = date.weekday().num_days_from_sunday() as i32;
+                    rules
+                        .iter()
+                        .filter(|(d, _, _)| *d == weekday)
+                        .map(|(_, s, e)| (s.clone(), e.clone()))
+                        .collect()
+                };
+
+                if windows.is_empty() {
                     continue;
                 }
 
                 let mut slots = Vec::new();
 
-                for (_, start_str, end_str) in &day_rules {
+                for (start_str, end_str) in &windows {
                     let window_start = NaiveTime::parse_from_str(start_str, "%H:%M")?;
                     let window_end = NaiveTime::parse_from_str(end_str, "%H:%M")?;
 

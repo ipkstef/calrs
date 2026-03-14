@@ -535,6 +535,15 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         )
         .route("/dashboard/invites/{event_type_id}/send", post(send_invite))
         .route("/dashboard/invites/{invite_id}/delete", post(delete_invite))
+        // Availability overrides
+        .route(
+            "/dashboard/event-types/{slug}/overrides",
+            get(overrides_page).post(create_override),
+        )
+        .route(
+            "/dashboard/event-types/{slug}/overrides/{override_id}/delete",
+            post(delete_override),
+        )
         // Calendar source management
         .route(
             "/dashboard/sources/new",
@@ -3052,6 +3061,7 @@ async fn show_team_link_slots(
         host_tz,
         guest_tz,
         busy,
+        &[], // team links don't have per-event-type overrides
     );
 
     let days_ctx: Vec<minijinja::Value> = slot_days
@@ -4439,6 +4449,183 @@ async fn delete_invite(
         Some(id) => Redirect::to(&format!("/dashboard/invites/{}", id)).into_response(),
         None => Redirect::to("/dashboard/event-types").into_response(),
     }
+}
+
+// --- Availability overrides ---
+
+async fn overrides_page(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    Path(slug): Path<String>,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+
+    let et: Option<(String, String)> = sqlx::query_as(
+        "SELECT et.id, et.title FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.slug = ?",
+    )
+    .bind(&user.id)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (et_id, et_title) = match et {
+        Some(e) => e,
+        None => return Redirect::to("/dashboard/event-types").into_response(),
+    };
+
+    let overrides: Vec<(String, String, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT id, date, start_time, end_time, is_blocked FROM availability_overrides WHERE event_type_id = ? ORDER BY date, start_time",
+    )
+    .bind(&et_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let overrides_ctx: Vec<minijinja::Value> = overrides
+        .iter()
+        .map(|(id, date, start_time, end_time, is_blocked)| {
+            let date_label = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                .map(|d| d.format("%A, %B %-d, %Y").to_string())
+                .unwrap_or_else(|_| date.clone());
+            context! {
+                id => id,
+                date => date,
+                date_label => date_label,
+                start_time => start_time,
+                end_time => end_time,
+                is_blocked => *is_blocked != 0,
+            }
+        })
+        .collect();
+
+    let tmpl = match state.templates.get_template("overrides.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)).into_response(),
+    };
+
+    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
+
+    Html(
+        tmpl.render(context! {
+            sidebar => sidebar_context(&auth_user, "event-types"),
+            event_type_title => et_title,
+            event_type_slug => slug,
+            overrides => overrides_ctx,
+            impersonating => impersonating,
+            impersonating_name => impersonating_name,
+        })
+        .unwrap_or_default(),
+    )
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct OverrideForm {
+    _csrf: Option<String>,
+    date: String,
+    override_type: String,
+    start_time: Option<String>,
+    end_time: Option<String>,
+}
+
+async fn create_override(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Form(form): Form<OverrideForm>,
+) -> impl IntoResponse {
+    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
+        return resp;
+    }
+    let user = &auth_user.user;
+
+    let et_id: Option<String> = sqlx::query_scalar(
+        "SELECT et.id FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.slug = ?",
+    )
+    .bind(&user.id)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let et_id = match et_id {
+        Some(id) => id,
+        None => return Redirect::to("/dashboard/event-types").into_response(),
+    };
+
+    // Validate date
+    if NaiveDate::parse_from_str(&form.date, "%Y-%m-%d").is_err() {
+        return Redirect::to(&format!("/dashboard/event-types/{}/overrides", slug)).into_response();
+    }
+
+    let is_blocked = form.override_type != "custom";
+    let (start_time, end_time) = if !is_blocked {
+        let s = form.start_time.as_deref().unwrap_or("");
+        let e = form.end_time.as_deref().unwrap_or("");
+        if s.is_empty() || e.is_empty() || s >= e {
+            return Redirect::to(&format!("/dashboard/event-types/{}/overrides", slug))
+                .into_response();
+        }
+        (Some(s.to_string()), Some(e.to_string()))
+    } else {
+        (None, None)
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = sqlx::query(
+        "INSERT INTO availability_overrides (id, event_type_id, date, start_time, end_time, is_blocked) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&et_id)
+    .bind(&form.date)
+    .bind(&start_time)
+    .bind(&end_time)
+    .bind(if is_blocked { 1 } else { 0 })
+    .execute(&state.pool)
+    .await;
+
+    tracing::info!(
+        override_id = %id,
+        event_type = %slug,
+        date = %form.date,
+        is_blocked = is_blocked,
+        "availability override created"
+    );
+
+    Redirect::to(&format!("/dashboard/event-types/{}/overrides", slug)).into_response()
+}
+
+#[derive(Deserialize)]
+struct DeleteOverrideForm {
+    _csrf: Option<String>,
+}
+
+async fn delete_override(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    headers: HeaderMap,
+    Path((slug, override_id)): Path<(String, String)>,
+    Form(form): Form<DeleteOverrideForm>,
+) -> impl IntoResponse {
+    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
+        return resp;
+    }
+    let user = &auth_user.user;
+
+    // Verify the override belongs to an event type the user owns
+    let _ = sqlx::query(
+        "DELETE FROM availability_overrides WHERE id = ? AND event_type_id IN (SELECT et.id FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ?)",
+    )
+    .bind(&override_id)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
+    tracing::info!(override_id = %override_id, deleted_by = %user.email, "availability override deleted");
+
+    Redirect::to(&format!("/dashboard/event-types/{}/overrides", slug)).into_response()
 }
 
 // --- Group event type handlers ---
@@ -6731,6 +6918,15 @@ async fn compute_slots(
     .await
     .unwrap_or_default();
 
+    // Fetch availability overrides for this event type
+    let overrides: Vec<(String, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT date, start_time, end_time, is_blocked FROM availability_overrides WHERE event_type_id = ? ORDER BY date, start_time",
+    )
+    .bind(et_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
     compute_slots_from_rules(
         &rules,
         duration,
@@ -6742,6 +6938,7 @@ async fn compute_slots(
         host_tz,
         guest_tz,
         busy,
+        &overrides,
     )
 }
 
@@ -6757,6 +6954,7 @@ fn compute_slots_from_rules(
     host_tz: Tz,
     guest_tz: Tz,
     busy: BusySource,
+    overrides: &[(String, Option<String>, Option<String>, i32)],
 ) -> Vec<SlotDay> {
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let min_start = now_host + Duration::minutes(min_notice as i64);
@@ -6766,18 +6964,45 @@ fn compute_slots_from_rules(
 
     for day_offset in start_offset..(start_offset + days_ahead) {
         let date = now_host.date() + Duration::days(day_offset as i64);
-        let weekday = date.weekday().num_days_from_sunday() as i32;
+        let date_str = date.format("%Y-%m-%d").to_string();
 
-        let day_rules: Vec<&(i32, String, String)> =
-            rules.iter().filter(|(d, _, _)| *d == weekday).collect();
+        // Check availability overrides for this date
+        let day_overrides: Vec<&(String, Option<String>, Option<String>, i32)> = overrides
+            .iter()
+            .filter(|(d, _, _, _)| *d == date_str)
+            .collect();
 
-        if day_rules.is_empty() {
+        // If any override blocks this day, skip entirely
+        if day_overrides.iter().any(|(_, _, _, blocked)| *blocked != 0) {
+            continue;
+        }
+
+        // Build time windows: use custom hours if overrides exist, else weekly rules
+        let windows: Vec<(String, String)> = if !day_overrides.is_empty() {
+            // Custom hours overrides replace weekly rules
+            day_overrides
+                .iter()
+                .filter_map(|(_, s, e, _)| match (s, e) {
+                    (Some(start), Some(end)) => Some((start.clone(), end.clone())),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            let weekday = date.weekday().num_days_from_sunday() as i32;
+            rules
+                .iter()
+                .filter(|(d, _, _)| *d == weekday)
+                .map(|(_, s, e)| (s.clone(), e.clone()))
+                .collect()
+        };
+
+        if windows.is_empty() {
             continue;
         }
 
         let mut day_slots = Vec::new();
 
-        for (_, start_str, end_str) in &day_rules {
+        for (start_str, end_str) in &windows {
             let window_start = match NaiveTime::parse_from_str(start_str, "%H:%M") {
                 Ok(t) => t,
                 Err(_) => continue,
@@ -7924,16 +8149,42 @@ async fn troubleshoot(
         None => return Html("Event type not found".to_string()),
     };
 
-    // Availability rules for this day of week
-    let weekday = target_date.weekday().num_days_from_sunday() as i32;
-    let rules: Vec<(String, String)> = sqlx::query_as(
-        "SELECT start_time, end_time FROM availability_rules WHERE event_type_id = ? AND day_of_week = ? ORDER BY start_time",
+    // Check availability overrides for this date
+    let target_date_str = target_date.format("%Y-%m-%d").to_string();
+    let day_overrides: Vec<(Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT start_time, end_time, is_blocked FROM availability_overrides WHERE event_type_id = ? AND date = ? ORDER BY start_time",
     )
     .bind(&et_id)
-    .bind(weekday)
+    .bind(&target_date_str)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
+
+    let date_is_blocked = day_overrides.iter().any(|(_, _, b)| *b != 0);
+
+    // Availability rules: use overrides if present, else weekly rules
+    let rules: Vec<(String, String)> = if date_is_blocked {
+        vec![] // blocked day — no availability
+    } else if !day_overrides.is_empty() {
+        // Custom hours replace weekly rules
+        day_overrides
+            .iter()
+            .filter_map(|(s, e, _)| match (s, e) {
+                (Some(start), Some(end)) => Some((start.clone(), end.clone())),
+                _ => None,
+            })
+            .collect()
+    } else {
+        let weekday = target_date.weekday().num_days_from_sunday() as i32;
+        sqlx::query_as(
+            "SELECT start_time, end_time FROM availability_rules WHERE event_type_id = ? AND day_of_week = ? ORDER BY start_time",
+        )
+        .bind(&et_id)
+        .bind(weekday)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    };
 
     // Busy events for this date — enriched with title + calendar name
     let day_start_compact = target_date.format("%Y%m%d").to_string();
@@ -8380,6 +8631,8 @@ async fn troubleshoot(
             prev_date => prev_date,
             next_date => next_date,
             has_rules => !rules.is_empty(),
+            date_is_blocked => date_is_blocked,
+            has_custom_hours => !day_overrides.is_empty() && !date_is_blocked,
             blocks => blocks_ctx,
             hour_markers => hour_markers,
             breakdown => breakdown_ctx,
@@ -12368,6 +12621,102 @@ mod tests {
         assert!(
             body_start < slots_outer_start,
             "Reschedule banner div must appear before slots-outer div to avoid flex layout breakage"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_blocked_override_skips_day() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Find the next Monday
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date();
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+        let monday_str = next_monday.format("%Y-%m-%d").to_string();
+
+        // Block that Monday with an override
+        let override_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO availability_overrides (id, event_type_id, date, is_blocked) VALUES (?, ?, ?, 1)")
+            .bind(&override_id)
+            .bind(&et_id)
+            .bind(&monday_str)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![]),
+        )
+        .await;
+
+        // Monday should be blocked — no slots
+        assert!(
+            slot_days.is_empty(),
+            "Blocked override should skip the day, got {} days with slots",
+            slot_days.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_custom_hours_override() {
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Find the next Monday
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date();
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+        let monday_str = next_monday.format("%Y-%m-%d").to_string();
+
+        // Override Monday with custom hours: only 10:00-12:00 (instead of default 09:00-17:00)
+        let override_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO availability_overrides (id, event_type_id, date, start_time, end_time, is_blocked) VALUES (?, ?, ?, '10:00', '12:00', 0)")
+            .bind(&override_id)
+            .bind(&et_id)
+            .bind(&monday_str)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty(), "Should have slots for custom hours");
+        // 10:00-12:00 with 30min slots = 4 slots (10:00, 10:30, 11:00, 11:30)
+        let total_slots: usize = slot_days.iter().map(|d| d.slots.len()).sum();
+        assert_eq!(
+            total_slots, 4,
+            "10:00-12:00 with 30min = 4 slots, got {}",
+            total_slots
         );
     }
 }

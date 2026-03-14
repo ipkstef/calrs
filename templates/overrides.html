@@ -1,0 +1,113 @@
+{% extends "dashboard_base.html" %}
+
+{% block title %}Date overrides — {{ event_type_title }} — calrs{% endblock %}
+
+{% block dashboard_content %}
+
+<div class="card">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+    <h1 style="margin-bottom: 0;">Date overrides</h1>
+    <a href="/dashboard/event-types" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Back to event types</a>
+  </div>
+  <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">
+    Add date-specific exceptions for <strong>{{ event_type_title }}</strong>
+  </p>
+
+  {% if error %}
+    <div class="error" style="margin-bottom: 1rem;">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" action="/dashboard/event-types/{{ event_type_slug }}/overrides" style="border-bottom: 1px solid var(--border); padding-bottom: 1.25rem; margin-bottom: 1.25rem;">
+    <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Add new override</h2>
+
+    <div class="form-group">
+      <label for="override_date">Date</label>
+      <input type="date" id="override_date" name="date" required style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%; max-width: 220px;">
+    </div>
+
+    <div class="form-group" style="margin-bottom: 0.75rem;">
+      <label style="display: block; margin-bottom: 0.5rem;">Override type</label>
+      <div style="display: flex; gap: 1.5rem;">
+        <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.9rem;">
+          <input type="radio" name="override_type" value="blocked" checked style="accent-color: var(--accent);">
+          Block entire day
+        </label>
+        <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.9rem;">
+          <input type="radio" name="override_type" value="custom" style="accent-color: var(--accent);">
+          Custom hours
+        </label>
+      </div>
+    </div>
+
+    <div id="custom-hours-fields" style="display: none;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; max-width: 440px;" class="form-grid-2">
+        <div class="form-group">
+          <label for="start_time">Start time</label>
+          <input type="time" id="start_time" name="start_time" value="09:00" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        </div>
+        <div class="form-group">
+          <label for="end_time">End time</label>
+          <input type="time" id="end_time" name="end_time" value="17:00" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn" style="margin-top: 0.75rem;">Add override</button>
+  </form>
+
+  {% if overrides %}
+  <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Existing overrides</h2>
+  <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+    {% for o in overrides %}
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);">
+      <div>
+        <strong style="font-size: 0.9rem;">{{ o.date_label }}</strong>
+        {% if o.is_blocked %}
+          <span class="badge" style="margin-left: 0.5rem; background: rgba(239,68,68,0.1); color: #ef4444;">blocked</span>
+        {% else %}
+          <span class="badge" style="margin-left: 0.5rem; background: rgba(59,130,246,0.1); color: #3b82f6;">custom hours</span>
+          <span style="color: var(--text-muted); font-size: 0.85rem; margin-left: 0.25rem;">{{ o.start_time }} &ndash; {{ o.end_time }}</span>
+        {% endif %}
+      </div>
+      <form method="POST" action="/dashboard/event-types/{{ event_type_slug }}/overrides/{{ o.id }}/delete" style="margin: 0;">
+        <button type="submit" class="slot-btn" style="font-size: 0.8rem; color: var(--error-text); cursor: pointer;" onclick="return confirm('Delete this override?');">Delete</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty" style="padding: 1.5rem 1rem;">
+    <div class="empty-icon">&#128197;</div>
+    <div class="empty-text">No date overrides yet. Add one above to block a day or set custom hours.</div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  (function() {
+    var radios = document.querySelectorAll('input[name="override_type"]');
+    var customFields = document.getElementById('custom-hours-fields');
+    var startInput = document.getElementById('start_time');
+    var endInput = document.getElementById('end_time');
+
+    function toggle() {
+      var selected = document.querySelector('input[name="override_type"]:checked').value;
+      if (selected === 'custom') {
+        customFields.style.display = 'block';
+        startInput.required = true;
+        endInput.required = true;
+      } else {
+        customFields.style.display = 'none';
+        startInput.required = false;
+        endInput.required = false;
+      }
+    }
+
+    radios.forEach(function(r) {
+      r.addEventListener('change', toggle);
+    });
+
+    toggle();
+  })();
+</script>
+{% endblock dashboard_content %}

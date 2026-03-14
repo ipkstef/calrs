@@ -28,6 +28,16 @@
 
   <p style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">{{ date_label }}</p>
 
+  {% if date_is_blocked is defined and date_is_blocked %}
+  <div style="padding: 0.5rem 0.75rem; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: var(--radius); margin-bottom: 0.75rem; font-size: 0.85rem; color: #ef4444;">
+    Blocked by date override (day off)
+  </div>
+  {% elif has_custom_hours is defined and has_custom_hours %}
+  <div style="padding: 0.5rem 0.75rem; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); border-radius: var(--radius); margin-bottom: 0.75rem; font-size: 0.85rem; color: #3b82f6;">
+    Custom hours override active (replaces weekly rules)
+  </div>
+  {% endif %}
+
   {# Legend #}
   <div style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.75rem; margin-bottom: 0.75rem; color: var(--text-muted);">
     <span><span style="display: inline-block; width: 12px; height: 12px; border-radius: 2px; background: #22c55e; vertical-align: middle; margin-right: 3px;"></span> Available</span>
@@ -77,7 +87,11 @@
     {% endfor %}
   </div>
   {% else %}
-    {% if not has_rules %}
+    {% if date_is_blocked is defined and date_is_blocked %}
+  <p style="font-size: 0.85rem; color: #ef4444;">This date is blocked by an availability override (day off). No slots available.</p>
+    {% elif has_custom_hours is defined and has_custom_hours and not has_rules %}
+  <p style="font-size: 0.85rem; color: var(--text-muted);">Custom hours override active but no matching windows. Check your override settings.</p>
+    {% elif not has_rules %}
   <p style="font-size: 0.85rem; color: var(--text-muted);">No availability rules for this day of the week. This event type is not bookable on {{ date_label }}.</p>
     {% else %}
   <p style="font-size: 0.85rem; color: var(--text-muted);">No blocked slots during availability hours. All times are bookable.</p>
