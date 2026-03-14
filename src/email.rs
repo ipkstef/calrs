@@ -1150,13 +1150,15 @@ pub async fn send_guest_pending_notice_ex(
         details.start_time, details.end_time, details.guest_timezone
     );
 
+    // Don't include location in pending emails — it should only be revealed
+    // after the booking is confirmed (prevents meeting link leaking).
     let plain = format!(
         "Hi {},\n\n\
          Your booking request has been received and is awaiting confirmation from {}.\n\n\
          Event: {}\n\
          Date: {}\n\
          Time: {}\n\
-         {}{}\
+         {}\
          You'll receive another email once it's confirmed.\n\
          {}\n\
          \u{2014} calrs",
@@ -1165,11 +1167,6 @@ pub async fn send_guest_pending_notice_ex(
         details.event_title,
         details.date,
         time_display,
-        details
-            .location
-            .as_ref()
-            .map(|l| format!("Location: {}\n", l))
-            .unwrap_or_default(),
         details
             .notes
             .as_ref()
@@ -1198,12 +1195,6 @@ pub async fn send_guest_pending_notice_ex(
             value: details.host_name.clone(),
         },
     ];
-    if let Some(loc) = &details.location {
-        rows.push(EmailRow {
-            label: "Location",
-            value: loc.clone(),
-        });
-    }
     if let Some(notes) = &details.notes {
         rows.push(EmailRow {
             label: "Notes",
