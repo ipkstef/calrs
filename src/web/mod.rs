@@ -12346,4 +12346,129 @@ mod tests {
             "10:00-10:30 should be free when booking is excluded (reschedule to same slot)"
         );
     }
+
+    // --- Template rendering regression tests ---
+
+    /// Render slots.html WITHOUT reschedule context and verify slot links
+    /// point to /book and not to a JSON object.
+    /// Regression test for: default(value='') rendering as {"value": ""}
+    #[test]
+    fn slots_template_links_without_reschedule_context() {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+        env.set_loader(minijinja::path_loader("templates"));
+
+        let tmpl = env
+            .get_template("slots.html")
+            .expect("slots.html should load");
+
+        // Minimal context mimicking show_slots_for_user (no reschedule_base)
+        let rendered = tmpl
+            .render(context! {
+                event_type => context! {
+                    slug => "intro",
+                    title => "Intro Call",
+                    duration_min => 30,
+                },
+                host_name => "Alice",
+                username => "alice",
+                days => vec![
+                    context! {
+                        date => "2026-03-16",
+                        label => "Mon",
+                        slots => vec![
+                            context! { start => "10:00", end => "10:30", host_date => "2026-03-16", host_time => "10:00" },
+                        ],
+                    },
+                ],
+                available_dates => vec!["2026-03-16"],
+                month_label => "March 2026",
+                month_year => "2026-03",
+                next_month => "2026-04",
+                first_weekday => 0,
+                days_in_month => 31,
+                today_date => "2026-03-14",
+                guest_tz => "UTC",
+            })
+            .expect("slots.html should render");
+
+        // basePath must be /u/alice/intro, not something with { in it
+        assert!(
+            rendered.contains("&#x2f;u&#x2f;alice&#x2f;intro")
+                || rendered.contains("/u/alice/intro"),
+            "basePath should be /u/alice/intro"
+        );
+
+        // rescheduleBase must be empty, not a JSON object
+        assert!(
+            !rendered.contains(r#"{"value"#),
+            "rescheduleBase must not render as a JSON object"
+        );
+
+        // Slot links should go to /book, not to a bare {
+        assert!(
+            !rendered.contains(r#"href="{"#),
+            "Slot hrefs must not start with opening brace"
+        );
+    }
+
+    /// Render slots.html WITH reschedule context and verify slot links
+    /// use the reschedule URL, not the /book path.
+    #[test]
+    fn slots_template_links_with_reschedule_context() {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+        env.set_loader(minijinja::path_loader("templates"));
+
+        let tmpl = env
+            .get_template("slots.html")
+            .expect("slots.html should load");
+
+        let rendered = tmpl
+            .render(context! {
+                event_type => context! {
+                    slug => "intro",
+                    title => "Intro Call",
+                    duration_min => 30,
+                },
+                host_name => "Alice",
+                username => "alice",
+                reschedule_base => "/booking/reschedule/abc123",
+                reschedule_info => context! {
+                    event_title => "Intro Call",
+                    old_date => "2026-03-15",
+                    old_time => "10:00",
+                },
+                days => vec![
+                    context! {
+                        date => "2026-03-16",
+                        label => "Mon",
+                        slots => vec![
+                            context! { start => "10:00", end => "10:30", host_date => "2026-03-16", host_time => "10:00" },
+                        ],
+                    },
+                ],
+                available_dates => vec!["2026-03-16"],
+                month_label => "March 2026",
+                month_year => "2026-03",
+                next_month => "2026-04",
+                first_weekday => 0,
+                days_in_month => 31,
+                today_date => "2026-03-14",
+                guest_tz => "UTC",
+            })
+            .expect("slots.html should render");
+
+        // basePath should be the reschedule URL, not the normal /u/alice/intro
+        assert!(
+            rendered.contains("reschedule&#x2f;abc123") || rendered.contains("reschedule/abc123"),
+            "basePath should be the reschedule URL when reschedule_base is set"
+        );
+
+        // Reschedule banner should appear
+        assert!(
+            rendered.contains("Rescheduling:"),
+            "Reschedule banner should be visible"
+        );
+    }
 }
