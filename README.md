@@ -111,10 +111,14 @@
 - **Public group pages** — bookable at `/g/{group-slug}/{slug}`
 - **Ad-hoc team links** — create shareable booking links across hand-picked users, no admin-managed group needed. Finds slots where ALL selected members are free. Multiple availability windows (e.g. morning + afternoon). Reusable by default (opt-in one-time use). Editable after creation. CalDAV write-back to every member's calendar
 
-### Private event types & invites
+### Visibility & invites
 
-- **Private event types** — hide event types from your public profile; only accessible via invite links
-- **Booking invites** — send personalized invite links with guest name, email, optional message, expiration, and usage limits. Guest info auto-filled on the booking form. Works with both personal and group event types (round-robin preserved). Any dashboard user can send invites for private event types they can see.
+- **Three-level visibility** — event types can be **public** (listed on your profile), **internal** (not listed, any team member can generate invite links), or **private** (not listed, only the owner sends invites)
+- **Internal event types** — designed for cross-team booking within an organization. Any authenticated user can generate a single-use booking link from the Organization dashboard and share it with an external contact. The link expires after 7 days and can't be reused — no risk of a customer bookmarking a direct scheduling URL
+- **Private event types** — hidden from your public profile; accessible only via invite links sent by the event type owner
+- **Booking invites** — send personalized invite links with guest name, email, optional message, expiration, and usage limits. Guest info auto-filled on the booking form. Works with both personal and group event types (round-robin preserved)
+- **Quick link generation** — one-click "Get link" button on the Organization dashboard generates a single-use invite URL and copies it to clipboard. No form to fill — paste it in Slack, email, or a ticket
+- **Availability overrides** — block specific dates (holidays, conferences) or set custom hours per event type. Overrides replace weekly rules for that day and are visible in the troubleshoot view
 
 ### Authentication
 
@@ -490,6 +494,7 @@ calrs/
 - [x] Multiple availability windows on team links
 - [x] Reschedule flow (change date/time without cancelling)
 - [x] Availability overrides (block specific dates, set custom hours)
+- [x] Three-level visibility (public / internal / private) with quick invite link generation
 - [ ] Webhooks (per-event-type HTTP callbacks on new/cancelled bookings)
 - [ ] Delta sync using CalDAV `sync-token` / `ctag`
 - [ ] Multi-language support (i18n)

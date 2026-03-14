@@ -95,6 +95,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Improved slot picker UX | 0.21.1 | Dynamic TZ offsets, filled calendar grid, sidebar controls, clickable prev/next month days |
 | Reschedule | 0.22.0 | Guests and hosts can reschedule bookings — new slot picker, CalDAV update in place, token regeneration |
 | Host reschedule UX | 0.23.0 | Host-initiated reschedule confirmed without re-approval, reschedule from pending bookings |
+| Availability overrides | 0.23.0 | Block specific dates or set custom hours per event type |
+| Three-level visibility | 0.23.0 | Public / internal (any team member generates invite links) / private (owner-only invites) |
+| Organization dashboard | 0.23.0 | Internal event types listed for all team members with one-click invite link generation |
 
 ## [Unreleased]
 

@@ -85,34 +85,43 @@ The location is displayed on the public booking page, in confirmation emails, an
 
 Event types can be toggled on/off from the dashboard without deleting them. Disabled event types don't show up on your public profile and return 404 on their booking page.
 
-## Private event types
+## Visibility
 
-Event types can be marked as **private** to hide them from your public profile page and group pages. Private event types are only accessible via invite links — guests cannot find or book them directly.
+Event types have three visibility levels, set from the **Visibility** dropdown in the event type form:
 
-### Enabling private mode
+| Level | Listed on profile? | Who can book? | Badge |
+|---|---|---|---|
+| **Public** | Yes | Anyone with the URL | *(none)* |
+| **Internal** | No | Anyone with an invite link (any team member can generate links) | blue "internal" |
+| **Private** | No | Anyone with an invite link (only the owner sends invites) | indigo "private" |
 
-In the event type form, check the **Private** checkbox under the Notifications section. Private event types show an indigo "private" badge on the dashboard.
+### Internal event types
+
+Internal event types are designed for **cross-team booking within an organization**. They are not discoverable on public profile or group pages, but any authenticated team member can generate a single-use booking link and share it with an external contact.
+
+**Typical use case:** A Support team creates an internal "Support Call" event type. When a Sales rep needs to put a customer in touch with Support, they go to the **Organization** dashboard page, click **"Get link"** next to "Support Call", and paste the generated URL in a Slack message or email to the customer. The customer clicks the link, picks a slot, and books — the link expires after 7 days and can't be reused.
+
+The **Organization** page (`/dashboard/organization`) lists all internal event types across the organization. Each event type has:
+
+- **Get link** — generates a single-use invite link (expires in 7 days) and copies it to clipboard
+- **Invites** — opens the full invite management page for custom expiry, multi-use links, and guest pre-fill
+
+### Private event types
+
+Private event types are hidden from public pages and only accessible via invite links sent by the event type owner.
+
+**Typical use case:** A demo team creates a private group event type. Sales reps send personalized invites to qualified leads. The demo is automatically assigned to the least-busy team member via round-robin.
 
 ### Invite links
 
-Private event types use **booking invites** to grant access:
+Both internal and private event types use **booking invites** to grant access:
 
-1. Go to **Dashboard > Event Types** and click **Invite** on a private event type
+1. Go to **Dashboard > Event Types** (or **Organization**) and click **Invite**
 2. Fill in the guest's name, email, and an optional personal message
 3. Choose an expiration (7, 14, or 30 days, or never) and whether to allow multiple bookings
 4. Click **Send invite** — the guest receives an email with a personalized booking link
 
 The invite link takes the guest directly to the slot picker with the invite token embedded. Their name and email are pre-filled on the booking form. The token is validated at every step (expired, used-up, or invalid tokens are rejected).
-
-### Use case: sales-qualified demos
-
-A common pattern is to create a **private group event type** for a demo team:
-
-1. Create a group event type (e.g., "Product Demo") under the Demo group
-2. Mark it as private
-3. Sales reps (who have dashboard access) can send invites to qualified leads
-4. The demo is automatically assigned to the least-busy team member via round-robin
-5. The sales rep never needs to coordinate calendars manually
 
 ### Invite management
 
@@ -124,6 +133,17 @@ The invite management page (`/dashboard/invites/{event_type_id}`) shows:
   - **Expired** — past the expiration date
   - **Used** — all uses consumed (for single-use invites)
 - Delete button to revoke an invite
+
+## Availability overrides
+
+Block specific dates or set custom hours per event type — perfect for holidays, conferences, or one-off schedule changes.
+
+Go to **Dashboard > Event Types > Overrides** and add:
+
+- **Block entire day** — no slots available on that date (e.g., company holiday)
+- **Custom hours** — replace the weekly rules with specific time windows for that date (e.g., 08:00–12:00 only)
+
+Multiple custom hour windows can be added for the same date (e.g., morning + afternoon with a lunch break). Overrides are visible in the **Troubleshoot** view with a banner showing when they're active.
 
 ## Public URLs
 
