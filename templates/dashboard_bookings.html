@@ -34,11 +34,14 @@
           {% if b.is_team_link is defined and b.is_team_link %}
             <span style="display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.4rem; background: var(--accent-subtle, rgba(99,102,241,0.1)); color: var(--accent); border-radius: 999px; vertical-align: middle; margin-left: 0.25rem;">team</span>
           {% endif %}
+          {% if b.awaiting_reschedule is defined and b.awaiting_reschedule %}
+            <span style="display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.4rem; background: rgba(217,119,6,0.15); color: #d97706; border-radius: 999px; vertical-align: middle; margin-left: 0.25rem;">awaiting reschedule</span>
+          {% endif %}
         </div>
         <div style="color: var(--text-muted); font-size: 0.85rem;">{{ b.start_at }} &middot; {{ b.guest_email }}</div>
       </div>
       <div class="booking-actions">
-        {% if not (b.is_team_link is defined and b.is_team_link) %}
+        {% if not (b.is_team_link is defined and b.is_team_link) and not (b.awaiting_reschedule is defined and b.awaiting_reschedule) %}
         <a href="/dashboard/bookings/{{ b.id }}/reschedule" class="slot-btn booking-action-btn" style="font-size: 0.8rem; text-decoration: none; color: var(--accent); cursor: pointer;">Reschedule</a>
         {% endif %}
         <button type="button" class="slot-btn booking-action-btn" style="font-size: 0.8rem; color: var(--error-text); cursor: pointer;" onclick="var p=this.parentElement; p.querySelectorAll('.booking-action-btn').forEach(function(b){b.style.display='none'}); p.querySelector('.cancel-form').style.display='block';">Cancel</button>
