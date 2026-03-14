@@ -315,6 +315,10 @@ async fn login_page(State(state): State<Arc<AppState>>, jar: CookieJar) -> Respo
         .as_ref()
         .map(|c| c.oidc_enabled)
         .unwrap_or(false);
+    let registration_enabled = auth_config
+        .as_ref()
+        .map(|c| c.registration_enabled)
+        .unwrap_or(true);
 
     let csrf_token = generate_csrf_token();
 
@@ -323,7 +327,7 @@ async fn login_page(State(state): State<Arc<AppState>>, jar: CookieJar) -> Respo
         Err(e) => return Html(format!("Template error: {}", e)).into_response(),
     };
     let body = Html(
-        tmpl.render(minijinja::context! { error => "", oidc_enabled => oidc_enabled, csrf_token => csrf_token })
+        tmpl.render(minijinja::context! { error => "", oidc_enabled => oidc_enabled, registration_enabled => registration_enabled, csrf_token => csrf_token })
             .unwrap_or_default(),
     );
     ([("Set-Cookie", csrf_cookie_value(&csrf_token))], body).into_response()

@@ -30,8 +30,10 @@
     <button type="submit" class="btn" style="{% if oidc_enabled %}background: var(--surface); color: var(--text); border: 1px solid var(--border);{% endif %}">Sign in with email</button>
   </form>
 
+  {% if registration_enabled %}
   <p style="text-align: center; margin-top: 1.25rem; font-size: 0.875rem; color: var(--text-muted);">
     Don't have an account? <a href="/auth/register" style="color: var(--accent); text-decoration: none;">Register</a>
   </p>
+  {% endif %}
 </div>
 {% endblock %}
