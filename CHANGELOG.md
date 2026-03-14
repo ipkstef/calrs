@@ -95,11 +95,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Improved slot picker UX | 0.21.1 | Dynamic TZ offsets, filled calendar grid, sidebar controls, clickable prev/next month days |
 | Reschedule | 0.22.0 | Guests and hosts can reschedule bookings — new slot picker, CalDAV update in place, token regeneration |
 | Host reschedule UX | 0.23.0 | Host-initiated reschedule confirmed without re-approval, reschedule from pending bookings |
-| Availability overrides | 0.23.0 | Block specific dates or set custom hours per event type |
-| Three-level visibility | 0.23.0 | Public / internal (any team member generates invite links) / private (owner-only invites) |
-| Organization dashboard | 0.23.0 | Internal event types listed for all team members with one-click invite link generation |
+| Availability overrides | 0.24.0 | Block specific dates or set custom hours per event type |
+| Three-level visibility | 0.24.0 | Public / internal (any team member generates invite links) / private (owner-only invites) |
+| Organization dashboard | 0.24.0 | Internal event types listed for all team members with one-click invite link generation |
 
 ## [Unreleased]
+
+## [0.24.0] - 2026-03-14
+
+### Added
+
+- **Availability overrides** — block specific dates (day off) or set custom hours per event type from `/dashboard/event-types/{slug}/overrides`. Overrides replace weekly rules for that day. Multiple custom hour windows supported. Visible in troubleshoot view
+- **Three-level visibility** — event types can be public (listed on profile), internal (group only — any team member generates invite links), or private (owner sends invite links). Replaces the binary `is_private` flag
+- **Organization dashboard** — `/dashboard/organization` lists all internal event types across the org. "Get link" button generates a single-use invite URL (7-day expiry) and copies to clipboard. "Invites" link for full invite management
+- **Quick invite link generation** — `POST /dashboard/invites/{id}/quick-link` creates a single-use invite and returns JSON with the URL for clipboard copy
+- **Animated theme toggle** — pill-shaped dark/light slider with SVG sun/moon icons, fixed top-right on all public pages
+- **Integration test harness** — `setup_test_app()` with in-memory SQLite, session auth, and `tower::ServiceExt::oneshot` for HTTP handler testing
+
+### Fixed
+
+- **Register link** — hidden on login page when registration is disabled
+- **Reschedule confirmation** — host-initiated reschedules show "Rescheduled!" instead of misleading pending message
+- **Reschedule from pending** — hosts can reschedule bookings before approving them
+
+### Tests
+
+- **247 → 496 tests** covering web handlers (GET + POST), CLI commands, auth lifecycle, email HTML/ICS builders, config commands, booking validation, CSRF, rate limiting, admin actions, token-based approve/decline/cancel, reschedule flow, overrides CRUD, double-booking prevention, and more
+- Fixed test DB pool deadlock (`max_connections: 1` → `2`)
+
+### Documentation
+
+- Five distinct meeting types documented with use cases (README + mdBook)
+- Multi-timezone group setup guide (wide availability window approach)
+- Visibility levels, availability overrides, Organization dashboard
 
 ## [0.23.0] - 2026-03-14
 
