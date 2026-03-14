@@ -1015,13 +1015,14 @@ async fn dashboard_organization(
     let internal_ets: Vec<(
         String,
         String,
+        String,
         i32,
         String,
         Option<String>,
         Option<String>,
         Option<String>,
     )> = sqlx::query_as(
-        "SELECT et.slug, et.title, et.duration_min, u.name,
+        "SELECT et.id, et.slug, et.title, et.duration_min, u.name,
                 u.username,
                 CASE WHEN et.group_id IS NOT NULL THEN g.name ELSE NULL END,
                 CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END
@@ -1039,8 +1040,9 @@ async fn dashboard_organization(
     let ets_ctx: Vec<minijinja::Value> = internal_ets
         .iter()
         .map(
-            |(slug, title, duration, host_name, username, group_name, group_slug)| {
+            |(id, slug, title, duration, host_name, username, group_name, group_slug)| {
                 context! {
+                    id => id,
                     slug => slug,
                     title => title,
                     duration_min => duration,
@@ -4286,7 +4288,7 @@ async fn invite_management_page(
          LEFT JOIN groups g ON g.id = et.group_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
-         WHERE et.id = ? AND et.visibility = 'private'",
+         WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
     )
     .bind(&event_type_id)
     .fetch_optional(&state.pool)
@@ -4390,7 +4392,7 @@ async fn send_invite(
          LEFT JOIN groups g ON g.id = et.group_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
-         WHERE et.id = ? AND et.visibility = 'private'",
+         WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
     )
     .bind(&event_type_id)
     .fetch_optional(&state.pool)
@@ -5279,7 +5281,7 @@ async fn show_group_slots(
     };
 
     // Validate invite token for private event types
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         let token = match &query.invite {
             Some(t) => t,
             None => return Html("This event type requires an invite link.".to_string()),
@@ -5488,7 +5490,7 @@ async fn show_group_book_form(
     // Validate invite token for private event types
     let invite_guest_name;
     let invite_guest_email;
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         let token = match &query.invite {
             Some(t) => t,
             None => return Html("This event type requires an invite link.".to_string()),
@@ -5643,7 +5645,7 @@ async fn handle_group_booking(
     };
 
     // Validate invite token for private event types
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         let token = match &form.invite_token {
             Some(t) if !t.is_empty() => t,
             _ => {
@@ -5800,7 +5802,7 @@ async fn handle_group_booking(
     tracing::info!(booking_id = %id, event_type = %slug, guest = %form.email, "booking created");
 
     // Increment invite used_count if this was an invite-based booking
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         if let Some(token) = &form.invite_token {
             let _ = sqlx::query("UPDATE booking_invites SET used_count = used_count + 1 WHERE token = ? AND event_type_id = ?")
                 .bind(token)
@@ -6025,7 +6027,7 @@ async fn show_slots_for_user(
     // Validate invite token for private event types
     let invite_guest_name;
     let invite_guest_email;
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         let token = match &query.invite {
             Some(t) => t,
             None => return Html("This event type requires an invite link.".to_string()),
@@ -6203,7 +6205,7 @@ async fn show_book_form_for_user(
     // Validate invite token for private event types
     let invite_guest_name;
     let invite_guest_email;
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         let token = match &query.invite {
             Some(t) => t,
             None => return Html("This event type requires an invite link.".to_string()),
@@ -6366,7 +6368,7 @@ async fn handle_booking_for_user(
     };
 
     // Validate invite token for private event types
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         let token = match &form.invite_token {
             Some(t) if !t.is_empty() => t,
             _ => {
@@ -6517,7 +6519,7 @@ async fn handle_booking_for_user(
     tracing::info!(booking_id = %id, event_type = %slug, guest = %form.email, "booking created");
 
     // Increment invite used_count if this was an invite-based booking
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         if let Some(token) = &form.invite_token {
             let _ = sqlx::query("UPDATE booking_invites SET used_count = used_count + 1 WHERE token = ? AND event_type_id = ?")
                 .bind(token)
@@ -7523,7 +7525,7 @@ async fn show_slots(
     };
 
     // Block private event types on legacy route (use /u/ or /g/ routes with invite token instead)
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         return Html("This event type requires an invite link.".to_string());
     }
 
@@ -7671,7 +7673,7 @@ async fn show_book_form(
     };
 
     // Block non-public event types on legacy route
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         return Html("This event type requires an invite link.".to_string());
     }
 
@@ -7878,7 +7880,7 @@ async fn handle_booking(
     let needs_approval = requires_confirmation != 0;
 
     // Block non-public event types on legacy route
-    if visibility == "private" {
+    if visibility == "private" || visibility == "internal" {
         return Html("This event type requires an invite link.".to_string()).into_response();
     }
 

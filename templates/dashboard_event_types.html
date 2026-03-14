@@ -20,7 +20,7 @@
       <div class="et-actions">
         <a href="/dashboard/event-types/{{ et.slug }}/edit" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Edit</a>
         <a href="/dashboard/event-types/{{ et.slug }}/overrides" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Overrides</a>
-        {% if et.visibility == "private" %}
+        {% if et.visibility == "private" or et.visibility == "internal" %}
         <a href="/dashboard/invites/{{ et.id }}" class="slot-btn" style="text-decoration: none; font-size: 0.8rem; color: #6366f1;">Invite</a>
         {% endif %}
         <form method="post" action="/dashboard/event-types/{{ et.slug }}/toggle" style="margin: 0;">
