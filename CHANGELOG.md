@@ -105,6 +105,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.25.2] - 2026-03-17
+
+### Added
+
+- **Favicon** — crab emoji (🦀) favicon on all pages via inline SVG (#16)
+
+### Fixed
+
+- **Date overrides responsive layout** — header, radio buttons, and override list items now wrap properly on mobile instead of overflowing (#17)
+
 ## [0.25.1] - 2026-03-17
 
 ### Added
