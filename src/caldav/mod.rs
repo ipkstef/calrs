@@ -91,14 +91,25 @@ impl CaldavClient {
             .propfind(&self.base_url, "0", PROPFIND_PRINCIPAL)
             .await?;
 
+        tracing::debug!(
+            response_len = text.len(),
+            "PROPFIND principal response received"
+        );
+
         // Extract href inside <d:current-user-principal><d:href>...</d:href></d:current-user-principal>
-        if let Some(principal_start) = text.find("<d:current-user-principal>") {
-            let after = &text[principal_start..];
-            if let Some(href) = extract_tag(after, "d:href") {
-                return Ok(href);
+        // Try multiple namespace prefixes (d:, D:, unprefixed)
+        for prefix in &["d:", "D:", ""] {
+            let tag = format!("{}current-user-principal", prefix);
+            if let Some(principal_start) = text.find(&format!("<{}", tag)) {
+                let after = &text[principal_start..];
+                if let Some(href) = extract_tag(after, "d:href") {
+                    tracing::debug!(principal = %href, "discovered principal URL");
+                    return Ok(href);
+                }
             }
         }
 
+        tracing::debug!(response_body = %text, "failed to parse principal from response");
         bail!("Could not discover principal URL from response")
     }
 
@@ -107,14 +118,25 @@ impl CaldavClient {
         let url = self.resolve_url(principal_url);
         let text = self.propfind(&url, "0", PROPFIND_CALENDAR_HOME).await?;
 
+        tracing::debug!(
+            response_len = text.len(),
+            "PROPFIND calendar-home response received"
+        );
+
         // Extract href inside <cal:calendar-home-set><d:href>...</d:href></cal:calendar-home-set>
-        if let Some(home_start) = text.find("<cal:calendar-home-set>") {
-            let after = &text[home_start..];
-            if let Some(href) = extract_tag(after, "d:href") {
-                return Ok(href);
+        // Try multiple namespace prefixes (cal:, C:, unprefixed)
+        for prefix in &["cal:", "C:", ""] {
+            let tag = format!("{}calendar-home-set", prefix);
+            if let Some(home_start) = text.find(&format!("<{}", tag)) {
+                let after = &text[home_start..];
+                if let Some(href) = extract_tag(after, "d:href") {
+                    tracing::debug!(calendar_home = %href, "discovered calendar-home-set");
+                    return Ok(href);
+                }
             }
         }
 
+        tracing::debug!(response_body = %text, "failed to parse calendar-home-set from response");
         bail!("Could not discover calendar-home-set from response")
     }
 
@@ -123,6 +145,14 @@ impl CaldavClient {
         let url = self.resolve_url(home_url);
         let text = self.propfind(&url, "1", PROPFIND_CALENDARS).await?;
         let calendars = parse_calendar_list(&text);
+        tracing::debug!(
+            calendar_count = calendars.len(),
+            response_len = text.len(),
+            "listed calendars"
+        );
+        if calendars.is_empty() && !text.is_empty() {
+            tracing::debug!(response_body = %text, "no calendars parsed from response");
+        }
         Ok(calendars)
     }
 
@@ -313,9 +343,9 @@ pub struct RawEvent {
 
 fn parse_calendar_list(xml: &str) -> Vec<CalendarInfo> {
     let mut calendars = Vec::new();
-    for response_block in xml.split("<d:response>").skip(1) {
-        // Only include actual calendar collections (has <cal:calendar/> in resourcetype)
-        if !response_block.contains("<cal:calendar/>") {
+    for response_block in split_responses(xml) {
+        // Only include actual calendar collections (has <cal:calendar/> or <C:calendar/> in resourcetype)
+        if !response_block.contains("calendar/>") {
             continue;
         }
         let href = extract_tag(response_block, "d:href").unwrap_or_default();
@@ -346,7 +376,7 @@ fn parse_sync_response(xml: &str) -> SyncResult {
     // Extract the new sync-token from the multistatus envelope (outside response blocks)
     let new_sync_token = extract_tag(xml, "d:sync-token");
 
-    for response_block in xml.split("<d:response>").skip(1) {
+    for response_block in split_responses(xml) {
         let href = extract_tag(response_block, "d:href").unwrap_or_default();
         if href.is_empty() {
             continue;
@@ -378,7 +408,7 @@ fn parse_sync_response(xml: &str) -> SyncResult {
 
 fn parse_event_responses(xml: &str) -> Vec<RawEvent> {
     let mut events = Vec::new();
-    for response_block in xml.split("<d:response>").skip(1) {
+    for response_block in split_responses(xml) {
         let href = extract_tag(response_block, "d:href").unwrap_or_default();
         let ical_data = extract_tag(response_block, "cal:calendar-data")
             .or_else(|| extract_tag(response_block, "c:calendar-data"))
@@ -390,7 +420,72 @@ fn parse_event_responses(xml: &str) -> Vec<RawEvent> {
     events
 }
 
+/// Split a multistatus XML response into individual response blocks.
+/// Handles multiple namespace prefixes: `<d:response>`, `<D:response>`, `<response>`.
+fn split_responses(xml: &str) -> Vec<&str> {
+    // Try common response tag patterns
+    for open_tag in &["<d:response>", "<D:response>", "<response>", "<response "] {
+        let blocks: Vec<&str> = xml.split(open_tag).skip(1).collect();
+        if !blocks.is_empty() {
+            return blocks;
+        }
+    }
+    Vec::new()
+}
+
+/// Known namespace prefix aliases for CalDAV servers.
+/// Maps canonical prefixes to alternatives seen in the wild.
+const PREFIX_ALIASES: &[(&str, &[&str])] = &[
+    ("d", &["D"]),                 // DAV: namespace
+    ("cal", &["C", "CAL"]),        // CalDAV namespace (SOGo uses C:)
+    ("c", &["C", "cal"]),          // CalDAV namespace (alternate)
+    ("cso", &["cs", "CSO", "CS"]), // Calendar Server namespace
+    ("aic", &["x1", "AIC"]),       // Apple iCal namespace
+];
+
+/// Extract the text content of an XML tag, trying multiple namespace prefix variants.
+/// For example, `extract_tag(xml, "d:href")` will also try `D:href` and `href` (unprefixed).
 fn extract_tag(xml: &str, tag: &str) -> Option<String> {
+    // Build list of variants: original, aliases, unprefixed
+    let mut variants = vec![tag.to_string()];
+    if let Some(colon) = tag.find(':') {
+        let prefix = &tag[..colon];
+        let local = &tag[colon + 1..];
+
+        // Add known aliases
+        for &(canonical, aliases) in PREFIX_ALIASES {
+            if prefix.eq_ignore_ascii_case(canonical) {
+                for alias in aliases {
+                    variants.push(format!("{}:{}", alias, local));
+                }
+                break;
+            }
+        }
+
+        // Swap case as fallback: d:href -> D:href, D:href -> d:href
+        let alt_prefix = if prefix.chars().all(|c| c.is_lowercase()) {
+            prefix.to_uppercase()
+        } else {
+            prefix.to_lowercase()
+        };
+        let swapped = format!("{}:{}", alt_prefix, local);
+        if !variants.contains(&swapped) {
+            variants.push(swapped);
+        }
+
+        // Also try unprefixed (default namespace)
+        variants.push(local.to_string());
+    }
+
+    for variant in &variants {
+        if let Some(result) = extract_tag_exact(xml, variant) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+fn extract_tag_exact(xml: &str, tag: &str) -> Option<String> {
     let open = format!("<{}", tag);
     let close = format!("</{}>", tag);
     if let Some(start) = xml.find(&open) {
@@ -506,6 +601,71 @@ mod tests {
             extract_tag(xml, "d:href"),
             Some("/principals/alice/".to_string())
         );
+    }
+
+    // --- extract_tag case variants (SOGo uses D: and C:) ---
+
+    #[test]
+    fn extract_tag_uppercase_dav_prefix() {
+        let xml = "<D:href>/principals/users/alice/</D:href>";
+        assert_eq!(
+            extract_tag(xml, "d:href"),
+            Some("/principals/users/alice/".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_tag_uppercase_caldav_prefix() {
+        let xml = "<C:calendar-home-set><D:href>/cal/home/</D:href></C:calendar-home-set>";
+        assert_eq!(
+            extract_tag(xml, "cal:calendar-home-set"),
+            Some("<D:href>/cal/home/</D:href>".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_tag_unprefixed() {
+        let xml = "<href>/dav/principals/user/</href>";
+        assert_eq!(
+            extract_tag(xml, "d:href"),
+            Some("/dav/principals/user/".to_string())
+        );
+    }
+
+    // --- split_responses ---
+
+    #[test]
+    fn split_responses_uppercase() {
+        let xml = r#"<D:multistatus><D:response><D:href>/a</D:href></D:response><D:response><D:href>/b</D:href></D:response></D:multistatus>"#;
+        let blocks = split_responses(xml);
+        assert_eq!(blocks.len(), 2);
+    }
+
+    // --- parse_calendar_list with uppercase prefixes (SOGo) ---
+
+    #[test]
+    fn parse_calendars_sogo_uppercase() {
+        let xml = r#"
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:response>
+    <D:href>/SOGo/dav/user/Calendar/personal/</D:href>
+    <D:propstat><D:prop>
+      <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+      <D:displayname>Personal Calendar</D:displayname>
+    </D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/SOGo/dav/user/Calendar/</D:href>
+    <D:propstat><D:prop>
+      <D:resourcetype><D:collection/></D:resourcetype>
+    </D:prop></D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
+        let cals = parse_calendar_list(xml);
+        assert_eq!(cals.len(), 1);
+        assert_eq!(cals[0].href, "/SOGo/dav/user/Calendar/personal/");
+        assert_eq!(cals[0].display_name, Some("Personal Calendar".to_string()));
     }
 
     // --- resolve_url ---
