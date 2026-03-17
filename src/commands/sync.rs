@@ -81,33 +81,44 @@ pub async fn sync_source(
         let delta_ok = if let Some(token) = &stored_sync_token {
             match client.sync_collection(&cal_info.href, Some(token)).await {
                 Ok(result) => {
-                    let changed = upsert_raw_events(pool, &cal_id, &result.changed).await;
-                    let deleted =
-                        delete_events_by_href(pool, key, &cal_id, &result.deleted_hrefs).await;
+                    // If ctag changed but sync-collection reports nothing, the server's
+                    // sync-token implementation is incomplete (e.g. BlueMind doesn't report
+                    // deletions). Fall through to full sync to catch the changes.
+                    if result.changed.is_empty() && result.deleted_hrefs.is_empty() {
+                        tracing::info!(
+                            calendar = %cal_label,
+                            "ctag changed but sync-collection returned empty delta, falling back to full sync"
+                        );
+                        false
+                    } else {
+                        let changed = upsert_raw_events(pool, &cal_id, &result.changed).await;
+                        let deleted =
+                            delete_events_by_href(pool, key, &cal_id, &result.deleted_hrefs).await;
 
-                    // Store new sync-token and ctag
-                    update_calendar_sync_state(
-                        pool,
-                        &cal_id,
-                        &cal_info.ctag,
-                        &result.new_sync_token,
-                    )
-                    .await;
+                        // Store new sync-token and ctag
+                        update_calendar_sync_state(
+                            pool,
+                            &cal_id,
+                            &cal_info.ctag,
+                            &result.new_sync_token,
+                        )
+                        .await;
 
-                    tracing::info!(
-                        calendar = %cal_label,
-                        changed = changed,
-                        deleted = deleted,
-                        "delta sync completed"
-                    );
-                    println!(
-                        "  {} {} — {} changed, {} deleted (delta)",
-                        "✓".green(),
-                        cal_label,
-                        changed,
-                        deleted
-                    );
-                    true
+                        tracing::info!(
+                            calendar = %cal_label,
+                            changed = changed,
+                            deleted = deleted,
+                            "delta sync completed"
+                        );
+                        println!(
+                            "  {} {} — {} changed, {} deleted (delta)",
+                            "✓".green(),
+                            cal_label,
+                            changed,
+                            deleted
+                        );
+                        true
+                    }
                 }
                 Err(e) => {
                     tracing::info!(
