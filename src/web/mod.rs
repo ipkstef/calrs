@@ -518,6 +518,7 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
             "/dashboard/teams/{team_id}/avatar/delete",
             post(delete_team_avatar),
         )
+        .route("/dashboard/teams/{team_id}/delete", post(delete_team))
         .route("/team-avatar/{team_id}", get(serve_team_avatar))
         // Troubleshoot
         .route("/dashboard/troubleshoot", get(troubleshoot))
@@ -2150,6 +2151,46 @@ async fn delete_team_avatar(
         .await;
     tracing::info!(team_id = %team_id, user_id = %user.id, "team avatar deleted");
     Redirect::to(&format!("/dashboard/teams/{}/settings", team_id)).into_response()
+}
+
+async fn delete_team(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    headers: HeaderMap,
+    Path(team_id): Path<String>,
+    Form(csrf): Form<CsrfForm>,
+) -> impl IntoResponse {
+    if let Err(resp) = verify_csrf_token(&headers, &csrf._csrf) {
+        return resp;
+    }
+    let user = &auth_user.user;
+    let is_admin = user.role == "admin";
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
+        return Redirect::to("/dashboard/teams").into_response();
+    }
+    // Delete avatar file if present
+    let old: Option<(String,)> =
+        sqlx::query_as("SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+            .bind(&team_id)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+    if let Some((avatar_path,)) = old {
+        let full_path = state.data_dir.join("avatars").join(&avatar_path);
+        let _ = tokio::fs::remove_file(&full_path).await;
+    }
+    // Nullify team_id on event types (don't delete them — they belong to the creator's account)
+    let _ = sqlx::query("UPDATE event_types SET team_id = NULL WHERE team_id = ?")
+        .bind(&team_id)
+        .execute(&state.pool)
+        .await;
+    // Delete team (CASCADE removes team_members, team_groups)
+    let _ = sqlx::query("DELETE FROM teams WHERE id = ?")
+        .bind(&team_id)
+        .execute(&state.pool)
+        .await;
+    tracing::info!(team_id = %team_id, user_id = %user.id, "team deleted");
+    Redirect::to("/dashboard/teams").into_response()
 }
 
 async fn serve_team_avatar(
