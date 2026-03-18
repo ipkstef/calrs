@@ -26,7 +26,7 @@
   </div>
   {% endif %}
 
-  <div class="form-group" id="scheduling-mode-group" style="{% if not (is_team is defined and is_team) %}display:none;{% endif %}">
+  <div class="form-group" id="scheduling-mode-group" style="{% if not (is_group is defined and is_group) %}display:none;{% endif %}">
     <label for="scheduling_mode">Scheduling mode</label>
     <select id="scheduling_mode" name="scheduling_mode" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
       <option value="round_robin" {% if form_scheduling_mode is defined and form_scheduling_mode == "round_robin" %}selected{% endif %}>Round Robin — assign to one available member</option>
@@ -315,14 +315,14 @@
     var priorityCard = document.getElementById('priority-card');
 
     function toggleMode() {
-      var isTeam = teamSel ? !!teamSel.value : {{ is_team is defined and is_team and "true" or "false" }};
+      var isTeam = teamSel ? !!teamSel.value : {{ is_group is defined and is_group and "true" or "false" }};
       if (modeGroup) modeGroup.style.display = isTeam ? '' : 'none';
       togglePriority();
     }
 
     function togglePriority() {
       if (!priorityCard) return;
-      var isTeam = teamSel ? !!teamSel.value : {{ is_team is defined and is_team and "true" or "false" }};
+      var isTeam = teamSel ? !!teamSel.value : {{ is_group is defined and is_group and "true" or "false" }};
       var isRR = modeSel && modeSel.value === 'round_robin';
       priorityCard.style.display = (isTeam && isRR) ? '' : 'none';
     }

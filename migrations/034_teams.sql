@@ -55,7 +55,9 @@ UPDATE event_types SET team_id = group_id WHERE group_id IS NOT NULL;
 -- Step 4: Migrate team links → private teams
 -- Each team link becomes a private team with an invite token
 INSERT INTO teams (id, name, slug, description, avatar_path, visibility, invite_token, created_by, created_at)
-SELECT tl.id, tl.title, NULL, tl.description, NULL, 'private', tl.token, tl.created_by_user_id, tl.created_at
+SELECT tl.id, tl.title,
+       LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(tl.title), ' ', '-'), '''', ''), '"', ''), '.', '')),
+       tl.description, NULL, 'private', tl.token, tl.created_by_user_id, tl.created_at
 FROM team_links tl;
 
 -- Copy team link members to team members (creator = admin)

@@ -310,6 +310,50 @@ async fn migrate_team_links_to_teams(pool: &SqlitePool) -> Result<()> {
         return Ok(());
     }
 
+    // Fix teams with NULL slugs (from old migration that didn't generate slugs)
+    let null_slug_teams: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM teams WHERE slug IS NULL")
+            .fetch_all(pool)
+            .await?;
+    for (team_id, team_name) in &null_slug_teams {
+        let slug = team_name
+            .to_lowercase()
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        let slug = if slug.is_empty() {
+            format!("team-{}", &team_id[..8.min(team_id.len())])
+        } else {
+            slug
+        };
+        // Use a unique suffix if slug already taken
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM teams WHERE slug = ? AND id != ?")
+                .bind(&slug)
+                .bind(team_id)
+                .fetch_optional(pool)
+                .await?;
+        let final_slug = if existing.is_some() {
+            format!("{}-{}", slug, &team_id[..8.min(team_id.len())])
+        } else {
+            slug
+        };
+        sqlx::query("UPDATE teams SET slug = ? WHERE id = ?")
+            .bind(&final_slug)
+            .bind(team_id)
+            .execute(pool)
+            .await?;
+        tracing::info!(team_id = %team_id, slug = %final_slug, "generated slug for team with NULL slug");
+    }
+
     // Find team links that don't yet have a corresponding event type on the team
     #[allow(clippy::type_complexity)]
     let links: Vec<(

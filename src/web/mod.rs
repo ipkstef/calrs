@@ -993,10 +993,11 @@ async fn dashboard_teams(
         Option<String>,
         String,
         Option<String>,
+        Option<String>,
         i64,
     )> = if is_admin {
         sqlx::query_as(
-            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path,
+            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path, t.invite_token,
                     (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) as member_count
              FROM teams t
              ORDER BY t.name",
@@ -1006,7 +1007,7 @@ async fn dashboard_teams(
         .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path,
+            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path, t.invite_token,
                     (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) as member_count
              FROM teams t
              JOIN team_members tm2 ON tm2.team_id = t.id
@@ -1040,7 +1041,7 @@ async fn dashboard_teams(
     let teams_ctx: Vec<minijinja::Value> = teams
         .iter()
         .map(
-            |(id, name, slug, description, visibility, avatar_path, member_count)| {
+            |(id, name, slug, description, visibility, avatar_path, invite_token, member_count)| {
                 let initials = name
                     .split_whitespace()
                     .filter_map(|w| w.chars().next())
@@ -1058,6 +1059,7 @@ async fn dashboard_teams(
                     initials => initials,
                     member_count => member_count,
                     is_team_admin => user_is_team_admin,
+                    invite_token => invite_token,
                 }
             },
         )
@@ -1201,6 +1203,25 @@ async fn create_team(
             .into_response();
     }
 
+    if name.len() > 255 {
+        return render_team_form_error(&state, user, "Name must be at most 255 characters.", &form)
+            .await
+            .into_response();
+    }
+
+    if let Some(ref d) = description {
+        if d.len() > 5000 {
+            return render_team_form_error(
+                &state,
+                user,
+                "Description must be at most 5000 characters.",
+                &form,
+            )
+            .await
+            .into_response();
+        }
+    }
+
     if !slug
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -1209,6 +1230,19 @@ async fn create_team(
             &state,
             user,
             "Slug must contain only lowercase letters, numbers, and dashes.",
+            &form,
+        )
+        .await
+        .into_response();
+    }
+
+    // Check slug against reserved names
+    const RESERVED_SLUGS: &[&str] = &["new", "settings", "admin", "api"];
+    if RESERVED_SLUGS.contains(&slug.as_str()) {
+        return render_team_form_error(
+            &state,
+            user,
+            "This slug is reserved. Please choose a different one.",
             &form,
         )
         .await
@@ -1925,14 +1959,15 @@ async fn group_settings_page(
         return Html("Team not found or you are not a team admin.".to_string());
     }
 
-    let team: Option<(String, String, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, name, description, avatar_path FROM teams WHERE id = ?")
+    let team: Option<(String, String, String, Option<String>, Option<String>, String, Option<String>)> =
+        sqlx::query_as("SELECT id, name, slug, description, avatar_path, visibility, invite_token FROM teams WHERE id = ?")
             .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let (tid, team_name, description, avatar_path) = match team {
+    let (tid, team_name, team_slug, description, avatar_path, visibility, invite_token) = match team
+    {
         Some(t) => t,
         None => return Html("Team not found.".to_string()),
     };
@@ -1970,9 +2005,12 @@ async fn group_settings_page(
             sidebar => sidebar_context(&auth_user, "event-types"),
             team_id => tid,
             team_name => team_name,
+            team_slug => team_slug,
             team_description => description.unwrap_or_default(),
             team_has_avatar => avatar_path.is_some(),
             team_initials => compute_initials(&team_name),
+            visibility => visibility,
+            invite_token => invite_token,
             members => members_ctx,
             success => query.get("success").map(|_| "Settings saved."),
         })
@@ -2117,16 +2155,31 @@ async fn delete_group_avatar(
 async fn serve_group_avatar(
     State(state): State<Arc<AppState>>,
     Path(team_id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let avatar_path: Option<(String,)> =
-        sqlx::query_as("SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+    let team_info: Option<(Option<String>, String, Option<String>)> =
+        sqlx::query_as("SELECT avatar_path, visibility, invite_token FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
             .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let filename = match avatar_path {
-        Some((f,)) => f,
+    let (avatar_path_opt, visibility, db_invite_token) = match team_info {
+        Some(t) => t,
+        None => return (axum::http::StatusCode::NOT_FOUND, "").into_response(),
+    };
+
+    // Private teams require a valid invite token to serve the avatar
+    if visibility == "private" {
+        let provided = query.get("invite");
+        match (&db_invite_token, provided) {
+            (Some(expected), Some(given)) if expected == given => {} // OK
+            _ => return (axum::http::StatusCode::NOT_FOUND, "").into_response(),
+        }
+    }
+
+    let filename = match avatar_path_opt {
+        Some(f) => f,
         None => return (axum::http::StatusCode::NOT_FOUND, "").into_response(),
     };
 
@@ -2466,7 +2519,7 @@ async fn new_event_type_form(
             impersonating => impersonating,
             impersonating_name => impersonating_name,
             editing => false,
-            groups => groups_ctx,
+            teams => groups_ctx,
             calendars => calendars_ctx,
             selected_calendar_ids => "",
             form_title => "",
@@ -2522,14 +2575,27 @@ async fn create_event_type(
             .into_response();
     }
 
-    // Check uniqueness
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM event_types WHERE account_id = ? AND slug = ?")
-            .bind(&account_id)
+    // Check if a team_id was provided and it's non-empty
+    let team_id = form.team_id.as_deref().filter(|s| !s.trim().is_empty());
+
+    // Check uniqueness — scope to team_id when creating a team event type, otherwise to account_id
+    let existing: Option<(String,)> = if let Some(tid) = team_id {
+        sqlx::query_as("SELECT id FROM event_types WHERE team_id = ? AND slug = ?")
+            .bind(tid)
             .bind(&slug)
             .fetch_optional(&state.pool)
             .await
-            .unwrap_or(None);
+            .unwrap_or(None)
+    } else {
+        sqlx::query_as(
+            "SELECT id FROM event_types WHERE account_id = ? AND slug = ? AND team_id IS NULL",
+        )
+        .bind(&account_id)
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+    };
 
     if existing.is_some() {
         return render_event_type_form_error(
@@ -2550,9 +2616,6 @@ async fn create_event_type(
         .location_value
         .as_deref()
         .filter(|s| !s.trim().is_empty());
-
-    // Check if a team_id was provided and it's non-empty
-    let team_id = form.team_id.as_deref().filter(|s| !s.trim().is_empty());
 
     // Verify team admin rights if a team_id is specified
     if let Some(tid) = team_id {
@@ -3061,11 +3124,11 @@ async fn update_group_event_type_member_priority(
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
 
-    // Resolve event type via team membership
+    // Resolve event type via team membership (LIMIT 1 to avoid cross-team slug collisions)
     let et: Option<(String,)> = if is_admin {
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
-             WHERE et.slug = ? AND et.team_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -3075,7 +3138,7 @@ async fn update_group_event_type_member_priority(
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
              JOIN team_members tm ON tm.team_id = et.team_id \
-             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL",
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -4350,7 +4413,7 @@ async fn new_group_event_type_form(
         tmpl.render(context! {
             editing => false,
             is_group => true,
-            groups => groups_ctx,
+            teams => groups_ctx,
             form_team_id => groups.first().map(|(id, _)| id.as_str()).unwrap_or(""),
             form_title => "",
             form_slug => "",
@@ -4818,26 +4881,37 @@ async fn toggle_group_event_type(
 
     let is_admin = user.role == "admin";
 
-    if is_admin {
-        let _ = sqlx::query(
-            "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND team_id IS NOT NULL",
-        )
-        .bind(&slug)
-        .execute(&state.pool)
-        .await;
+    // Look up the specific event type ID to avoid cross-team slug collisions
+    let et: Option<(String,)> = if is_admin {
+        sqlx::query_as("SELECT id FROM event_types WHERE slug = ? AND team_id IS NOT NULL LIMIT 1")
+            .bind(&slug)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None)
     } else {
-        let _ = sqlx::query(
-            "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND team_id IS NOT NULL AND team_id IN (SELECT team_id FROM team_members WHERE user_id = ? AND role = 'admin')",
+        sqlx::query_as(
+            "SELECT et.id FROM event_types et \
+             JOIN team_members tm ON tm.team_id = et.team_id \
+             WHERE et.slug = ? AND et.team_id IS NOT NULL AND tm.user_id = ? AND tm.role = 'admin' \
+             LIMIT 1",
         )
         .bind(&slug)
         .bind(&user.id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+    };
+
+    if let Some((et_id,)) = et {
+        let _ = sqlx::query(
+            "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ?",
+        )
+        .bind(&et_id)
         .execute(&state.pool)
         .await;
-    }
 
-    tracing::debug!(event_type_slug = %slug, "group event type toggled");
+        tracing::debug!(event_type_id = %et_id, event_type_slug = %slug, "group event type toggled");
+    }
 
     Redirect::to("/dashboard/event-types").into_response()
 }
@@ -4859,7 +4933,7 @@ async fn delete_group_event_type(
     let et: Option<(String,)> = if is_admin {
         sqlx::query_as(
             "SELECT et.id FROM event_types et
-             WHERE et.slug = ? AND et.team_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -4869,7 +4943,7 @@ async fn delete_group_event_type(
         sqlx::query_as(
             "SELECT et.id FROM event_types et
              JOIN team_members tm ON tm.team_id = et.team_id
-             WHERE et.slug = ? AND tm.user_id = ? AND tm.role = 'admin' AND et.team_id IS NOT NULL",
+             WHERE et.slug = ? AND tm.user_id = ? AND tm.role = 'admin' AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&slug)
         .bind(&user.id)
@@ -4969,12 +5043,15 @@ async fn redirect_team_link_to_team(
             .unwrap_or(None);
 
     match team {
-        Some((Some(slug),)) => Redirect::permanent(&format!("/team/{}", slug)).into_response(),
-        Some((None,)) => {
-            // Team exists but has no slug (private team) — redirect to dashboard
-            Redirect::to("/dashboard").into_response()
+        Some((Some(slug),)) => {
+            Redirect::permanent(&format!("/team/{}?invite={}", slug, token)).into_response()
         }
-        None => Html("Team link not found.".to_string()).into_response(),
+        Some((None,)) => {
+            // Team exists but has no slug — should not happen after migration fix,
+            // but handle gracefully
+            Html("Team not found.".to_string()).into_response()
+        }
+        None => Html("Team not found.".to_string()).into_response(),
     }
 }
 
@@ -5012,9 +5089,7 @@ async fn group_profile(
                 // valid — continue
             }
             _ => {
-                return Html(
-                    "This team is private. You need a valid invite link to access it.".to_string(),
-                );
+                return Html("Team not found.".to_string());
             }
         }
     }
@@ -5136,9 +5211,7 @@ async fn show_group_slots(
             _ => false,
         };
         if !valid {
-            return Html(
-                "This team is private. You need a valid invite link to access it.".to_string(),
-            );
+            return Html("Event type not found.".to_string());
         }
     }
 
@@ -5368,9 +5441,7 @@ async fn show_group_book_form(
             _ => false,
         };
         if !valid {
-            return Html(
-                "This team is private. You need a valid invite link to access it.".to_string(),
-            );
+            return Html("Event type not found.".to_string());
         }
     }
 
@@ -5543,10 +5614,7 @@ async fn handle_group_booking(
             _ => false,
         };
         if !valid {
-            return Html(
-                "This team is private. You need a valid invite link to access it.".to_string(),
-            )
-            .into_response();
+            return Html("Event type not found.".to_string()).into_response();
         }
     }
 
@@ -6995,9 +7063,12 @@ fn compute_slots_from_rules(
                     BusySource::Group(member_busy) => member_busy
                         .values()
                         .any(|times| !has_conflict(times, buf_start, buf_end)),
-                    BusySource::Team(member_busy) => member_busy
-                        .values()
-                        .all(|times| !has_conflict(times, buf_start, buf_end)),
+                    BusySource::Team(member_busy) => {
+                        !member_busy.is_empty()
+                            && member_busy
+                                .values()
+                                .all(|times| !has_conflict(times, buf_start, buf_end))
+                    }
                 };
 
                 if is_free {

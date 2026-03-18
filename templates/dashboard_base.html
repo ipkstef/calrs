@@ -369,7 +369,7 @@
           </div>
         </a>
         <form method="post" action="/auth/logout" style="flex-shrink: 0;">
-          <button type="submit" class="sidebar-signout" title="Sign out">&#8592;</button>
+          <button type="submit" class="sidebar-signout" title="Sign out" aria-label="Sign out">&#8592;</button>
         </form>
       </div>
       {% if sidebar.version %}<div style="font-size: 0.7rem; color: var(--text-muted); padding: 0.25rem 0.75rem 0; opacity: 0.6;"><a href="https://github.com/olivierlambert/calrs/releases/tag/v{{ sidebar.version }}" target="_blank" rel="noopener" style="color: inherit; text-decoration: none;" title="View release notes">v{{ sidebar.version }}</a></div>{% endif %}

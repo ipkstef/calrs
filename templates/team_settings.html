@@ -2,11 +2,44 @@
 {% block title %}{{ team_name }} Settings — calrs{% endblock %}
 {% block dashboard_content %}
 <div class="card">
-  <h1>{{ team_name }}</h1>
+  <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+    <h1 style="margin-bottom: 0;">{{ team_name }}</h1>
+    {% if visibility == "public" %}
+      <span style="display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.4rem; background: var(--success-bg, rgba(34,197,94,0.1)); color: var(--success, #16a34a); border-radius: 999px; vertical-align: middle;">public</span>
+    {% else %}
+      <span style="display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.4rem; background: var(--surface-hover); color: var(--text-muted); border-radius: 999px; vertical-align: middle;">private</span>
+    {% endif %}
+  </div>
   <p style="color: var(--text-muted); font-size: 0.875rem; margin-top: 0.25rem;">Team settings &mdash; any member can edit these.</p>
 
   {% if success %}
     <div class="success" style="margin-top: 1rem; padding: 0.75rem 1rem; border-radius: var(--radius); background: var(--success-bg, #e6f9e6); color: var(--success, #2d7a2d); border: 1px solid var(--success, #2d7a2d);">{{ success }}</div>
+  {% endif %}
+
+  {% if visibility == "private" and invite_token %}
+  <div style="margin-top: 1.25rem; padding: 1rem; border-radius: var(--radius); background: var(--accent-subtle, rgba(99,102,241,0.06)); border: 1px solid var(--accent-border, rgba(99,102,241,0.2));">
+    <label style="display: block; font-weight: 500; margin-bottom: 0.5rem; font-size: 0.875rem;">Invite link</label>
+    <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.5rem;">Share this link to give people access to this private team's booking page.</p>
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
+      <input type="text" id="invite-url" readonly value="" style="flex: 1; font-size: 0.85rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-family: monospace;">
+      <button type="button" id="copy-invite-btn" class="slot-btn" style="cursor: pointer; font-weight: 600; color: var(--accent); border-color: var(--accent); white-space: nowrap;">Copy link</button>
+    </div>
+  </div>
+  <script>
+  (function() {
+    var url = window.location.origin + '/team/{{ team_slug }}?invite={{ invite_token }}';
+    document.getElementById('invite-url').value = url;
+    document.getElementById('copy-invite-btn').addEventListener('click', function() {
+      var btn = this;
+      navigator.clipboard.writeText(url).then(function() {
+        btn.textContent = 'Copied!';
+        btn.style.color = 'var(--success)';
+        btn.style.borderColor = 'var(--success)';
+        setTimeout(function() { btn.textContent = 'Copy link'; btn.style.color = 'var(--accent)'; btn.style.borderColor = 'var(--accent)'; }, 1500);
+      });
+    });
+  })();
+  </script>
   {% endif %}
 
   <!-- Avatar -->
