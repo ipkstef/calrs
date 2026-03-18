@@ -1983,6 +1983,8 @@ async fn is_team_admin(pool: &SqlitePool, user_id: &str, team_id: &str) -> bool 
 struct GroupSettingsForm {
     _csrf: Option<String>,
     description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_seq")]
+    members: Vec<String>,
 }
 
 async fn team_settings_page(
@@ -2010,8 +2012,8 @@ async fn team_settings_page(
         None => return Html("Team not found.".to_string()),
     };
 
-    let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.avatar_path FROM users u \
+    let members: Vec<(String, String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.avatar_path, tm.role, tm.source FROM users u \
          JOIN team_members tm ON tm.user_id = u.id \
          WHERE tm.team_id = ? AND u.enabled = 1 \
          ORDER BY u.name",
@@ -2023,12 +2025,39 @@ async fn team_settings_page(
 
     let members_ctx: Vec<minijinja::Value> = members
         .iter()
-        .map(|(id, name, ap)| {
+        .map(|(id, name, ap, role, source)| {
             context! {
                 id => id,
                 name => name,
                 has_avatar => ap.is_some(),
                 initials => compute_initials(name),
+                role => role,
+                source => source,
+            }
+        })
+        .collect();
+
+    // All enabled users for the member picker
+    let all_users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let member_ids: std::collections::HashSet<&str> =
+        members.iter().map(|(id, _, _, _, _)| id.as_str()).collect();
+
+    let all_users_ctx: Vec<minijinja::Value> = all_users
+        .iter()
+        .map(|(id, name, email, avatar_path)| {
+            context! {
+                id => id,
+                name => name,
+                email => email,
+                has_avatar => avatar_path.is_some(),
+                initials => compute_initials(name),
+                is_member => member_ids.contains(id.as_str()),
             }
         })
         .collect();
@@ -2050,6 +2079,7 @@ async fn team_settings_page(
             visibility => visibility,
             invite_token => invite_token,
             members => members_ctx,
+            all_users => all_users_ctx,
             success => query.get("success").map(|_| "Settings saved."),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
@@ -2085,6 +2115,38 @@ async fn team_settings_save(
         .bind(&team_id)
         .execute(&state.pool)
         .await;
+
+    // Sync direct members (preserve group-synced members)
+    // 1. Remove direct members not in the submitted list
+    let _ = sqlx::query(
+        "DELETE FROM team_members WHERE team_id = ? AND source = 'direct' AND user_id NOT IN \
+         (SELECT value FROM json_each(?))",
+    )
+    .bind(&team_id)
+    .bind(serde_json::to_string(&form.members).unwrap_or_else(|_| "[]".to_string()))
+    .execute(&state.pool)
+    .await;
+
+    // 2. Add new direct members (INSERT OR IGNORE to not conflict with group-synced)
+    for member_id in &form.members {
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'member', 'direct')",
+        )
+        .bind(&team_id)
+        .bind(member_id)
+        .execute(&state.pool)
+        .await;
+    }
+
+    // Ensure the current user remains a member (safety net)
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'admin', 'direct')",
+    )
+    .bind(&team_id)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
     tracing::info!(team_id = %team_id, user_id = %user.id, "team settings updated");
     Redirect::to(&format!("/dashboard/teams/{}/settings?success=1", team_id)).into_response()
 }

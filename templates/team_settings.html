@@ -115,19 +115,155 @@
 
 <div class="card" style="margin-top: 1.25rem;">
   <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Members</h2>
-  <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Members are synced from linked groups or added directly.</p>
-  {% for m in members %}
-  <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; {% if not loop.last %}border-bottom: 1px solid var(--border);{% endif %}">
-    <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.7rem; flex-shrink: 0; overflow: hidden;">
-      {% if m.has_avatar %}
-        <img src="/avatar/{{ m.id }}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
-      {% else %}
-        {{ m.initials }}
-      {% endif %}
+  <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Manage team members. Members synced from OIDC groups are marked and managed automatically.</p>
+
+  <!-- Current members list -->
+  <div id="members-list" style="margin-bottom: 1rem;">
+    {% for m in members %}
+    <div class="member-row" data-id="{{ m.id }}" style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; {% if not loop.last %}border-bottom: 1px solid var(--border);{% endif %}">
+      <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.7rem; flex-shrink: 0; overflow: hidden;">
+        {% if m.has_avatar %}
+          <img src="/avatar/{{ m.id }}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+        {% else %}
+          {{ m.initials }}
+        {% endif %}
+      </div>
+      <span style="font-size: 0.9rem; flex: 1;">{{ m.name }}</span>
+      {% if m.role == "admin" %}<span class="badge" style="background: var(--accent-subtle, rgba(99,102,241,0.1)); color: var(--accent); font-size: 0.7rem;">admin</span>{% endif %}
+      {% if m.source == "group" %}<span class="badge" style="background: var(--surface-hover); color: var(--text-muted); font-size: 0.7rem;">OIDC</span>{% endif %}
     </div>
-    <span style="font-size: 0.9rem;">{{ m.name }}</span>
-    {% if m.role == "admin" %}<span class="badge" style="background: var(--accent-subtle, rgba(99,102,241,0.1)); color: var(--accent); font-size: 0.7rem;">admin</span>{% endif %}
+    {% endfor %}
   </div>
-  {% endfor %}
+
+  <!-- Add member search -->
+  <div style="position: relative;">
+    <input type="text" id="add-member-search" autocomplete="off" placeholder="Add member — search by name or email..." style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text);">
+    <div id="add-member-results" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); max-height: 200px; overflow-y: auto; z-index: 10; box-shadow: var(--shadow);"></div>
+  </div>
+
+  <!-- Hidden form for saving members -->
+  <form method="POST" id="members-form" style="margin-top: 1rem;">
+    <div id="member-hidden-inputs"></div>
+    <input type="hidden" name="description" value="{{ team_description }}">
+    <button type="submit" class="btn" id="save-members-btn" style="display: none;">Save members</button>
+  </form>
 </div>
+
+<script>
+(function() {
+  var allUsers = [
+    {% for u in all_users %}
+    { id: "{{ u.id }}", name: "{{ u.name }}", email: "{{ u.email }}", hasAvatar: {{ u.has_avatar | lower }}, initials: "{{ u.initials }}", isMember: {{ u.is_member | lower }} },
+    {% endfor %}
+  ];
+
+  // Track current direct members (excludes OIDC-synced)
+  var currentMembers = {};
+  {% for m in members %}
+  {% if m.source != "group" %}
+  currentMembers["{{ m.id }}"] = true;
+  {% endif %}
+  {% endfor %}
+
+  var initialState = JSON.stringify(currentMembers);
+  var searchEl = document.getElementById('add-member-search');
+  var resultsEl = document.getElementById('add-member-results');
+  var hiddenEl = document.getElementById('member-hidden-inputs');
+  var saveBtn = document.getElementById('save-members-btn');
+
+  function syncHidden() {
+    hiddenEl.innerHTML = '';
+    Object.keys(currentMembers).forEach(function(id) {
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'members'; inp.value = id;
+      hiddenEl.appendChild(inp);
+    });
+    // Show save button if state changed
+    saveBtn.style.display = JSON.stringify(currentMembers) !== initialState ? '' : 'none';
+  }
+
+  function addMember(user) {
+    currentMembers[user.id] = true;
+    // Add row to the visible list
+    var list = document.getElementById('members-list');
+    var row = document.createElement('div');
+    row.className = 'member-row';
+    row.dataset.id = user.id;
+    row.style.cssText = 'display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-top: 1px solid var(--border);';
+    var avatar = document.createElement('div');
+    avatar.style.cssText = 'width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.7rem; flex-shrink: 0; overflow: hidden;';
+    if (user.hasAvatar) {
+      avatar.innerHTML = '<img src="/avatar/' + user.id + '" style="width:100%;height:100%;object-fit:cover;">';
+    } else {
+      avatar.textContent = user.initials;
+    }
+    row.appendChild(avatar);
+    var name = document.createElement('span');
+    name.style.cssText = 'font-size: 0.9rem; flex: 1;';
+    name.textContent = user.name;
+    row.appendChild(name);
+    var removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'slot-btn';
+    removeBtn.style.cssText = 'font-size: 0.75rem; color: var(--error-text); cursor: pointer;';
+    removeBtn.textContent = 'Remove';
+    removeBtn.onclick = function() { removeMember(user.id); };
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+    syncHidden();
+    searchEl.value = '';
+    resultsEl.style.display = 'none';
+  }
+
+  function removeMember(userId) {
+    delete currentMembers[userId];
+    var row = document.querySelector('.member-row[data-id="' + userId + '"]');
+    if (row) row.remove();
+    syncHidden();
+  }
+
+  function renderResults(query) {
+    var q = query.toLowerCase();
+    var matches = allUsers.filter(function(u) {
+      if (currentMembers[u.id] || u.isMember) return false;
+      return u.name.toLowerCase().indexOf(q) !== -1 || u.email.toLowerCase().indexOf(q) !== -1;
+    });
+    if (matches.length === 0 || q === '') {
+      resultsEl.style.display = 'none';
+      return;
+    }
+    resultsEl.innerHTML = '';
+    matches.slice(0, 10).forEach(function(u) {
+      var row = document.createElement('div');
+      row.style.cssText = 'display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; cursor: pointer; transition: background 0.1s;';
+      row.onmouseenter = function() { this.style.background = 'var(--surface-hover)'; };
+      row.onmouseleave = function() { this.style.background = 'none'; };
+      row.onclick = function() { addMember(u); };
+      var avatar = document.createElement('div');
+      avatar.style.cssText = 'width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 600; flex-shrink: 0; overflow: hidden;';
+      if (u.hasAvatar) {
+        avatar.innerHTML = '<img src="/avatar/' + u.id + '" style="width:100%;height:100%;object-fit:cover;">';
+      } else {
+        avatar.textContent = u.initials;
+      }
+      row.appendChild(avatar);
+      var info = document.createElement('div');
+      info.innerHTML = '<strong style="font-size:0.85rem;">' + u.name + '</strong> <span style="color:var(--text-muted);font-size:0.8rem;">' + u.email + '</span>';
+      row.appendChild(info);
+      resultsEl.appendChild(row);
+    });
+    resultsEl.style.display = 'block';
+  }
+
+  searchEl.addEventListener('input', function() { renderResults(this.value); });
+  searchEl.addEventListener('focus', function() { if (this.value) renderResults(this.value); });
+  document.addEventListener('click', function(e) {
+    if (!searchEl.contains(e.target) && !resultsEl.contains(e.target)) {
+      resultsEl.style.display = 'none';
+    }
+  });
+
+  syncHidden();
+})();
+</script>
 {% endblock %}
