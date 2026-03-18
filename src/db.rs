@@ -154,6 +154,7 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             "033_group_profile",
             include_str!("../migrations/033_group_profile.sql"),
         ),
+        ("034_teams", include_str!("../migrations/034_teams.sql")),
     ];
 
     let mut applied_count = 0u32;
@@ -178,6 +179,9 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
     if applied_count == 0 {
         tracing::debug!("database migrations up to date");
     }
+
+    // Migrate team links → event types + bookings (after migration 034)
+    migrate_team_links_to_teams(pool).await?;
 
     // Migrate orphaned accounts (pre-auth) → create users and link them
     migrate_orphaned_accounts(pool).await?;
@@ -278,6 +282,234 @@ async fn generate_missing_usernames(pool: &SqlitePool) -> Result<()> {
             .bind(&user_id)
             .execute(pool)
             .await?;
+    }
+
+    Ok(())
+}
+
+/// Create event types and migrate bookings for team links that were converted to teams.
+/// The SQL migration (034) creates the team rows and members, but team links need
+/// event_type rows (they didn't have any) and their bookings need to move to `bookings`.
+async fn migrate_team_links_to_teams(pool: &SqlitePool) -> Result<()> {
+    // Check if team_links table exists (might not if fresh install)
+    let has_tl: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='team_links'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_tl.0 == 0 {
+        return Ok(());
+    }
+
+    // Check if teams table exists (migration 034 must have run)
+    let has_teams: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='teams'")
+            .fetch_one(pool)
+            .await?;
+    if has_teams.0 == 0 {
+        return Ok(());
+    }
+
+    // Find team links that don't yet have a corresponding event type on the team
+    #[allow(clippy::type_complexity)]
+    let links: Vec<(
+        String,
+        String,
+        i32,
+        i32,
+        i32,
+        i32,
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+    )> = sqlx::query_as(
+        "SELECT tl.id, tl.title, tl.duration_min, tl.buffer_before, tl.buffer_after, \
+         tl.min_notice_min, tl.availability_start, tl.availability_end, \
+         tl.availability_windows, tl.availability_days, \
+         tl.location_type, tl.location_value, tl.description, tl.reminder_minutes \
+         FROM team_links tl \
+         WHERE EXISTS (SELECT 1 FROM teams t WHERE t.id = tl.id) \
+         AND NOT EXISTS (SELECT 1 FROM event_types et WHERE et.team_id = tl.id)",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let mut migrated = 0u32;
+    for (
+        tl_id,
+        title,
+        duration,
+        buf_before,
+        buf_after,
+        min_notice,
+        avail_start,
+        avail_end,
+        avail_windows,
+        avail_days,
+        loc_type,
+        loc_value,
+        description,
+        reminder_min,
+    ) in &links
+    {
+        // Find the account of the team creator (needed for event_type.account_id)
+        let creator: Option<(String,)> = sqlx::query_as(
+            "SELECT a.id FROM accounts a \
+             JOIN teams t ON a.user_id = t.created_by \
+             WHERE t.id = ?",
+        )
+        .bind(tl_id)
+        .fetch_optional(pool)
+        .await?;
+
+        let account_id = match creator {
+            Some((aid,)) => aid,
+            None => continue, // Skip if creator has no account
+        };
+
+        // Create event type for the team
+        let et_id = uuid::Uuid::new_v4().to_string();
+        let slug = title
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        let slug = if slug.is_empty() {
+            "meeting".to_string()
+        } else {
+            slug
+        };
+
+        sqlx::query(
+            "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, \
+             buffer_before, buffer_after, min_notice_min, enabled, requires_confirmation, \
+             location_type, location_value, team_id, scheduling_mode, reminder_minutes, \
+             visibility, created_by_user_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, 'collective', ?, 'private', \
+             (SELECT created_by FROM teams WHERE id = ?))",
+        )
+        .bind(&et_id)
+        .bind(&account_id)
+        .bind(&slug)
+        .bind(title)
+        .bind(description)
+        .bind(duration)
+        .bind(buf_before)
+        .bind(buf_after)
+        .bind(min_notice)
+        .bind(loc_type)
+        .bind(loc_value)
+        .bind(tl_id)
+        .bind(reminder_min)
+        .bind(tl_id)
+        .execute(pool)
+        .await?;
+
+        // Create availability rules from the team link's inline config
+        let days: Vec<i32> = avail_days
+            .split(',')
+            .filter_map(|d| d.trim().parse().ok())
+            .collect();
+
+        if let Some(windows) = avail_windows {
+            // Multiple windows: "09:00-12:00,13:00-17:00"
+            for window in windows.split(',') {
+                let parts: Vec<&str> = window.trim().split('-').collect();
+                if parts.len() == 2 {
+                    for day in &days {
+                        let rule_id = uuid::Uuid::new_v4().to_string();
+                        sqlx::query(
+                            "INSERT INTO availability_rules (id, event_type_id, day_of_week, start_time, end_time) \
+                             VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .bind(&rule_id)
+                        .bind(&et_id)
+                        .bind(day)
+                        .bind(parts[0].trim())
+                        .bind(parts[1].trim())
+                        .execute(pool)
+                        .await?;
+                    }
+                }
+            }
+        } else {
+            // Single window from start/end
+            for day in &days {
+                let rule_id = uuid::Uuid::new_v4().to_string();
+                sqlx::query(
+                    "INSERT INTO availability_rules (id, event_type_id, day_of_week, start_time, end_time) \
+                     VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(&rule_id)
+                .bind(&et_id)
+                .bind(day)
+                .bind(avail_start)
+                .bind(avail_end)
+                .execute(pool)
+                .await?;
+            }
+        }
+
+        // Migrate team_link_bookings → bookings
+        let tlb: Vec<(
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            String,
+            String,
+        )> = sqlx::query_as(
+            "SELECT id, uid, guest_name, guest_email, guest_timezone, notes, \
+                 start_at, end_at, status, cancel_token \
+                 FROM team_link_bookings WHERE team_link_id = ?",
+        )
+        .bind(tl_id)
+        .fetch_all(pool)
+        .await?;
+
+        for (bid, uid, gname, gemail, gtz, notes, start, end, status, cancel_tok) in &tlb {
+            let reschedule_token = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT OR IGNORE INTO bookings (id, event_type_id, uid, guest_name, guest_email, \
+                 guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(bid)
+            .bind(&et_id)
+            .bind(uid)
+            .bind(gname)
+            .bind(gemail)
+            .bind(gtz)
+            .bind(notes)
+            .bind(start)
+            .bind(end)
+            .bind(status)
+            .bind(cancel_tok)
+            .bind(&reschedule_token)
+            .execute(pool)
+            .await?;
+        }
+
+        migrated += 1;
+    }
+
+    if migrated > 0 {
+        tracing::info!(count = migrated, "migrated team links to team event types");
     }
 
     Ok(())
@@ -404,7 +636,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 33, "All 33 migrations should be tracked");
+        assert_eq!(count.0, 34, "All 34 migrations should be tracked");
     }
 
     #[tokio::test]
@@ -418,7 +650,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 33, "Still 33 migrations after second run");
+        assert_eq!(count.0, 34, "Still 34 migrations after second run");
     }
 
     #[tokio::test]
