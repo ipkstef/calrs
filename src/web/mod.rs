@@ -635,7 +635,10 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route("/accent.css", get(serve_accent_css))
         .route("/brand-logo", get(serve_brand_logo))
         .route("/fonts/inter-latin.woff2", get(serve_font_inter_latin))
-        .route("/fonts/inter-latin-ext.woff2", get(serve_font_inter_latin_ext))
+        .route(
+            "/fonts/inter-latin-ext.woff2",
+            get(serve_font_inter_latin_ext),
+        )
         // Group public routes (before the catch-all)
         .route("/g/{group_slug}", get(group_profile))
         .route("/g/{group_slug}/{slug}", get(show_group_slots))
