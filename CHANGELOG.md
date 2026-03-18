@@ -104,8 +104,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | External cancellation detection | 0.25.0 | Bookings auto-cancelled when their CalDAV event is deleted externally |
 | Self-hosted fonts | 0.25.3 | Inter font bundled in binary — no external requests to Google, fully GDPR-compliant |
 | Markdown bio | 0.26.0 | Links, bold, italic in user bio via Markdown syntax |
+| Company link | 0.26.1 | Logo on public pages links to configurable company URL |
 
 ## [Unreleased]
+
+## [0.26.1] - 2026-03-18
+
+### Added
+
+- **Company link** — admins can set a company URL in the admin panel (next to logo upload). When set, the company logo on all public booking pages becomes a clickable link opening in a new tab. Cached in memory for zero-query reads. ([#24](https://github.com/olivierlambert/calrs/pull/24))
 
 ## [0.26.0] - 2026-03-18
 
