@@ -142,6 +142,10 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             "030_member_weight",
             include_str!("../migrations/030_member_weight.sql"),
         ),
+        (
+            "031_fix_legacy_timezones",
+            include_str!("../migrations/031_fix_legacy_timezones.sql"),
+        ),
     ];
 
     let mut applied_count = 0u32;
@@ -392,7 +396,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 30, "All 30 migrations should be tracked");
+        assert_eq!(count.0, 31, "All 31 migrations should be tracked");
     }
 
     #[tokio::test]
@@ -406,7 +410,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 30, "Still 30 migrations after second run");
+        assert_eq!(count.0, 31, "Still 31 migrations after second run");
     }
 
     #[tokio::test]
