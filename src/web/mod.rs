@@ -788,6 +788,19 @@ async fn dashboard_event_types(
 
     let is_admin = user.role == "admin";
 
+    // Get team IDs where user has admin role (for showing edit/toggle/delete buttons)
+    let admin_team_ids: std::collections::HashSet<String> = if is_admin {
+        std::collections::HashSet::new() // global admins can manage all
+    } else {
+        let ids: Vec<(String,)> =
+            sqlx::query_as("SELECT team_id FROM team_members WHERE user_id = ? AND role = 'admin'")
+                .bind(&user.id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+        ids.into_iter().map(|(id,)| id).collect()
+    };
+
     let team_event_types: Vec<(
         String,
         String,
@@ -845,6 +858,9 @@ async fn dashboard_event_types(
             > 0
     };
 
+    // Whether user can create new team event types (global admin or team admin of at least one team)
+    let can_create_team_et = is_admin || !admin_team_ids.is_empty();
+
     let tmpl = match state.templates.get_template("dashboard_event_types.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -861,7 +877,8 @@ async fn dashboard_event_types(
         .iter()
         .map(
             |(id, slug, title, duration, enabled, team_name, team_slug, active_bookings, vis, team_id, scheduling_mode)| {
-                context! { id => id, slug => slug, title => title, duration_min => duration, enabled => enabled, team_name => team_name, team_slug => team_slug, active_bookings => active_bookings, visibility => vis, team_id => team_id, scheduling_mode => scheduling_mode }
+                let can_manage = is_admin || admin_team_ids.contains(team_id);
+                context! { id => id, slug => slug, title => title, duration_min => duration, enabled => enabled, team_name => team_name, team_slug => team_slug, active_bookings => active_bookings, visibility => vis, team_id => team_id, scheduling_mode => scheduling_mode, can_manage => can_manage }
             },
         )
         .collect();
@@ -875,6 +892,7 @@ async fn dashboard_event_types(
             event_types => et_ctx,
             team_event_types => team_et_ctx,
             user_has_teams => user_has_teams,
+            can_create_team_et => can_create_team_et,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })
@@ -967,6 +985,7 @@ async fn dashboard_teams(
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
 
+    // For non-admin users, also fetch which teams they admin
     let teams: Vec<(
         String,
         String,
@@ -1000,6 +1019,19 @@ async fn dashboard_teams(
         .unwrap_or_default()
     };
 
+    let admin_team_ids: std::collections::HashSet<String> = if is_admin {
+        // Global admins can manage all teams
+        std::collections::HashSet::new()
+    } else {
+        let ids: Vec<(String,)> =
+            sqlx::query_as("SELECT team_id FROM team_members WHERE user_id = ? AND role = 'admin'")
+                .bind(&user.id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+        ids.into_iter().map(|(id,)| id).collect()
+    };
+
     let tmpl = match state.templates.get_template("dashboard_teams.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -1015,6 +1047,7 @@ async fn dashboard_teams(
                     .take(2)
                     .collect::<String>()
                     .to_uppercase();
+                let user_is_team_admin = is_admin || admin_team_ids.contains(id);
                 context! {
                     id => id,
                     name => name,
@@ -1024,6 +1057,7 @@ async fn dashboard_teams(
                     has_avatar => avatar_path.is_some(),
                     initials => initials,
                     member_count => member_count,
+                    is_team_admin => user_is_team_admin,
                 }
             },
         )
@@ -1860,6 +1894,19 @@ async fn is_team_member(pool: &SqlitePool, user_id: &str, team_id: &str) -> bool
         > 0
 }
 
+/// Check if a user has team-admin role for a specific team.
+async fn is_team_admin(pool: &SqlitePool, user_id: &str, team_id: &str) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM team_members WHERE user_id = ? AND team_id = ? AND role = 'admin'",
+    )
+    .bind(user_id)
+    .bind(team_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        > 0
+}
+
 #[derive(Deserialize)]
 struct GroupSettingsForm {
     _csrf: Option<String>,
@@ -1874,8 +1921,8 @@ async fn group_settings_page(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
-        return Html("Team not found.".to_string());
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
+        return Html("Team not found or you are not a team admin.".to_string());
     }
 
     let team: Option<(String, String, Option<String>, Option<String>)> =
@@ -1945,7 +1992,7 @@ async fn group_settings_save(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
     let desc = form
@@ -1979,7 +2026,7 @@ async fn upload_group_avatar(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
     let redirect_url = format!("/dashboard/teams/{}/settings", team_id);
@@ -2046,7 +2093,7 @@ async fn delete_group_avatar(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
     let old: Option<(String,)> =
@@ -2365,14 +2412,21 @@ async fn new_event_type_form(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    // Get teams the user belongs to
-    let groups: Vec<(String, String)> = sqlx::query_as(
-        "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? ORDER BY t.name",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    // Get teams where the user is a team admin (global admins see all teams)
+    let groups: Vec<(String, String)> = if user.role == "admin" {
+        sqlx::query_as("SELECT t.id, t.name FROM teams t ORDER BY t.name")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default()
+    } else {
+        sqlx::query_as(
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? AND tm.role = 'admin' ORDER BY t.name",
+        )
+        .bind(&user.id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    };
 
     let groups_ctx: Vec<minijinja::Value> = groups
         .iter()
@@ -2499,6 +2553,21 @@ async fn create_event_type(
 
     // Check if a team_id was provided and it's non-empty
     let team_id = form.team_id.as_deref().filter(|s| !s.trim().is_empty());
+
+    // Verify team admin rights if a team_id is specified
+    if let Some(tid) = team_id {
+        let is_global_admin = user.role == "admin";
+        if !is_global_admin && !is_team_admin(&state.pool, &user.id, tid).await {
+            return render_event_type_form_error(
+                &state,
+                &auth_user,
+                "You are not an admin of this team.",
+                &form,
+                false,
+            )
+            .into_response();
+        }
+    }
 
     // "internal" visibility is only allowed for team event types
     let visibility = match form.visibility.as_deref().unwrap_or("public") {
@@ -3006,7 +3075,7 @@ async fn update_group_event_type_member_priority(
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
              JOIN team_members tm ON tm.team_id = et.team_id \
-             WHERE tm.user_id = ? AND et.slug = ? AND et.team_id IS NOT NULL",
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -4250,7 +4319,7 @@ async fn new_group_event_type_form(
             .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? ORDER BY t.name",
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? AND tm.role = 'admin' ORDER BY t.name",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -4262,7 +4331,7 @@ async fn new_group_event_type_form(
         return Html(if is_admin {
             "No teams exist yet.".to_string()
         } else {
-            "You don't belong to any teams.".to_string()
+            "You are not an admin of any teams.".to_string()
         });
     }
 
@@ -4323,19 +4392,9 @@ async fn create_group_event_type(
 
     let is_admin = user.role == "admin";
 
-    // Verify user belongs to this team (admins can manage any team)
-    if !is_admin {
-        let membership: Option<(String,)> =
-            sqlx::query_as("SELECT team_id FROM team_members WHERE user_id = ? AND team_id = ?")
-                .bind(&user.id)
-                .bind(&team_id)
-                .fetch_optional(&state.pool)
-                .await
-                .unwrap_or(None);
-
-        if membership.is_none() {
-            return Html("You don't belong to this team.".to_string()).into_response();
-        }
+    // Verify user is a team admin (global admins can manage any team)
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
+        return Html("You are not an admin of this team.".to_string()).into_response();
     }
 
     // Find the user's account
@@ -4466,7 +4525,7 @@ async fn edit_group_event_type_form(
             "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.team_id, et.visibility, et.max_additional_guests, et.scheduling_mode
              FROM event_types et
              JOIN team_members tm ON tm.team_id = et.team_id
-             WHERE tm.user_id = ? AND et.slug = ? AND et.team_id IS NOT NULL",
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -4642,7 +4701,7 @@ async fn update_group_event_type(
             "SELECT et.id, et.team_id
              FROM event_types et
              JOIN team_members tm ON tm.team_id = et.team_id
-             WHERE tm.user_id = ? AND et.slug = ? AND et.team_id IS NOT NULL",
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -4770,7 +4829,7 @@ async fn toggle_group_event_type(
     } else {
         let _ = sqlx::query(
             "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND team_id IS NOT NULL AND team_id IN (SELECT team_id FROM team_members WHERE user_id = ?)",
+             WHERE slug = ? AND team_id IS NOT NULL AND team_id IN (SELECT team_id FROM team_members WHERE user_id = ? AND role = 'admin')",
         )
         .bind(&slug)
         .bind(&user.id)
@@ -4810,7 +4869,7 @@ async fn delete_group_event_type(
         sqlx::query_as(
             "SELECT et.id FROM event_types et
              JOIN team_members tm ON tm.team_id = et.team_id
-             WHERE et.slug = ? AND tm.user_id = ? AND et.team_id IS NOT NULL",
+             WHERE et.slug = ? AND tm.user_id = ? AND tm.role = 'admin' AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .bind(&user.id)

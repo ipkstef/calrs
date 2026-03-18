@@ -32,7 +32,9 @@
         </div>
       </div>
       <div class="et-actions">
+        {% if is_admin or team.is_team_admin %}
         <a href="/dashboard/teams/{{ team.id }}/settings" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Settings</a>
+        {% endif %}
         {% if team.visibility == "public" and team.slug %}
         <a href="/team/{{ team.slug }}" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">View</a>
         {% endif %}
