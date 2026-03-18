@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ host_name }} — calrs{% endblock %}
+{% block head %}
+<style>
+  .host-bio a { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+  .host-bio a:hover { opacity: 0.8; }
+  .host-bio code { background: rgba(255,255,255,0.15); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="logo"><img src="/logo" alt="" onerror="this.parentElement.style.display='none'"></div>
 
@@ -20,7 +27,7 @@
         {% if host_title %}<p style="color: rgba(255,255,255,0.8); font-size: 0.9rem; margin-top: 0.125rem;">{{ host_title }}</p>{% endif %}
       </div>
     </div>
-    {% if host_bio %}<p style="color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-top: 0.5rem;">{{ host_bio }}</p>{% endif %}
+    {% if host_bio %}<div class="host-bio" style="color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-top: 0.5rem;">{{ host_bio|safe }}</div>{% endif %}
   </div>
   <div style="padding: 1.25rem 2rem 1.5rem;">
     <p class="subtitle" style="margin-bottom: 0;">Pick an event type to book a time.</p>

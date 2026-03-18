@@ -6087,7 +6087,7 @@ async fn user_profile(
             host_name => &user_name,
             host_initials => compute_initials(&user_name),
             host_title => user_title,
-            host_bio => user_bio,
+            host_bio => user_bio.as_deref().map(crate::utils::render_bio_markdown),
             host_user_id => user_id,
             host_has_avatar => avatar_path.is_some(),
             username => username,
