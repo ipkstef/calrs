@@ -9096,6 +9096,7 @@ async fn admin_dashboard(
         user_title => current_user.title.as_deref().unwrap_or(""),
         user_id => current_user.id,
         user_role => "admin",
+        user_timezone => current_user.timezone,
         has_avatar => current_user.avatar_path.is_some(),
         user_initials => compute_initials(&current_user.name),
         active => "admin",
