@@ -16,6 +16,7 @@ pub struct SmtpConfig {
     pub from_name: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct BookingDetails {
     pub event_title: String,
     pub date: String,

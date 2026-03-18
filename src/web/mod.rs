@@ -609,6 +609,7 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
             "/dashboard/settings",
             get(settings_page).post(settings_save),
         )
+        .route("/dashboard/settings/timezone", post(update_timezone))
         .route("/dashboard/settings/avatar", post(upload_avatar))
         .route("/dashboard/settings/avatar/delete", post(delete_avatar))
         .route("/avatar/{user_id}", get(serve_avatar))
@@ -767,6 +768,7 @@ fn sidebar_context(auth_user: &crate::auth::AuthUser, active: &str) -> minijinja
         user_title => user.title.as_deref().unwrap_or(""),
         user_id => user.id,
         user_role => effective_role,
+        user_timezone => user.timezone,
         has_avatar => user.avatar_path.is_some(),
         user_initials => compute_initials(&user.name),
         active => active,
@@ -1308,6 +1310,7 @@ struct SettingsForm {
     title: Option<String>,
     bio: Option<String>,
     booking_email: Option<String>,
+    timezone: Option<String>,
 }
 
 async fn settings_page(
@@ -1340,6 +1343,12 @@ fn settings_render(
         Ok(t) => t,
         Err(e) => return Html(format!("Internal error: {}", e)),
     };
+    let tz_options: Vec<minijinja::Value> = common_timezones()
+        .iter()
+        .map(|(iana, label)| {
+            context! { value => iana, label => label }
+        })
+        .collect();
     Html(
         tmpl.render(context! {
             sidebar => sidebar,
@@ -1348,6 +1357,8 @@ fn settings_render(
             form_title => user.title.as_deref().unwrap_or(""),
             form_bio => user.bio.as_deref().unwrap_or(""),
             form_booking_email => user.booking_email.as_deref().unwrap_or(""),
+            form_timezone => user.timezone,
+            tz_options => tz_options,
             user_email => user.email,
             user_id => user.id,
             has_avatar => user.avatar_path.is_some(),
@@ -1429,13 +1440,22 @@ async fn settings_save(
         }
     }
 
+    let timezone = form
+        .timezone
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && s.parse::<chrono_tz::Tz>().is_ok())
+        .unwrap_or("UTC")
+        .to_string();
+
     let result = sqlx::query(
-        "UPDATE users SET name = ?, title = ?, bio = ?, booking_email = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE users SET name = ?, title = ?, bio = ?, booking_email = ?, timezone = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(&name)
     .bind(&title)
     .bind(&bio)
     .bind(&booking_email)
+    .bind(&timezone)
     .bind(&user.id)
     .execute(&state.pool)
     .await;
@@ -1476,6 +1496,39 @@ async fn settings_save(
         )
         .into_response(),
     }
+}
+
+// --- Quick timezone update (from banner) ---
+
+#[derive(Deserialize)]
+struct TimezoneUpdateForm {
+    timezone: String,
+}
+
+async fn update_timezone(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    headers: HeaderMap,
+    axum::Json(form): axum::Json<TimezoneUpdateForm>,
+) -> impl IntoResponse {
+    let csrf = headers
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if let Err(resp) = verify_csrf_token(&headers, &Some(csrf.to_string())) {
+        return resp;
+    }
+    let tz = form.timezone.trim();
+    if tz.parse::<chrono_tz::Tz>().is_err() {
+        return (axum::http::StatusCode::BAD_REQUEST, "Invalid timezone").into_response();
+    }
+    let _ = sqlx::query("UPDATE users SET timezone = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(tz)
+        .bind(&auth_user.user.id)
+        .execute(&state.pool)
+        .await;
+    tracing::info!(user_id = %auth_user.user.id, timezone = %tz, "timezone updated from banner");
+    (axum::http::StatusCode::OK, "OK").into_response()
 }
 
 // --- Avatar upload/serve/delete ---
@@ -3110,8 +3163,8 @@ async fn show_team_link_slots(
     Path(token): Path<String>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let tl: Option<(String, String, i32, i32, i32, i32, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min, availability_start, availability_end, availability_days, availability_windows, location_type, location_value, description
+    let tl: Option<(String, String, i32, i32, i32, i32, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min, availability_start, availability_end, availability_days, availability_windows, location_type, location_value, description, created_by_user_id
          FROM team_links WHERE token = ?",
     )
     .bind(&token)
@@ -3133,6 +3186,7 @@ async fn show_team_link_slots(
         tl_location_type,
         tl_location_value,
         tl_description,
+        creator_user_id,
     ) = match tl {
         Some(t) => t,
         None => return Html("Team link not found.".to_string()),
@@ -3157,10 +3211,7 @@ async fn show_team_link_slots(
     let member_names: Vec<&str> = members.iter().map(|(_, n)| n.as_str()).collect();
     let host_name = member_names.join(", ");
 
-    let host_tz = iana_time_zone::get_timezone()
-        .ok()
-        .and_then(|s| s.parse::<Tz>().ok())
-        .unwrap_or(Tz::UTC);
+    let host_tz = get_user_tz(&state.pool, &creator_user_id).await;
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let guest_tz_name = guest_tz.name().to_string();
 
@@ -3415,7 +3466,7 @@ async fn handle_team_link_booking(
         buffer_before,
         buffer_after,
         min_notice,
-        _creator_id,
+        creator_id,
         one_time_use,
         tl_location_type,
         tl_location_value,
@@ -3456,10 +3507,7 @@ async fn handle_team_link_booking(
     .await
     .unwrap_or_default();
 
-    let host_tz = iana_time_zone::get_timezone()
-        .ok()
-        .and_then(|s| s.parse::<Tz>().ok())
-        .unwrap_or(Tz::UTC);
+    let host_tz = get_user_tz(&state.pool, &creator_id).await;
 
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
@@ -5393,8 +5441,8 @@ async fn show_group_slots(
     Path((group_slug, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, g.name, et.visibility
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, g.name, et.visibility, et.scheduling_mode
          FROM event_types et
          JOIN groups g ON g.id = et.group_id
          WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
@@ -5418,6 +5466,7 @@ async fn show_group_slots(
         loc_value,
         group_name,
         visibility,
+        scheduling_mode,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -5505,7 +5554,11 @@ async fn show_group_slots(
                 .await,
             );
         }
-        BusySource::Group(member_busy)
+        if scheduling_mode == "collective" {
+            BusySource::Team(member_busy)
+        } else {
+            BusySource::Group(member_busy)
+        }
     } else {
         // Fallback for individual event type (shouldn't happen on group route, but be safe)
         let owner_id: String = sqlx::query_scalar(
@@ -7443,8 +7496,48 @@ fn parse_guest_tz(tz: Option<&str>) -> Tz {
     })
 }
 
-/// Get the host's timezone (uses server local TZ as proxy).
-async fn get_host_tz(_pool: &SqlitePool, _et_id: &str) -> Tz {
+/// Get the host's timezone from the event type owner's profile.
+/// Falls back to the server's local timezone, then UTC.
+async fn get_host_tz(pool: &SqlitePool, et_id: &str) -> Tz {
+    if !et_id.is_empty() {
+        if let Some(tz_str) = sqlx::query_scalar::<_, String>(
+            "SELECT u.timezone FROM users u
+             JOIN accounts a ON a.user_id = u.id
+             JOIN event_types et ON et.account_id = a.id
+             WHERE et.id = ?",
+        )
+        .bind(et_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        {
+            if let Ok(tz) = tz_str.parse::<Tz>() {
+                return tz;
+            }
+        }
+    }
+    server_tz()
+}
+
+/// Get a user's timezone from their profile. Falls back to server TZ.
+async fn get_user_tz(pool: &SqlitePool, user_id: &str) -> Tz {
+    if let Some(tz_str) = sqlx::query_scalar::<_, String>("SELECT timezone FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+    {
+        if let Ok(tz) = tz_str.parse::<Tz>() {
+            return tz;
+        }
+    }
+    server_tz()
+}
+
+/// Server's local timezone as fallback.
+fn server_tz() -> Tz {
     iana_time_zone::get_timezone()
         .ok()
         .and_then(|s| s.parse::<Tz>().ok())
@@ -8318,7 +8411,7 @@ async fn troubleshoot(
     // Always sync before troubleshooting to ensure fresh data
     crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, &user.id).await;
 
-    let host_tz = get_host_tz(&state.pool, "").await;
+    let host_tz = get_user_tz(&state.pool, &user.id).await;
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
 
     let target_date = params
