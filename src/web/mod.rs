@@ -10,7 +10,6 @@ use chrono::{
 };
 use chrono_tz::Tz;
 use minijinja::{context, Environment};
-use serde::de;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -171,25 +170,9 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
         .await
         .unwrap_or_default();
 
-        // Team link booking reminders
-        let tl_due: Vec<(String, String, String, String, String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT tlb.id, tlb.guest_name, tlb.guest_email, COALESCE(tlb.guest_timezone, 'UTC'), tlb.start_at, tlb.end_at, tl.title, tlb.cancel_token
-             FROM team_link_bookings tlb
-             JOIN team_links tl ON tl.id = tlb.team_link_id
-             WHERE tlb.status = 'confirmed'
-               AND tlb.reminder_sent_at IS NULL
-               AND tl.reminder_minutes IS NOT NULL
-               AND tl.reminder_minutes > 0
-               AND datetime(tlb.start_at, '-' || tl.reminder_minutes || ' minutes') <= datetime('now')
-               AND datetime(tlb.start_at) > datetime('now')",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-
         let base_url = std::env::var("CALRS_BASE_URL").ok();
 
-        if due.is_empty() && tl_due.is_empty() {
+        if due.is_empty() {
             continue;
         }
 
@@ -258,101 +241,6 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
                     .await;
 
             tracing::info!(booking_id = %bid, "reminder sent");
-        }
-
-        for (
-            bid,
-            guest_name,
-            guest_email,
-            guest_timezone,
-            start_at,
-            end_at,
-            event_title,
-            cancel_token,
-        ) in &tl_due
-        {
-            let members: Vec<(String, String)> = sqlx::query_as(
-                "SELECT u.name, COALESCE(u.booking_email, u.email)
-                 FROM users u
-                 JOIN team_link_members tlm ON tlm.user_id = u.id
-                 JOIN team_link_bookings tlb ON tlb.team_link_id = tlm.team_link_id
-                 WHERE tlb.id = ? AND u.enabled = 1",
-            )
-            .bind(bid)
-            .fetch_all(&pool)
-            .await
-            .unwrap_or_default();
-
-            let host_name = members
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let date = start_at.get(..10).unwrap_or(start_at).to_string();
-            let start_time = extract_time_24h(start_at);
-            let end_time = extract_time_24h(end_at);
-
-            for (member_name, member_email) in &members {
-                let details = crate::email::BookingDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone: guest_timezone.clone(),
-                    host_name: member_name.clone(),
-                    host_email: member_email.clone(),
-                    uid: String::new(),
-                    notes: None,
-                    location: None,
-                    reminder_minutes: None,
-                    additional_attendees: vec![],
-                };
-                let _ = crate::email::send_host_reminder(&smtp_config, &details).await;
-            }
-
-            if let Some((_, first_email)) = members.first() {
-                let details = crate::email::BookingDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone: guest_timezone.clone(),
-                    host_name: host_name.clone(),
-                    host_email: first_email.clone(),
-                    uid: String::new(),
-                    notes: None,
-                    location: None,
-                    reminder_minutes: None,
-                    additional_attendees: vec![],
-                };
-
-                let guest_cancel_url = cancel_token.as_ref().and_then(|t| {
-                    base_url
-                        .as_ref()
-                        .map(|base| format!("{}/booking/cancel/{}", base.trim_end_matches('/'), t))
-                });
-
-                let _ = crate::email::send_guest_reminder(
-                    &smtp_config,
-                    &details,
-                    guest_cancel_url.as_deref(),
-                )
-                .await;
-            }
-
-            let _ = sqlx::query(
-                "UPDATE team_link_bookings SET reminder_sent_at = datetime('now') WHERE id = ?",
-            )
-            .bind(bid)
-            .execute(&pool)
-            .await;
-
-            tracing::info!(booking_id = %bid, "team link reminder sent");
         }
 
         // Background sync: pick the stalest enabled source and sync it.
@@ -543,14 +431,10 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route("/dashboard", get(dashboard))
         .route("/dashboard/event-types", get(dashboard_event_types))
         .route("/dashboard/bookings", get(dashboard_bookings))
+        .route("/dashboard/teams", get(dashboard_teams))
         .route("/dashboard/sources", get(dashboard_sources))
         .route("/dashboard/organization", get(dashboard_organization))
-        .route("/dashboard/team-links", get(dashboard_team_links_page))
         .route("/dashboard/bookings/{id}/cancel", post(cancel_booking))
-        .route(
-            "/dashboard/team-bookings/{id}/cancel",
-            post(cancel_team_link_booking),
-        )
         .route("/dashboard/bookings/{id}/confirm", post(confirm_booking))
         .route(
             "/dashboard/event-types/new",
@@ -705,25 +589,9 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
             "/g/{group_slug}/{slug}/book",
             get(redirect_g_to_team_slug_book),
         )
-        // Team link management
-        .route(
-            "/dashboard/team-links/new",
-            get(new_team_link_form).post(create_team_link),
-        )
-        .route(
-            "/dashboard/team-links/{token}/edit",
-            get(edit_team_link_form).post(update_team_link),
-        )
-        .route(
-            "/dashboard/team-links/{token}/delete",
-            post(delete_team_link),
-        )
-        // Team link public routes
-        .route("/t/{token}", get(show_team_link_slots))
-        .route(
-            "/t/{token}/book",
-            get(show_team_link_book_form).post(handle_team_link_booking),
-        )
+        // Legacy team link redirects → unified teams
+        .route("/t/{token}", get(redirect_team_link_to_team))
+        .route("/t/{token}/book", get(redirect_team_link_to_team))
         // User-scoped public booking routes
         .route("/booking/approve/{token}", get(approve_booking_by_token))
         .route(
@@ -849,15 +717,6 @@ async fn dashboard(
             .fetch_one(&state.pool)
             .await
             .unwrap_or(0);
-
-    let team_upcoming_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM team_link_bookings tlb JOIN team_links tl ON tl.id = tlb.team_link_id JOIN team_link_members tlm ON tlm.team_link_id = tl.id WHERE tlm.user_id = ? AND tlb.status = 'confirmed' AND tlb.start_at >= datetime('now')")
-            .bind(&user.id)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(0);
-
-    let upcoming_count = upcoming_count + team_upcoming_count;
 
     let source_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM caldav_sources cs JOIN accounts a ON a.id = cs.account_id WHERE a.user_id = ?")
@@ -1055,21 +914,6 @@ async fn dashboard_bookings(
         .await
         .unwrap_or_default();
 
-    // Team link bookings where this user is a member
-    let team_bookings: Vec<(String, String, String, String, String, String)> = sqlx::query_as(
-        "SELECT tlb.id, tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title
-         FROM team_link_bookings tlb
-         JOIN team_links tl ON tl.id = tlb.team_link_id
-         JOIN team_link_members tlm ON tlm.team_link_id = tl.id
-         WHERE tlm.user_id = ? AND tlb.status = 'confirmed' AND tlb.start_at >= datetime('now')
-         ORDER BY tlb.start_at
-         LIMIT 50",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
     let tmpl = match state.templates.get_template("dashboard_bookings.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -1082,39 +926,18 @@ async fn dashboard_bookings(
         })
         .collect();
 
-    // Merge regular + team link bookings, sorted by start_at
-    // Tuple: (id, name, email, start, end, title, is_team, awaiting_reschedule)
-    let mut all_bookings: Vec<(String, String, String, String, String, String, bool, bool)> =
-        upcoming_bookings
-            .into_iter()
-            .map(|(id, name, email, start, end, title, resched)| {
-                (id, name, email, start, end, title, false, resched != 0)
-            })
-            .chain(
-                team_bookings
-                    .into_iter()
-                    .map(|(id, name, email, start, end, title)| {
-                        (id, name, email, start, end, title, true, false)
-                    }),
-            )
-            .collect();
-    all_bookings.sort_by(|a, b| a.3.cmp(&b.3));
-
-    let bookings_ctx: Vec<minijinja::Value> = all_bookings
+    let bookings_ctx: Vec<minijinja::Value> = upcoming_bookings
         .iter()
-        .map(
-            |(id, name, email, start, end, title, is_team, awaiting_reschedule)| {
-                context! {
-                    id => id,
-                    guest_name => name,
-                    guest_email => email,
-                    start_at => format_booking_range(start, end),
-                    event_title => title,
-                    is_team_link => *is_team,
-                    awaiting_reschedule => *awaiting_reschedule,
-                }
-            },
-        )
+        .map(|(id, name, email, start, end, title, resched)| {
+            context! {
+                id => id,
+                guest_name => name,
+                guest_email => email,
+                start_at => format_booking_range(start, end),
+                event_title => title,
+                awaiting_reschedule => *resched != 0,
+            }
+        })
         .collect();
 
     let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
@@ -1124,6 +947,91 @@ async fn dashboard_bookings(
             sidebar => sidebar_context(&auth_user, "bookings"),
             pending_bookings => pending_ctx,
             bookings => bookings_ctx,
+            impersonating => impersonating,
+            impersonating_name => impersonating_name,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+// --- Dashboard: Teams ---
+
+async fn dashboard_teams(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+    let is_admin = user.role == "admin";
+
+    let teams: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        i64,
+    )> = if is_admin {
+        sqlx::query_as(
+            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path,
+                    (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) as member_count
+             FROM teams t
+             ORDER BY t.name",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    } else {
+        sqlx::query_as(
+            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path,
+                    (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) as member_count
+             FROM teams t
+             JOIN team_members tm2 ON tm2.team_id = t.id
+             WHERE tm2.user_id = ?
+             ORDER BY t.name",
+        )
+        .bind(&user.id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    };
+
+    let tmpl = match state.templates.get_template("dashboard_teams.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    let teams_ctx: Vec<minijinja::Value> = teams
+        .iter()
+        .map(
+            |(id, name, slug, description, visibility, avatar_path, member_count)| {
+                let initials = name
+                    .split_whitespace()
+                    .filter_map(|w| w.chars().next())
+                    .take(2)
+                    .collect::<String>()
+                    .to_uppercase();
+                context! {
+                    id => id,
+                    name => name,
+                    slug => slug,
+                    description => description,
+                    visibility => visibility,
+                    has_avatar => avatar_path.is_some(),
+                    initials => initials,
+                    member_count => member_count,
+                }
+            },
+        )
+        .collect();
+
+    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
+
+    Html(
+        tmpl.render(context! {
+            sidebar => sidebar_context(&auth_user, "teams"),
+            teams => teams_ctx,
+            is_admin => is_admin,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })
@@ -1275,68 +1183,6 @@ async fn dashboard_sources(
         tmpl.render(context! {
             sidebar => sidebar_context(&auth_user, "sources"),
             sources => sources_ctx,
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-// --- Dashboard: Team Links ---
-
-async fn dashboard_team_links_page(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let team_links: Vec<(String, String, i32, String, String, i32)> = sqlx::query_as(
-        "SELECT DISTINCT tl.token, tl.title, tl.duration_min, tl.created_by_user_id, tl.created_at, tl.one_time_use
-         FROM team_links tl
-         JOIN team_link_members tlm ON tlm.team_link_id = tl.id
-         WHERE tlm.user_id = ?
-         ORDER BY tl.created_at DESC",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let mut team_links_ctx: Vec<minijinja::Value> = Vec::new();
-    for (token, title, duration, created_by, _created_at, one_time_use) in &team_links {
-        let members: Vec<(String,)> = sqlx::query_as(
-            "SELECT u.name FROM users u
-             JOIN team_link_members tlm ON tlm.user_id = u.id
-             JOIN team_links tl ON tl.id = tlm.team_link_id
-             WHERE tl.token = ?
-             ORDER BY u.name",
-        )
-        .bind(token)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
-        let member_names: Vec<&str> = members.iter().map(|(n,)| n.as_str()).collect();
-        team_links_ctx.push(context! {
-            token => token,
-            title => title,
-            duration_min => duration,
-            members => member_names.join(", "),
-            is_owner => created_by == &user.id,
-            one_time_use => *one_time_use != 0,
-        });
-    }
-
-    let tmpl = match state.templates.get_template("dashboard_team_links.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
-
-    Html(
-        tmpl.render(context! {
-            sidebar => sidebar_context(&auth_user, "team-links"),
-            team_links => team_links_ctx,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })
@@ -2062,124 +1908,6 @@ async fn cancel_booking(
 
         let _ = crate::email::send_guest_cancellation(&smtp_config, &details).await;
         let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
-    }
-
-    Redirect::to("/dashboard/bookings").into_response()
-}
-
-// --- Cancel team link booking (any member can cancel) ---
-
-async fn cancel_team_link_booking(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path(booking_id): Path<String>,
-    Form(form): Form<CancelForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    // Verify the user is a member of the team link for this booking
-    let booking: Option<(String, String, String, String, String, String, String)> = sqlx::query_as(
-        "SELECT tlb.id, tlb.uid, tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title
-         FROM team_link_bookings tlb
-         JOIN team_links tl ON tl.id = tlb.team_link_id
-         JOIN team_link_members tlm ON tlm.team_link_id = tl.id
-         WHERE tlb.id = ? AND tlm.user_id = ? AND tlb.status = 'confirmed'",
-    )
-    .bind(&booking_id)
-    .bind(&user.id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title) = match booking {
-        Some(b) => b,
-        None => return Redirect::to("/dashboard/bookings").into_response(),
-    };
-
-    // Get the guest timezone
-    let guest_timezone: String = sqlx::query_scalar(
-        "SELECT COALESCE(guest_timezone, 'UTC') FROM team_link_bookings WHERE id = ?",
-    )
-    .bind(&bid)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or_else(|_| "UTC".to_string());
-
-    // Cancel the booking
-    let _ = sqlx::query("UPDATE team_link_bookings SET status = 'cancelled' WHERE id = ?")
-        .bind(&bid)
-        .execute(&state.pool)
-        .await;
-
-    tracing::info!(booking_id = %bid, "team link booking cancelled by member");
-
-    // Get all members for CalDAV delete and notifications
-    let members: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, COALESCE(u.booking_email, u.email)
-         FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         JOIN team_link_bookings tlb ON tlb.team_link_id = tlm.team_link_id
-         WHERE tlb.id = ? AND u.enabled = 1",
-    )
-    .bind(&bid)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    // Delete from each member's CalDAV calendar
-    for (member_uid, _, _) in &members {
-        caldav_delete_for_user(&state.pool, &state.secret_key, member_uid, &uid).await;
-    }
-
-    // Send cancellation emails
-    if let Ok(Some(smtp_config)) =
-        crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-    {
-        let date = start_at.get(..10).unwrap_or(&start_at).to_string();
-        let start_time = extract_time_24h(&start_at);
-        let end_time = extract_time_24h(&end_at);
-        let reason = form.reason.filter(|r| !r.trim().is_empty());
-
-        for (_, member_name, member_email) in &members {
-            let details = crate::email::CancellationDetails {
-                event_title: event_title.clone(),
-                date: date.clone(),
-                start_time: start_time.clone(),
-                end_time: end_time.clone(),
-                guest_name: guest_name.clone(),
-                guest_email: guest_email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: member_name.clone(),
-                host_email: member_email.clone(),
-                uid: uid.clone(),
-                reason: reason.clone(),
-                cancelled_by_host: true,
-            };
-            let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
-        }
-
-        // Send cancellation to guest
-        if let Some((_, first_name, first_email)) = members.first() {
-            let details = crate::email::CancellationDetails {
-                event_title: event_title.clone(),
-                date: date.clone(),
-                start_time: start_time.clone(),
-                end_time: end_time.clone(),
-                guest_name: guest_name.clone(),
-                guest_email: guest_email.clone(),
-                guest_timezone,
-                host_name: first_name.clone(),
-                host_email: first_email.clone(),
-                uid,
-                reason,
-                cancelled_by_host: true,
-            };
-            let _ = crate::email::send_guest_cancellation(&smtp_config, &details).await;
-        }
     }
 
     Redirect::to("/dashboard/bookings").into_response()
@@ -3112,1080 +2840,6 @@ async fn delete_event_type(
     tracing::info!(event_type_id = %et_id, user = %auth_user.user.email, "event type deleted");
 
     Redirect::to("/dashboard/event-types").into_response()
-}
-
-// --- Team links ---
-
-/// Deserialize a form field that may be a single string or a sequence of strings.
-/// HTML checkboxes with the same name send a single value when only one is checked.
-fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    struct StringOrVec;
-    impl<'de> de::Visitor<'de> for StringOrVec {
-        type Value = Vec<String>;
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a string or sequence of strings")
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            Ok(vec![v.to_owned()])
-        }
-        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
-            Ok(vec![v])
-        }
-        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut v = Vec::new();
-            while let Some(s) = seq.next_element()? {
-                v.push(s);
-            }
-            Ok(v)
-        }
-    }
-    deserializer.deserialize_any(StringOrVec)
-}
-
-#[derive(Deserialize)]
-struct TeamLinkForm {
-    _csrf: Option<String>,
-    title: String,
-    description: Option<String>,
-    duration_min: i32,
-    buffer_before: Option<i32>,
-    buffer_after: Option<i32>,
-    min_notice_min: Option<i32>,
-    availability_start: String,
-    availability_end: String,
-    avail_windows: Option<String>,
-    #[serde(default, deserialize_with = "string_or_vec")]
-    days: Vec<String>,
-    #[serde(default, deserialize_with = "string_or_vec")]
-    members: Vec<String>,
-    one_time_use: Option<String>,
-    location_type: Option<String>,
-    location_value: Option<String>,
-    reminder_minutes: Option<i32>,
-}
-
-async fn new_team_link_form(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let users_ctx: Vec<minijinja::Value> = users
-        .iter()
-        .map(|(id, name, email, avatar_path)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
-        })
-        .collect();
-
-    let tmpl = match state.templates.get_template("team_link_form.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
-    Html(
-        tmpl.render(context! {
-            users => users_ctx,
-            current_user_id => user.id,
-            form_title => "",
-            form_description => "",
-            form_duration => 30,
-            form_buffer_before => 0,
-            form_buffer_after => 0,
-            form_min_notice => 60,
-            form_start => "09:00",
-            form_end => "17:00",
-            form_avail_windows => "",
-            form_days => vec!["1", "2", "3", "4", "5"],
-            form_members => vec![&user.id],
-            form_location_type => "",
-            form_location_value => "",
-            form_reminder_minutes => 0,
-            error => "",
-            sidebar => sidebar_context(&auth_user, "team-links"),
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-async fn create_team_link(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    axum_extra::extract::Form(form): axum_extra::extract::Form<TeamLinkForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    if form.title.trim().is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Title is required.", &form)
-            .await
-            .into_response();
-    }
-
-    if form.members.is_empty() || (form.members.len() == 1 && form.members[0] == user.id) {
-        return render_team_link_form_error(
-            &state,
-            &auth_user,
-            "Select at least one other team member.",
-            &form,
-        )
-        .await
-        .into_response();
-    }
-
-    if form.days.is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Select at least one day.", &form)
-            .await
-            .into_response();
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let token = uuid::Uuid::new_v4().to_string();
-    let days_str = form.days.join(",");
-
-    let one_time_use = form.one_time_use.as_deref() == Some("on");
-
-    // Parse and normalize availability windows
-    let windows = parse_avail_windows(
-        form.avail_windows.as_deref(),
-        Some(&form.availability_start),
-        Some(&form.availability_end),
-    );
-    let avail_windows: String = windows
-        .iter()
-        .map(|(s, e)| format!("{}-{}", s, e))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let location_type = form.location_type.as_deref().filter(|v| !v.is_empty());
-    let location_value = form.location_value.as_deref().filter(|v| !v.is_empty());
-    let description = form.description.as_deref().filter(|v| !v.trim().is_empty());
-    let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
-
-    let _ = sqlx::query(
-        "INSERT INTO team_links (id, token, title, description, duration_min, buffer_before, buffer_after, min_notice_min, availability_start, availability_end, availability_days, availability_windows, created_by_user_id, one_time_use, location_type, location_value, reminder_minutes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&token)
-    .bind(form.title.trim())
-    .bind(description)
-    .bind(form.duration_min)
-    .bind(form.buffer_before.unwrap_or(0))
-    .bind(form.buffer_after.unwrap_or(0))
-    .bind(form.min_notice_min.unwrap_or(60))
-    .bind(&form.availability_start)
-    .bind(&form.availability_end)
-    .bind(&days_str)
-    .bind(&avail_windows)
-    .bind(&user.id)
-    .bind(one_time_use)
-    .bind(location_type)
-    .bind(location_value)
-    .bind(reminder_minutes)
-    .execute(&state.pool)
-    .await;
-
-    // Always include the creator as a member
-    let mut all_members = form.members.clone();
-    if !all_members.contains(&user.id) {
-        all_members.push(user.id.clone());
-    }
-
-    for member_id in &all_members {
-        let mid = uuid::Uuid::new_v4().to_string();
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO team_link_members (id, team_link_id, user_id) VALUES (?, ?, ?)",
-        )
-        .bind(&mid)
-        .bind(&id)
-        .bind(member_id)
-        .execute(&state.pool)
-        .await;
-    }
-
-    Redirect::to("/dashboard/team-links").into_response()
-}
-
-async fn render_team_link_form_error(
-    state: &AppState,
-    auth_user: &crate::auth::AuthUser,
-    error: &str,
-    form: &TeamLinkForm,
-) -> Html<String> {
-    let user = &auth_user.user;
-    let users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    let tmpl = match state.templates.get_template("team_link_form.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let users_ctx: Vec<minijinja::Value> = users
-        .iter()
-        .map(|(id, name, email, avatar_path)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
-        })
-        .collect();
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(auth_user);
-    Html(
-        tmpl.render(context! {
-            users => users_ctx,
-            current_user_id => user.id,
-            form_title => form.title.as_str(),
-            form_description => form.description.as_deref().unwrap_or(""),
-            form_duration => form.duration_min,
-            form_buffer_before => form.buffer_before.unwrap_or(0),
-            form_buffer_after => form.buffer_after.unwrap_or(0),
-            form_min_notice => form.min_notice_min.unwrap_or(60),
-            form_start => form.availability_start.as_str(),
-            form_end => form.availability_end.as_str(),
-            form_avail_windows => form.avail_windows.as_deref().unwrap_or(""),
-            form_days => form.days,
-            form_members => form.members,
-            form_location_type => form.location_type.as_deref().unwrap_or(""),
-            form_location_value => form.location_value.as_deref().unwrap_or(""),
-            form_reminder_minutes => form.reminder_minutes.unwrap_or(0),
-            error => error,
-            sidebar => sidebar_context(auth_user, "team-links"),
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-async fn edit_team_link_form(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    Path(token): Path<String>,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let tl: Option<(
-        String,
-        String,
-        i32,
-        i32,
-        i32,
-        i32,
-        String,
-        String,
-        String,
-        Option<String>,
-        i32,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
-    )> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min,
-                    availability_start, availability_end, availability_days, availability_windows, one_time_use,
-                    location_type, location_value, description, reminder_minutes
-             FROM team_links WHERE token = ? AND created_by_user_id = ?",
-    )
-    .bind(&token)
-    .bind(&user.id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (
-        tl_id,
-        title,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        avail_start,
-        avail_end,
-        avail_days,
-        avail_windows_db,
-        one_time_use,
-        location_type,
-        location_value,
-        description,
-        reminder_minutes,
-    ) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()),
-    };
-
-    // Build windows string: prefer new column, fall back to legacy start/end
-    let avail_windows = avail_windows_db
-        .filter(|w| !w.is_empty())
-        .unwrap_or_else(|| format!("{}-{}", avail_start, avail_end));
-
-    let members: Vec<(String,)> =
-        sqlx::query_as("SELECT user_id FROM team_link_members WHERE team_link_id = ?")
-            .bind(&tl_id)
-            .fetch_all(&state.pool)
-            .await
-            .unwrap_or_default();
-    let member_ids: Vec<String> = members.into_iter().map(|(id,)| id).collect();
-
-    let days: Vec<&str> = avail_days.split(',').collect();
-
-    let users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let users_ctx: Vec<minijinja::Value> = users
-        .iter()
-        .map(|(id, name, email, avatar_path)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
-        })
-        .collect();
-
-    let tmpl = match state.templates.get_template("team_link_form.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
-    Html(
-        tmpl.render(context! {
-            users => users_ctx,
-            current_user_id => user.id,
-            form_title => title,
-            form_description => description.as_deref().unwrap_or(""),
-            form_duration => duration,
-            form_buffer_before => buf_before,
-            form_buffer_after => buf_after,
-            form_min_notice => min_notice,
-            form_start => avail_start,
-            form_end => avail_end,
-            form_avail_windows => avail_windows,
-            form_days => days,
-            form_members => member_ids,
-            form_location_type => location_type.as_deref().unwrap_or(""),
-            form_location_value => location_value.as_deref().unwrap_or(""),
-            form_reminder_minutes => reminder_minutes.unwrap_or(0),
-            form_one_time_use => one_time_use != 0,
-            editing => true,
-            edit_token => token,
-            error => "",
-            sidebar => sidebar_context(&auth_user, "team-links"),
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-async fn update_team_link(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path(token): Path<String>,
-    axum_extra::extract::Form(form): axum_extra::extract::Form<TeamLinkForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    // Verify ownership
-    let tl: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM team_links WHERE token = ? AND created_by_user_id = ?")
-            .bind(&token)
-            .bind(&user.id)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None);
-
-    let (tl_id,) = match tl {
-        Some(t) => t,
-        None => return Redirect::to("/dashboard/team-links").into_response(),
-    };
-
-    if form.title.trim().is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Title is required.", &form)
-            .await
-            .into_response();
-    }
-
-    if form.members.is_empty() || (form.members.len() == 1 && form.members[0] == user.id) {
-        return render_team_link_form_error(
-            &state,
-            &auth_user,
-            "Select at least one other team member.",
-            &form,
-        )
-        .await
-        .into_response();
-    }
-
-    if form.days.is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Select at least one day.", &form)
-            .await
-            .into_response();
-    }
-
-    let days_str = form.days.join(",");
-    let one_time_use = form.one_time_use.as_deref() == Some("on");
-
-    let windows = parse_avail_windows(
-        form.avail_windows.as_deref(),
-        Some(&form.availability_start),
-        Some(&form.availability_end),
-    );
-    let avail_windows: String = windows
-        .iter()
-        .map(|(s, e)| format!("{}-{}", s, e))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let location_type = form.location_type.as_deref().filter(|v| !v.is_empty());
-    let location_value = form.location_value.as_deref().filter(|v| !v.is_empty());
-    let description = form.description.as_deref().filter(|v| !v.trim().is_empty());
-    let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
-
-    let _ = sqlx::query(
-        "UPDATE team_links SET title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?,
-                min_notice_min = ?, availability_start = ?, availability_end = ?,
-                availability_days = ?, availability_windows = ?, one_time_use = ?,
-                location_type = ?, location_value = ?, reminder_minutes = ?
-         WHERE id = ?",
-    )
-    .bind(form.title.trim())
-    .bind(description)
-    .bind(form.duration_min)
-    .bind(form.buffer_before.unwrap_or(0))
-    .bind(form.buffer_after.unwrap_or(0))
-    .bind(form.min_notice_min.unwrap_or(60))
-    .bind(&form.availability_start)
-    .bind(&form.availability_end)
-    .bind(&days_str)
-    .bind(&avail_windows)
-    .bind(one_time_use)
-    .bind(location_type)
-    .bind(location_value)
-    .bind(reminder_minutes)
-    .bind(&tl_id)
-    .execute(&state.pool)
-    .await;
-
-    // Replace members: delete old, insert new
-    let _ = sqlx::query("DELETE FROM team_link_members WHERE team_link_id = ?")
-        .bind(&tl_id)
-        .execute(&state.pool)
-        .await;
-
-    let mut all_members = form.members.clone();
-    if !all_members.contains(&user.id) {
-        all_members.push(user.id.clone());
-    }
-
-    for member_id in &all_members {
-        let mid = uuid::Uuid::new_v4().to_string();
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO team_link_members (id, team_link_id, user_id) VALUES (?, ?, ?)",
-        )
-        .bind(&mid)
-        .bind(&tl_id)
-        .bind(member_id)
-        .execute(&state.pool)
-        .await;
-    }
-
-    Redirect::to("/dashboard/team-links").into_response()
-}
-
-async fn delete_team_link(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path(token): Path<String>,
-    Form(csrf): Form<CsrfForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &csrf._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    // Only the creator can delete
-    let _ = sqlx::query("DELETE FROM team_links WHERE token = ? AND created_by_user_id = ?")
-        .bind(&token)
-        .bind(&user.id)
-        .execute(&state.pool)
-        .await;
-
-    Redirect::to("/dashboard/team-links").into_response()
-}
-
-async fn show_team_link_slots(
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    Query(query): Query<SlotsQuery>,
-) -> impl IntoResponse {
-    let tl: Option<(String, String, i32, i32, i32, i32, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min, availability_start, availability_end, availability_days, availability_windows, location_type, location_value, description, created_by_user_id
-         FROM team_links WHERE token = ?",
-    )
-    .bind(&token)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (
-        tl_id,
-        title,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        avail_start,
-        avail_end,
-        avail_days,
-        avail_windows_db,
-        tl_location_type,
-        tl_location_value,
-        tl_description,
-        creator_user_id,
-    ) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()),
-    };
-
-    // Get member user IDs and names
-    let members: Vec<(String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         WHERE tlm.team_link_id = ? AND u.enabled = 1
-         ORDER BY u.name",
-    )
-    .bind(&tl_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    if members.is_empty() {
-        return Html("No team members found.".to_string());
-    }
-
-    let member_names: Vec<&str> = members.iter().map(|(_, n)| n.as_str()).collect();
-    let host_name = member_names.join(", ");
-
-    let host_tz = get_user_tz(&state.pool, &creator_user_id).await;
-    let guest_tz = parse_guest_tz(query.tz.as_deref());
-    let guest_tz_name = guest_tz.name().to_string();
-
-    let (year, mo) = parse_month_param(query.month.as_deref(), guest_tz);
-    let (
-        start_offset,
-        days_ahead,
-        month_label,
-        prev_month,
-        next_month,
-        first_weekday,
-        days_in_month,
-        today_date,
-        month_year,
-    ) = build_month_params(year, mo, host_tz, guest_tz);
-
-    // Sync all members' calendars if stale
-    for (uid, _) in &members {
-        crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
-    }
-
-    // Build Team busy source: fetch busy times per member
-    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
-    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-
-    let mut member_busy = HashMap::new();
-    for (uid, _) in &members {
-        member_busy.insert(
-            uid.clone(),
-            fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz, None).await,
-        );
-    }
-    let busy = BusySource::Team(member_busy);
-
-    // Parse availability days and windows, build rules
-    let day_nums: Vec<i32> = avail_days
-        .split(',')
-        .filter_map(|d| d.trim().parse::<i32>().ok())
-        .collect();
-    let windows = parse_avail_windows(
-        avail_windows_db.as_deref(),
-        Some(&avail_start),
-        Some(&avail_end),
-    );
-    let rules: Vec<(i32, String, String)> = day_nums
-        .iter()
-        .flat_map(|d| windows.iter().map(move |(s, e)| (*d, s.clone(), e.clone())))
-        .collect();
-
-    let slot_days = compute_slots_from_rules(
-        &rules,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        start_offset,
-        days_ahead,
-        host_tz,
-        guest_tz,
-        busy,
-        &[], // team links don't have per-event-type overrides
-    );
-
-    let days_ctx: Vec<minijinja::Value> = slot_days
-        .iter()
-        .map(|d| {
-            let slots: Vec<minijinja::Value> = d
-                .slots
-                .iter()
-                .map(|s| {
-                    context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time }
-                })
-                .collect();
-            context! { date => d.date, label => d.label, slots => slots }
-        })
-        .collect();
-
-    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
-
-    let tz_options: Vec<minijinja::Value> = common_timezones()
-        .iter()
-        .map(|(iana, label)| {
-            context! { value => iana, label => label, selected => (*iana == guest_tz_name) }
-        })
-        .collect();
-
-    let tmpl = match state.templates.get_template("slots.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Internal error: {}", e)),
-    };
-    let rendered = tmpl
-        .render(context! {
-            event_type => context! {
-                slug => token,
-                title => title,
-                duration_min => duration,
-                description => tl_description.as_deref().unwrap_or(""),
-                location_type => tl_location_type.as_deref().unwrap_or(""),
-                location_value => tl_location_value.as_deref().unwrap_or(""),
-            },
-            host_name => host_name,
-            team_token => token,
-            days => days_ctx,
-            available_dates => available_dates,
-            month_label => month_label,
-            month_year => month_year,
-            prev_month => prev_month,
-            next_month => next_month,
-            first_weekday => first_weekday,
-            days_in_month => days_in_month,
-            today_date => today_date,
-            guest_tz => guest_tz_name,
-            tz_options => tz_options,
-            company_link => state.company_link.read().await.clone(),
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e));
-
-    Html(rendered)
-}
-
-async fn show_team_link_book_form(
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    Query(query): Query<BookQuery>,
-) -> impl IntoResponse {
-    let tl: Option<(String, String, i32, Option<String>, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, title, duration_min, location_type, location_value, description FROM team_links WHERE token = ?")
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None);
-
-    let (tl_id, title, duration, tl_location_type, tl_location_value, tl_description) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()),
-    };
-
-    let members: Vec<(String,)> = sqlx::query_as(
-        "SELECT u.name FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         WHERE tlm.team_link_id = ? AND u.enabled = 1
-         ORDER BY u.name",
-    )
-    .bind(&tl_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    let host_name = members
-        .iter()
-        .map(|(n,)| n.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let guest_tz = parse_guest_tz(query.tz.as_deref());
-    let guest_tz_name = guest_tz.name().to_string();
-
-    let date = match NaiveDate::parse_from_str(&query.date, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return Html("Invalid date format.".to_string()),
-    };
-    let time = match NaiveTime::parse_from_str(&query.time, "%H:%M") {
-        Ok(t) => t,
-        Err(_) => return Html("Invalid time format.".to_string()),
-    };
-    let end_time = (date.and_time(time) + Duration::minutes(duration as i64))
-        .time()
-        .format("%H:%M")
-        .to_string();
-    let date_label = date.format("%A, %B %-d, %Y").to_string();
-
-    let tmpl = match state.templates.get_template("book.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Internal error: {}", e)),
-    };
-    let rendered = tmpl
-        .render(context! {
-            event_type => context! {
-                slug => token,
-                title => title,
-                duration_min => duration,
-                description => tl_description.as_deref().unwrap_or(""),
-                location_type => tl_location_type.as_deref().unwrap_or(""),
-                location_value => tl_location_value.as_deref().unwrap_or(""),
-            },
-            host_name => host_name,
-            team_token => token,
-            date => query.date,
-            date_label => date_label,
-            time_start => query.time,
-            time_end => end_time,
-            guest_tz => guest_tz_name,
-            error => "",
-            form_name => "",
-            form_email => "",
-            form_notes => "",
-            max_additional_guests => 0,
-            company_link => state.company_link.read().await.clone(),
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e));
-
-    Html(rendered)
-}
-
-async fn handle_team_link_booking(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Path(token): Path<String>,
-    Form(form): Form<BookForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    // Rate limit by IP
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .unwrap_or("unknown")
-        .trim()
-        .to_string();
-    if state.booking_limiter.check_limited(&client_ip).await {
-        tracing::warn!(ip = %client_ip, "rate limited");
-        return Html("Too many booking attempts. Please try again in a few minutes.".to_string())
-            .into_response();
-    }
-
-    if let Err(e) = validate_booking_input(&form.name, &form.email, &form.notes) {
-        return Html(e).into_response();
-    }
-
-    // Parse additional guests (team links don't support additional guests)
-    let additional_attendees =
-        match parse_additional_guests(&form.additional_guests, 0, &form.email) {
-            Ok(emails) => emails,
-            Err(e) => return Html(e).into_response(),
-        };
-
-    let tl: Option<(String, String, i32, i32, i32, i32, String, i32, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min, created_by_user_id, one_time_use, location_type, location_value
-         FROM team_links WHERE token = ?",
-    )
-    .bind(&token)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (
-        tl_id,
-        tl_title,
-        duration,
-        buffer_before,
-        buffer_after,
-        min_notice,
-        creator_id,
-        one_time_use,
-        tl_location_type,
-        tl_location_value,
-    ) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()).into_response(),
-    };
-
-    let date = match NaiveDate::parse_from_str(&form.date, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return Html("Invalid date.".to_string()).into_response(),
-    };
-    if let Err(e) = validate_date_not_too_far(date) {
-        return Html(e).into_response();
-    }
-    let start_time = match NaiveTime::parse_from_str(&form.time, "%H:%M") {
-        Ok(t) => t,
-        Err(_) => return Html("Invalid time.".to_string()).into_response(),
-    };
-
-    let slot_start = date.and_time(start_time);
-    let slot_end = slot_start + Duration::minutes(duration as i64);
-
-    // Validate minimum notice
-    let now = chrono::Local::now().naive_local();
-    if slot_start < now + Duration::minutes(min_notice as i64) {
-        return Html("This slot is no longer available (too soon).".to_string()).into_response();
-    }
-
-    // Get all members
-    let members: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, COALESCE(u.booking_email, u.email) FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         WHERE tlm.team_link_id = ? AND u.enabled = 1",
-    )
-    .bind(&tl_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let host_tz = get_user_tz(&state.pool, &creator_id).await;
-
-    let buf_start = slot_start - Duration::minutes(buffer_before as i64);
-    let buf_end = slot_end + Duration::minutes(buffer_after as i64);
-
-    // Create team link booking
-    let booking_id = uuid::Uuid::new_v4().to_string();
-    let uid = format!("{}@calrs", uuid::Uuid::new_v4());
-    let cancel_token = uuid::Uuid::new_v4().to_string();
-    let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let guest_tz = parse_guest_tz(form.tz.as_deref());
-    let guest_timezone = guest_tz.name().to_string();
-
-    // Start a transaction to ensure atomicity of availability check + insert.
-    let mut tx = match state.pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Html(format!("Database error: {}", e)).into_response();
-        }
-    };
-
-    // Validate ALL members are still free
-    for (member_uid, _, _) in &members {
-        let busy =
-            fetch_busy_times_for_user(&state.pool, member_uid, buf_start, buf_end, host_tz, None)
-                .await;
-        if has_conflict(&busy, buf_start, buf_end) {
-            let _ = tx.rollback().await;
-            return Html("This slot is no longer available.".to_string()).into_response();
-        }
-    }
-
-    let insert_result = sqlx::query(
-        "INSERT INTO team_link_bookings (id, team_link_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)",
-    )
-    .bind(&booking_id)
-    .bind(&tl_id)
-    .bind(&uid)
-    .bind(&form.name)
-    .bind(&form.email)
-    .bind(&guest_timezone)
-    .bind(&form.notes)
-    .bind(&start_at)
-    .bind(&end_at)
-    .bind(&cancel_token)
-    .execute(&mut *tx)
-    .await;
-
-    match insert_result {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = tx.rollback().await;
-            return Html(format!("Database error: {}", e)).into_response();
-        }
-    }
-
-    // Insert additional attendees
-    for attendee_email in &additional_attendees {
-        let attendee_id = uuid::Uuid::new_v4().to_string();
-        let _ =
-            sqlx::query("INSERT INTO booking_attendees (id, booking_id, email) VALUES (?, ?, ?)")
-                .bind(&attendee_id)
-                .bind(&booking_id)
-                .bind(attendee_email)
-                .execute(&mut *tx)
-                .await;
-    }
-
-    if let Err(e) = tx.commit().await {
-        return Html(format!("Database error: {}", e)).into_response();
-    }
-
-    tracing::info!(booking_id = %booking_id, team_link = %token, guest = %form.email, "team link booking created");
-
-    let member_names: Vec<&str> = members.iter().map(|(_, n, _)| n.as_str()).collect();
-    let host_name = member_names.join(", ");
-    let tl_location = tl_location_value
-        .as_ref()
-        .filter(|v| !v.is_empty())
-        .cloned();
-
-    // Push to each member's CalDAV and send emails
-    if let Ok(Some(smtp_config)) =
-        crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-    {
-        for (member_uid, _member_name, member_email) in &members {
-            let details = crate::email::BookingDetails {
-                event_title: tl_title.clone(),
-                date: form.date.clone(),
-                start_time: form.time.clone(),
-                end_time: slot_end.time().format("%H:%M").to_string(),
-                guest_name: form.name.clone(),
-                guest_email: form.email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: host_name.clone(),
-                host_email: member_email.clone(),
-                uid: uid.clone(),
-                notes: form.notes.clone(),
-                location: tl_location.clone(),
-                reminder_minutes: None,
-                additional_attendees: vec![],
-            };
-
-            // Email notification to each member
-            let _ = crate::email::send_host_notification(&smtp_config, &details).await;
-
-            // CalDAV write-back for each member
-            caldav_push_booking(&state.pool, &state.secret_key, member_uid, &uid, &details).await;
-        }
-
-        // Send confirmation to guest (use first member as "from")
-        if let Some((_, _, first_email)) = members.first() {
-            let details = crate::email::BookingDetails {
-                event_title: tl_title.clone(),
-                date: form.date.clone(),
-                start_time: form.time.clone(),
-                end_time: slot_end.time().format("%H:%M").to_string(),
-                guest_name: form.name.clone(),
-                guest_email: form.email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: host_name.clone(),
-                host_email: first_email.clone(),
-                uid: uid.clone(),
-                notes: form.notes.clone(),
-                location: tl_location.clone(),
-                reminder_minutes: None,
-                additional_attendees: vec![],
-            };
-            let base_url = std::env::var("CALRS_BASE_URL").ok();
-            let cancel_url = base_url.as_ref().map(|base| {
-                format!(
-                    "{}/booking/cancel/{}",
-                    base.trim_end_matches('/'),
-                    cancel_token
-                )
-            });
-            let _ = crate::email::send_guest_confirmation(
-                &smtp_config,
-                &details,
-                cancel_url.as_deref(),
-            )
-            .await;
-        }
-    } else {
-        // Even without SMTP, push to CalDAV
-        for (member_uid, _member_name, member_email) in &members {
-            let details = crate::email::BookingDetails {
-                event_title: tl_title.clone(),
-                date: form.date.clone(),
-                start_time: form.time.clone(),
-                end_time: slot_end.time().format("%H:%M").to_string(),
-                guest_name: form.name.clone(),
-                guest_email: form.email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: host_name.clone(),
-                host_email: member_email.clone(),
-                uid: uid.clone(),
-                notes: form.notes.clone(),
-                location: tl_location.clone(),
-                reminder_minutes: None,
-                additional_attendees: vec![],
-            };
-            caldav_push_booking(&state.pool, &state.secret_key, member_uid, &uid, &details).await;
-        }
-    }
-
-    // Auto-delete the team link if one-time use
-    if one_time_use != 0 {
-        let _ = sqlx::query("DELETE FROM team_links WHERE id = ?")
-            .bind(&tl_id)
-            .execute(&state.pool)
-            .await;
-    }
-
-    // Render confirmation
-    let date_label = date.format("%A, %B %-d, %Y").to_string();
-    let tmpl = match state.templates.get_template("confirmed.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-    };
-    let rendered = tmpl
-        .render(context! {
-            event_title => tl_title,
-            date_label => date_label,
-            time_start => form.time,
-            time_end => slot_end.time().format("%H:%M").to_string(),
-            host_name => host_name,
-            guest_email => form.email,
-            notes => form.notes,
-            pending => false,
-            additional_attendees => additional_attendees,
-            location_type => tl_location_type.as_deref().unwrap_or(""),
-            location_value => tl_location.as_deref().unwrap_or(""),
-            company_link => state.company_link.read().await.clone(),
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e));
-
-    Html(rendered).into_response()
 }
 
 // --- Calendar source management ---
@@ -5937,6 +4591,30 @@ async fn redirect_g_to_team_slug_book(
     Path((group_slug, slug)): Path<(String, String)>,
 ) -> impl IntoResponse {
     Redirect::permanent(&format!("/team/{}/{}/book", group_slug, slug))
+}
+
+// --- Legacy /t/ team link redirects ---
+
+async fn redirect_team_link_to_team(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> impl IntoResponse {
+    // Look up the team by invite_token (team links were migrated to teams)
+    let team: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT slug FROM teams WHERE invite_token = ?")
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+
+    match team {
+        Some((Some(slug),)) => Redirect::permanent(&format!("/team/{}", slug)).into_response(),
+        Some((None,)) => {
+            // Team exists but has no slug (private team) — redirect to dashboard
+            Redirect::to("/dashboard").into_response()
+        }
+        None => Html("Team link not found.".to_string()).into_response(),
+    }
 }
 
 // --- Group public pages ---
@@ -7710,26 +6388,6 @@ async fn fetch_busy_times_for_user_ex(
     .unwrap_or_default();
 
     for (s, e) in &bookings {
-        if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
-            busy.push((start, end));
-        }
-    }
-
-    // Also include team link bookings where this user is a member
-    let team_bookings: Vec<(String, String)> = sqlx::query_as(
-        "SELECT tlb.start_at, tlb.end_at FROM team_link_bookings tlb
-         JOIN team_link_members tlm ON tlm.team_link_id = tlb.team_link_id
-         WHERE tlm.user_id = ? AND tlb.status = 'confirmed'
-           AND tlb.start_at <= ? AND tlb.end_at >= ?",
-    )
-    .bind(user_id)
-    .bind(&end_iso)
-    .bind(&start_iso)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    for (s, e) in &team_bookings {
         if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
             busy.push((start, end));
         }
@@ -10543,73 +9201,42 @@ async fn guest_cancel_form(
     .await
     .unwrap_or(None);
 
-    // Also try team link bookings
-    let tl_booking: Option<(String, String, String, String, String, String)> = if booking.is_none()
-    {
-        sqlx::query_as(
-            "SELECT tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title,
-                    (SELECT GROUP_CONCAT(u.name, ', ') FROM users u JOIN team_link_members tlm ON tlm.user_id = u.id WHERE tlm.team_link_id = tl.id AND u.enabled = 1)
-             FROM team_link_bookings tlb
-             JOIN team_links tl ON tl.id = tlb.team_link_id
-             WHERE tlb.cancel_token = ? AND tlb.status IN ('confirmed', 'pending')",
-        )
-        .bind(&token)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap_or(None)
-    } else {
-        None
+    let (guest_name, _guest_email, start_at, end_at, event_title, host_name) = match booking {
+        Some(b) => b,
+        None => {
+            // Check if already cancelled
+            let status_row: Option<(String,)> =
+                sqlx::query_as("SELECT status FROM bookings WHERE cancel_token = ?")
+                    .bind(&token)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .unwrap_or(None);
+
+            let (title, message) = match status_row {
+                Some((status,)) if status == "cancelled" => (
+                    "Already cancelled",
+                    "This booking has already been cancelled.",
+                ),
+                Some((status,)) if status == "declined" => (
+                    "Booking declined",
+                    "This booking has been declined by the host.",
+                ),
+                _ => (
+                    "Invalid link",
+                    "This cancellation link is invalid or has expired.",
+                ),
+            };
+
+            let tmpl = match state.templates.get_template("booking_action_error.html") {
+                Ok(t) => t,
+                Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
+            };
+            let rendered = tmpl
+                .render(context! { title, message })
+                .unwrap_or_else(|e| format!("Template error: {}", e));
+            return Html(rendered).into_response();
+        }
     };
-
-    let (guest_name, _guest_email, start_at, end_at, event_title, host_name) =
-        match booking.or(tl_booking) {
-            Some(b) => b,
-            None => {
-                // Check if already cancelled in either table
-                let already: Option<(String,)> =
-                    sqlx::query_as("SELECT status FROM bookings WHERE cancel_token = ?")
-                        .bind(&token)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .unwrap_or(None);
-
-                let tl_already: Option<(String,)> = if already.is_none() {
-                    sqlx::query_as("SELECT status FROM team_link_bookings WHERE cancel_token = ?")
-                        .bind(&token)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .unwrap_or(None)
-                } else {
-                    None
-                };
-
-                let status_row = already.or(tl_already);
-
-                let (title, message) = match status_row {
-                    Some((status,)) if status == "cancelled" => (
-                        "Already cancelled",
-                        "This booking has already been cancelled.",
-                    ),
-                    Some((status,)) if status == "declined" => (
-                        "Booking declined",
-                        "This booking has been declined by the host.",
-                    ),
-                    _ => (
-                        "Invalid link",
-                        "This cancellation link is invalid or has expired.",
-                    ),
-                };
-
-                let tmpl = match state.templates.get_template("booking_action_error.html") {
-                    Ok(t) => t,
-                    Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-                };
-                let rendered = tmpl
-                    .render(context! { title, message })
-                    .unwrap_or_else(|e| format!("Template error: {}", e));
-                return Html(rendered).into_response();
-            }
-        };
 
     let date_label = format_date_label(&start_at);
     let date = start_at.get(..10).unwrap_or(&start_at).to_string();
@@ -10657,130 +9284,6 @@ async fn guest_cancel_booking(
         .fetch_optional(&state.pool)
         .await
         .unwrap_or(None);
-
-    // Try team link bookings if not found in regular bookings
-    let tl_booking: Option<(String, String, String, String, String, String, String)> = if booking
-        .is_none()
-    {
-        sqlx::query_as(
-                "SELECT tlb.id, tlb.uid, tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title
-                 FROM team_link_bookings tlb
-                 JOIN team_links tl ON tl.id = tlb.team_link_id
-                 WHERE tlb.cancel_token = ? AND tlb.status IN ('confirmed', 'pending')",
-            )
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None)
-    } else {
-        None
-    };
-
-    if let Some(tl_b) = tl_booking {
-        // Handle team link booking cancellation
-        let (bid, uid, guest_name, guest_email, start_at, end_at, event_title) = tl_b;
-
-        let guest_timezone: String = sqlx::query_scalar(
-            "SELECT COALESCE(guest_timezone, 'UTC') FROM team_link_bookings WHERE id = ?",
-        )
-        .bind(&bid)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or_else(|_| "UTC".to_string());
-
-        let _ = sqlx::query("UPDATE team_link_bookings SET status = 'cancelled' WHERE id = ?")
-            .bind(&bid)
-            .execute(&state.pool)
-            .await;
-
-        tracing::info!(booking_id = %bid, "team link booking cancelled by guest");
-
-        // Get all members for CalDAV delete and notifications
-        let members: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT u.id, u.name, COALESCE(u.booking_email, u.email)
-             FROM users u
-             JOIN team_link_members tlm ON tlm.user_id = u.id
-             JOIN team_link_bookings tlb ON tlb.team_link_id = tlm.team_link_id
-             WHERE tlb.id = ? AND u.enabled = 1",
-        )
-        .bind(&bid)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
-
-        for (member_uid, _, _) in &members {
-            caldav_delete_for_user(&state.pool, &state.secret_key, member_uid, &uid).await;
-        }
-
-        let date_label = format_date_label(&start_at);
-        let date = start_at.get(..10).unwrap_or(&start_at).to_string();
-        let start_time = extract_time_24h(&start_at);
-        let end_time = extract_time_24h(&end_at);
-        let reason = form.reason.filter(|r| !r.trim().is_empty());
-
-        if let Ok(Some(smtp_config)) =
-            crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-        {
-            for (_, member_name, member_email) in &members {
-                let details = crate::email::CancellationDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone: guest_timezone.clone(),
-                    host_name: member_name.clone(),
-                    host_email: member_email.clone(),
-                    uid: uid.clone(),
-                    reason: reason.clone(),
-                    cancelled_by_host: false,
-                };
-                let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
-            }
-
-            if let Some((_, first_name, first_email)) = members.first() {
-                let details = crate::email::CancellationDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone,
-                    host_name: first_name.clone(),
-                    host_email: first_email.clone(),
-                    uid,
-                    reason: reason.clone(),
-                    cancelled_by_host: false,
-                };
-                let _ = crate::email::send_guest_cancellation(&smtp_config, &details).await;
-            }
-        }
-
-        let host_name = members
-            .iter()
-            .map(|(_, n, _)| n.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let tmpl = match state.templates.get_template("booking_cancelled_guest.html") {
-            Ok(t) => t,
-            Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-        };
-        let rendered = tmpl
-            .render(context! {
-                event_title,
-                date_label,
-                date,
-                start_time,
-                end_time,
-                host_name,
-                reason,
-            })
-            .unwrap_or_else(|e| format!("Template error: {}", e));
-        return Html(rendered).into_response();
-    }
 
     let (
         bid,
@@ -11736,7 +10239,7 @@ async fn caldav_push_booking(
 }
 
 /// Delete a booking from a user's CalDAV calendar by looking up their write-enabled source directly.
-/// Used for team link bookings where we don't track per-booking caldav_calendar_href.
+/// Used for team bookings where we don't track per-booking caldav_calendar_href.
 async fn caldav_delete_for_user(
     pool: &SqlitePool,
     key: &[u8; 32],
@@ -14674,17 +13177,7 @@ mod tests {
         assert_eq!(count.0, 0, "User should not be created");
     }
 
-    // --- Dashboard pages: team links, new event type form ---
-
-    #[tokio::test]
-    async fn team_links_page_returns_200() {
-        let (app, _, session, _) = setup_test_app().await;
-        let response = app
-            .oneshot(get_authed("/dashboard/team-links", &session))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-    }
+    // --- Dashboard pages: new event type form ---
 
     #[tokio::test]
     async fn new_event_type_form_returns_200() {
@@ -15545,106 +14038,6 @@ mod tests {
         assert!(token.is_some(), "Pending booking should have confirm_token");
     }
 
-    // --- Team link CRUD ---
-
-    async fn seed_team_link(pool: &SqlitePool) -> (String, String) {
-        let user_id: String = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        let token = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO team_links (id, token, title, duration_min, created_by_user_id) VALUES (?, ?, 'Team Standup', 15, ?)")
-            .bind(&uuid::Uuid::new_v4().to_string())
-            .bind(&token)
-            .bind(&user_id)
-            .execute(pool)
-            .await
-            .unwrap();
-        // Add the user as a member
-        sqlx::query("INSERT INTO team_link_members (id, team_link_id, user_id) VALUES (?, (SELECT id FROM team_links WHERE token = ?), ?)")
-            .bind(&uuid::Uuid::new_v4().to_string())
-            .bind(&token)
-            .bind(&user_id)
-            .execute(pool)
-            .await
-            .unwrap();
-        (token, user_id)
-    }
-
-    #[tokio::test]
-    async fn team_links_page_shows_created_link() {
-        let (app, pool, session, _) = setup_test_app().await;
-        let (_, _) = seed_team_link(&pool).await;
-
-        let response = app
-            .oneshot(get_authed("/dashboard/team-links", &session))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        let body = body_string(response).await;
-        assert!(body.contains("Team Standup"), "Should show the team link");
-    }
-
-    #[tokio::test]
-    async fn new_team_link_form_returns_200() {
-        let (app, _, session, _) = setup_test_app().await;
-        let response = app
-            .oneshot(get_authed("/dashboard/team-links/new", &session))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-    }
-
-    #[tokio::test]
-    async fn edit_team_link_form_returns_200() {
-        let (app, pool, session, _) = setup_test_app().await;
-        let (token, _) = seed_team_link(&pool).await;
-
-        let response = app
-            .oneshot(get_authed(
-                &format!("/dashboard/team-links/{}/edit", token),
-                &session,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-    }
-
-    #[tokio::test]
-    async fn delete_team_link() {
-        let (app, pool, session, _) = setup_test_app().await;
-        let (token, _) = seed_team_link(&pool).await;
-
-        let csrf = "test-csrf-del-tl";
-        let response = app
-            .oneshot(post_form(
-                &format!("/dashboard/team-links/{}/delete", token),
-                &session,
-                csrf,
-                &format!("_csrf={}", csrf),
-            ))
-            .await
-            .unwrap();
-        assert!(response.status().is_redirection());
-
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM team_links")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count.0, 0, "Team link should be deleted");
-    }
-
-    #[tokio::test]
-    async fn public_team_link_slots_returns_200() {
-        let (app, pool, _, _) = setup_test_app().await;
-        let (token, _) = seed_team_link(&pool).await;
-
-        let response = app.oneshot(get(&format!("/t/{}", token))).await.unwrap();
-        assert_eq!(response.status(), 200);
-        let body = body_string(response).await;
-        assert!(body.contains("Team Standup"));
-    }
-
     // --- Private event type + invite flow ---
 
     #[tokio::test]
@@ -16056,52 +14449,6 @@ mod tests {
                 || resp_body.contains("empty"),
             "Empty name should show error"
         );
-    }
-
-    // --- Create team link via POST ---
-
-    #[tokio::test]
-    async fn create_team_link_via_post() {
-        let (app, pool, session, _) = setup_test_app().await;
-
-        let user_id: String = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-
-        // Create a second user for the team link (needs at least one other member)
-        let user2_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO users (id, email, name, role, auth_provider, username, enabled) VALUES (?, 'team2@test.com', 'Team Two', 'user', 'local', 'team2', 1)")
-            .bind(&user2_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let csrf = "test-csrf-create-tl";
-        let body = format!(
-            "_csrf={}&title=New+Team+Link&duration_min=30&availability_start=09%3A00&availability_end=17%3A00&days={}&days={}&members={}&members={}",
-            csrf, "1", "2", user_id, user2_id
-        );
-        let response = app
-            .oneshot(post_form(
-                "/dashboard/team-links/new",
-                &session,
-                csrf,
-                &body,
-            ))
-            .await
-            .unwrap();
-        assert!(
-            response.status().is_redirection() || response.status() == 200,
-            "Create team link should succeed, got {}",
-            response.status()
-        );
-
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM team_links")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert!(count.0 >= 1, "Team link should be created");
     }
 
     // --- Admin OIDC update ---
