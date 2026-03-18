@@ -102,8 +102,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Admin group management | 0.25.0 | Admins can create/edit/delete group event types without being a group member |
 | Background calendar sync | 0.25.0 | Automatic source cycling in the reminder loop, one source per tick |
 | External cancellation detection | 0.25.0 | Bookings auto-cancelled when their CalDAV event is deleted externally |
+| Self-hosted fonts | 0.25.3 | Inter font bundled in binary — no external requests to Google, fully GDPR-compliant |
 
 ## [Unreleased]
+
+## [0.25.3] - 2026-03-18
+
+### Added
+
+- **Self-hosted Inter font** — Inter WOFF2 font files are now bundled in the binary and served from `/fonts/`, eliminating all external requests to Google Fonts. Fully self-hosted, no third-party CDN dependencies, GDPR-compliant ([#19](https://github.com/olivierlambert/calrs/issues/19)).
 
 ## [0.25.2] - 2026-03-17
 

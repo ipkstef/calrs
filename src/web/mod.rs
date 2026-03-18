@@ -630,10 +630,12 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
             "/dashboard/group-event-types/{slug}/delete",
             post(delete_group_event_type),
         )
-        // Serve logo
+        // Serve logo and fonts
         .route("/logo", get(serve_logo))
         .route("/accent.css", get(serve_accent_css))
         .route("/brand-logo", get(serve_brand_logo))
+        .route("/fonts/inter-latin.woff2", get(serve_font_inter_latin))
+        .route("/fonts/inter-latin-ext.woff2", get(serve_font_inter_latin_ext))
         // Group public routes (before the catch-all)
         .route("/g/{group_slug}", get(group_profile))
         .route("/g/{group_slug}/{slug}", get(show_group_slots))
@@ -9272,6 +9274,28 @@ async fn serve_brand_logo() -> impl IntoResponse {
         .header("Content-Type", "image/png")
         .header("Cache-Control", "public, max-age=86400")
         .body(axum::body::Body::from(BRAND_LOGO))
+        .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty()))
+        .into_response()
+}
+
+async fn serve_font_inter_latin() -> impl IntoResponse {
+    static FONT: &[u8] = include_bytes!("../../assets/inter-latin.woff2");
+    axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "font/woff2")
+        .header("Cache-Control", "public, max-age=31536000, immutable")
+        .body(axum::body::Body::from(FONT))
+        .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty()))
+        .into_response()
+}
+
+async fn serve_font_inter_latin_ext() -> impl IntoResponse {
+    static FONT: &[u8] = include_bytes!("../../assets/inter-latin-ext.woff2");
+    axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "font/woff2")
+        .header("Cache-Control", "public, max-age=31536000, immutable")
+        .body(axum::body::Body::from(FONT))
         .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty()))
         .into_response()
 }
