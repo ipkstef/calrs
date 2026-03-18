@@ -70,6 +70,9 @@ openidconnect = { version = "4.0.1", default-features = false, features = ["reqw
 iana-time-zone = "0.1.65"
 urlencoding = "2"
 
+# Markdown (bio rendering)
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
