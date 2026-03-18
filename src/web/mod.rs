@@ -547,10 +547,6 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route("/dashboard/organization", get(dashboard_organization))
         .route("/dashboard/groups", get(dashboard_groups))
         .route("/dashboard/groups/{slug}", get(dashboard_group_detail))
-        .route(
-            "/dashboard/groups/{slug}/event-types/{et_id}/members/{user_id}/priority",
-            post(update_member_priority),
-        )
         .route("/dashboard/team-links", get(dashboard_team_links_page))
         .route("/dashboard/bookings/{id}/cancel", post(cancel_booking))
         .route(
@@ -565,6 +561,10 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route(
             "/dashboard/event-types/{slug}/edit",
             get(edit_event_type_form).post(update_event_type),
+        )
+        .route(
+            "/dashboard/event-types/{slug}/priority/{user_id}",
+            post(update_event_type_member_priority),
         )
         .route(
             "/dashboard/event-types/{slug}/toggle",
@@ -1263,21 +1263,19 @@ async fn dashboard_group_detail(
         }
     }
 
-    // Fetch group members
-    let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.avatar_path \
-         FROM users u JOIN user_groups ug ON ug.user_id = u.id \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
-         ORDER BY u.name",
+    // Fetch member count
+    let member_count: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM user_groups ug JOIN users u ON u.id = ug.user_id \
+         WHERE ug.group_id = ? AND u.enabled = 1",
     )
     .bind(&group_id)
-    .fetch_all(&state.pool)
+    .fetch_one(&state.pool)
     .await
-    .unwrap_or_default();
+    .unwrap_or(0);
 
     // Fetch round-robin event types for this group
-    let event_types: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, title FROM event_types \
+    let event_types: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, title, slug FROM event_types \
          WHERE group_id = ? AND scheduling_mode = 'round_robin' AND enabled = 1 \
          ORDER BY title",
     )
@@ -1286,70 +1284,12 @@ async fn dashboard_group_detail(
     .await
     .unwrap_or_default();
 
-    // Fetch all per-event-type weights for this group's event types
-    let et_ids: Vec<&str> = event_types.iter().map(|(id, _)| id.as_str()).collect();
-    let all_et_weights: Vec<(String, String, i64)> = if !et_ids.is_empty() {
-        let placeholders: String = et_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let q = format!(
-            "SELECT event_type_id, user_id, weight FROM event_type_member_weights \
-             WHERE event_type_id IN ({})",
-            placeholders
-        );
-        let mut query = sqlx::query_as::<_, (String, String, i64)>(&q);
-        for id in &et_ids {
-            query = query.bind(id);
-        }
-        query.fetch_all(&state.pool).await.unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    // Build weight lookup: (event_type_id, user_id) -> weight
-    let weight_map: std::collections::HashMap<(String, String), i64> = all_et_weights
-        .into_iter()
-        .map(|(et_id, uid, w)| ((et_id, uid), w))
-        .collect();
-
-    // Fetch 30-day booking counts per member
-    let thirty_days_ago = (chrono::Utc::now() - chrono::Duration::days(30))
-        .format("%Y-%m-%dT%H:%M:%S")
-        .to_string();
-    let booking_counts: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT assigned_user_id, COUNT(*) FROM bookings \
-         WHERE assigned_user_id IS NOT NULL AND created_at >= ? \
-         GROUP BY assigned_user_id",
-    )
-    .bind(&thirty_days_ago)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    let count_map: std::collections::HashMap<String, i64> = booking_counts.into_iter().collect();
-
-    // Build event types context with per-member weights
     let event_types_ctx: Vec<minijinja::Value> = event_types
         .iter()
-        .map(|(et_id, title)| {
-            let members_ctx: Vec<minijinja::Value> = members
-                .iter()
-                .map(|(uid, name, avatar_path)| {
-                    let w = weight_map
-                        .get(&(et_id.clone(), uid.clone()))
-                        .copied()
-                        .unwrap_or(1);
-                    context! {
-                        user_id => uid,
-                        name => name,
-                        has_avatar => avatar_path.is_some(),
-                        initials => compute_initials(name),
-                        weight => w,
-                        booking_count => count_map.get(uid).copied().unwrap_or(0),
-                    }
-                })
-                .collect();
+        .map(|(_id, title, slug)| {
             context! {
-                id => et_id,
                 title => title,
-                members => members_ctx,
+                slug => slug,
             }
         })
         .collect();
@@ -1365,7 +1305,7 @@ async fn dashboard_group_detail(
             group_name => group_name,
             group_slug => group_slug.as_deref().unwrap_or(""),
             event_types => event_types_ctx,
-            member_count => members.len(),
+            member_count => member_count,
         })
         .unwrap_or_default(),
     )
@@ -1375,76 +1315,6 @@ async fn dashboard_group_detail(
 struct PriorityForm {
     _csrf: Option<String>,
     priority: String,
-}
-
-async fn update_member_priority(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path((slug, et_id, target_user_id)): Path<(String, String, String)>,
-    Form(form): Form<PriorityForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-
-    let user = &auth_user.user;
-    let is_admin = auth_user.user.role == "admin";
-
-    // Resolve group
-    let group_id: Option<String> = sqlx::query_scalar("SELECT id FROM groups WHERE slug = ?")
-        .bind(&slug)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap_or(None);
-
-    let group_id = match group_id {
-        Some(id) => id,
-        None => return Redirect::to("/dashboard/groups").into_response(),
-    };
-
-    // Authorization: must be a member or admin
-    if !is_admin {
-        let is_member: bool = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM user_groups WHERE group_id = ? AND user_id = ?",
-        )
-        .bind(&group_id)
-        .bind(&user.id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0)
-            > 0;
-        if !is_member {
-            return Redirect::to("/dashboard/groups").into_response();
-        }
-    }
-
-    let weight: i64 = match form.priority.as_str() {
-        "high" => 3,
-        "medium" => 2,
-        _ => 1,
-    };
-
-    // Upsert per-event-type weight
-    let _ = sqlx::query(
-        "INSERT INTO event_type_member_weights (event_type_id, user_id, weight) \
-         VALUES (?, ?, ?) \
-         ON CONFLICT(event_type_id, user_id) DO UPDATE SET weight = excluded.weight",
-    )
-    .bind(&et_id)
-    .bind(&target_user_id)
-    .bind(weight)
-    .execute(&state.pool)
-    .await;
-
-    tracing::info!(
-        et_id,
-        target_user_id,
-        priority = form.priority.as_str(),
-        "updated member priority for event type"
-    );
-
-    Redirect::to(&format!("/dashboard/groups/{}", slug)).into_response()
 }
 
 async fn dashboard_sources(
@@ -2538,8 +2408,8 @@ async fn edit_event_type_form(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, i32, String, Option<String>, Option<i32>, String, i32)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.visibility, et.max_additional_guests
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, i32, String, Option<String>, Option<i32>, String, i32, String, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.visibility, et.max_additional_guests, et.scheduling_mode, et.group_id
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          WHERE a.user_id = ? AND et.slug = ?",
@@ -2565,6 +2435,8 @@ async fn edit_event_type_form(
         reminder_min,
         visibility,
         max_additional_guests,
+        scheduling_mode,
+        group_id,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -2643,6 +2515,47 @@ async fn edit_event_type_form(
         .collect::<Vec<_>>()
         .join(",");
 
+    // Fetch group members with per-ET weights for round-robin priority
+    let is_round_robin_group = group_id.is_some() && scheduling_mode == "round_robin";
+    let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
+        let gid = group_id.as_deref().unwrap();
+        let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT u.id, u.name, u.avatar_path \
+             FROM users u JOIN user_groups ug ON ug.user_id = u.id \
+             WHERE ug.group_id = ? AND u.enabled = 1 \
+             ORDER BY u.name",
+        )
+        .bind(gid)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+        let et_weights: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT user_id, weight FROM event_type_member_weights WHERE event_type_id = ?",
+        )
+        .bind(&et_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+        let wmap: std::collections::HashMap<String, i64> = et_weights.into_iter().collect();
+
+        members
+            .iter()
+            .map(|(uid, name, avatar_path)| {
+                let w = wmap.get(uid).copied().unwrap_or(1);
+                context! {
+                    user_id => uid,
+                    name => name,
+                    has_avatar => avatar_path.is_some(),
+                    initials => compute_initials(name),
+                    weight => w,
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -2672,6 +2585,10 @@ async fn edit_event_type_form(
             form_avail_windows => avail_windows,
             form_reminder_minutes => reminder_min.unwrap_or(0),
             form_max_additional_guests => max_additional_guests,
+            form_scheduling_mode => scheduling_mode,
+            is_group => group_id.is_some(),
+            is_round_robin_group => is_round_robin_group,
+            priority_members => members_ctx,
             error => "",
             sidebar => sidebar_context(&auth_user, "event-types"),
             impersonating => impersonating,
@@ -2823,6 +2740,62 @@ async fn update_event_type(
     }
 
     Redirect::to("/dashboard/event-types").into_response()
+}
+
+async fn update_event_type_member_priority(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+    headers: HeaderMap,
+    Path((slug, target_user_id)): Path<(String, String)>,
+    Form(form): Form<PriorityForm>,
+) -> impl IntoResponse {
+    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
+        return resp;
+    }
+    let user = &auth_user.user;
+
+    // Resolve event type and verify ownership
+    let et: Option<(String,)> = sqlx::query_as(
+        "SELECT et.id FROM event_types et \
+         JOIN accounts a ON a.id = et.account_id \
+         WHERE a.user_id = ? AND et.slug = ?",
+    )
+    .bind(&user.id)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let et_id = match et {
+        Some((id,)) => id,
+        None => return Redirect::to("/dashboard/event-types").into_response(),
+    };
+
+    let weight: i64 = match form.priority.as_str() {
+        "high" => 3,
+        "medium" => 2,
+        _ => 1,
+    };
+
+    let _ = sqlx::query(
+        "INSERT INTO event_type_member_weights (event_type_id, user_id, weight) \
+         VALUES (?, ?, ?) \
+         ON CONFLICT(event_type_id, user_id) DO UPDATE SET weight = excluded.weight",
+    )
+    .bind(&et_id)
+    .bind(&target_user_id)
+    .bind(weight)
+    .execute(&state.pool)
+    .await;
+
+    tracing::info!(
+        slug,
+        target_user_id,
+        priority = form.priority.as_str(),
+        "updated member priority for event type"
+    );
+
+    Redirect::to(&format!("/dashboard/event-types/{}/edit", slug)).into_response()
 }
 
 async fn toggle_event_type(
