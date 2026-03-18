@@ -440,7 +440,7 @@ async fn migrate_team_links_to_teams(pool: &SqlitePool) -> Result<()> {
              buffer_before, buffer_after, min_notice_min, enabled, requires_confirmation, \
              location_type, location_value, team_id, scheduling_mode, reminder_minutes, \
              visibility, created_by_user_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, 'collective', ?, 'private', \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, 'round_robin', ?, 'private', \
              (SELECT created_by FROM teams WHERE id = ?))",
         )
         .bind(&et_id)
@@ -517,21 +517,38 @@ async fn migrate_team_links_to_teams(pool: &SqlitePool) -> Result<()> {
             String,
             String,
             String,
+            Option<String>,
+            String,
         )> = sqlx::query_as(
             "SELECT id, uid, guest_name, guest_email, guest_timezone, notes, \
-                 start_at, end_at, status, cancel_token \
+                 start_at, end_at, status, cancel_token, reminder_sent_at, created_at \
                  FROM team_link_bookings WHERE team_link_id = ?",
         )
         .bind(tl_id)
         .fetch_all(pool)
         .await?;
 
-        for (bid, uid, gname, gemail, gtz, notes, start, end, status, cancel_tok) in &tlb {
+        for (
+            bid,
+            uid,
+            gname,
+            gemail,
+            gtz,
+            notes,
+            start,
+            end,
+            status,
+            cancel_tok,
+            reminder_sent,
+            created,
+        ) in &tlb
+        {
             let reschedule_token = uuid::Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT OR IGNORE INTO bookings (id, event_type_id, uid, guest_name, guest_email, \
-                 guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, \
+                 reminder_sent_at, created_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(bid)
             .bind(&et_id)
@@ -545,6 +562,8 @@ async fn migrate_team_links_to_teams(pool: &SqlitePool) -> Result<()> {
             .bind(status)
             .bind(cancel_tok)
             .bind(&reschedule_token)
+            .bind(reminder_sent)
+            .bind(created)
             .execute(pool)
             .await?;
         }
