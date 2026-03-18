@@ -389,7 +389,7 @@
       </div>
       <script>
       (function() {
-        var userTz = '{{ sidebar.user_timezone }}';
+        var userTz = '{{ sidebar.user_timezone|safe }}';
         var browserTz;
         try { browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e) { return; }
         if (!browserTz || browserTz === userTz) return;
