@@ -227,7 +227,7 @@
       <div style="font-weight: 600; font-size: 0.9rem;">{{ m.name }}</div>
     </div>
 
-    <form method="POST" action="/dashboard/event-types/{{ form_slug }}/priority/{{ m.user_id }}" style="margin: 0;">
+    <form method="POST" action="/dashboard/{% if is_group is defined and is_group %}group-event-types{% else %}event-types{% endif %}/{{ form_slug }}/priority/{{ m.user_id }}" style="margin: 0;">
       <div style="display: flex; gap: 0.25rem;">
         <button type="submit" name="priority" value="high" class="priority-btn {% if m.weight >= 3 %}active-high{% endif %}">High</button>
         <button type="submit" name="priority" value="medium" class="priority-btn {% if m.weight == 2 %}active-medium{% endif %}">Medium</button>
