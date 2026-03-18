@@ -124,16 +124,29 @@ In your Keycloak realm:
    - **Add to ID token:** ON
    - **Full group path:** ON (calrs strips the leading `/`)
 
-## Private teams vs private event types
+## Private teams vs internal vs private event types
 
-These are two independent access controls that can be combined:
+There are three ways to restrict access to team bookings. They serve different use cases and can be combined:
 
-| Level | What it gates | How access is granted |
-|---|---|---|
-| **Private team** | The entire team page — invite token required to see ANY event type | Team invite token in the URL |
-| **Private event type** | A single event type — each has its own invite system | Per-event-type invite link |
+| Mechanism | What it gates | Who distributes links | Use case |
+|---|---|---|---|
+| **Private team** | The entire team page | Team admin shares one invite link | Controlled distribution — only the team admin decides who books |
+| **Internal event type** | A single event type | Any authenticated employee via Organization dashboard | Self-serve — any Sales rep can generate a Support Call link for a customer |
+| **Private event type** | A single event type | Event type owner sends personalized invites | Targeted — send invites to specific guests with pre-filled info |
 
-A public team can have private event types (only listed event types are visible, private ones require their own invite). A private team can have public event types (but the guest needs the team invite token first).
+### When to use each
+
+**Private team** — your team handles external meetings but you don't want colleagues exposed to unsolicited bookings. The team admin shares the invite link only with approved contacts. Example: a consulting team where only the account manager shares the booking page with clients.
+
+**Internal event type** — your team provides a cross-org service and you want any employee to be a link distributor, without involving the team admin each time. Example: IT Help Desk, Support Calls — any employee can generate a one-time link from the Organization dashboard and paste it in a Slack message or support ticket. Links are single-use and expire after 7 days.
+
+**Private event type** — you want to send personalized invites to specific guests with their name and email pre-filled. Example: demo team sends targeted invites to qualified leads with custom messages.
+
+### Combining them
+
+- A **public team** can have **internal** event types — the team page is public but some event types are only bookable via employee-generated links
+- A **private team** can have **internal** event types — guests need the team invite token first, then employees can generate per-event-type links
+- A **public team** can have **private** event types — the team page lists public event types, but private ones require their own invite
 
 ## Dashboard
 

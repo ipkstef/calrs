@@ -113,7 +113,7 @@ Event types have three visibility levels, set from the **Visibility** dropdown i
 | **Internal** | Team only | No | Any authenticated team member | blue "internal" |
 | **Private** | Personal + Team | No | Event type owner only | indigo "private" |
 
-### Internal event types (group only)
+### Internal event types (team only)
 
 Internal visibility is designed for **cross-team booking within an organization**. It is only available for team event types — personal event types can be public or private.
 
@@ -124,11 +124,13 @@ The **Organization** page (`/dashboard/organization`) lists all internal event t
 - **Get link** — generates a single-use invite link (expires in 7 days) and copies it to clipboard
 - **Invites** — opens the full invite management page for custom expiry, multi-use links, and guest pre-fill
 
+> **Internal vs private team:** Internal lets **any employee** generate links on the fly — ideal for cross-org services like support or IT help desk. A private team restricts link distribution to the **team admin only** — better when you want controlled access. See [Teams > Private teams vs internal vs private event types](./teams.md#private-teams-vs-internal-vs-private-event-types) for a detailed comparison.
+
 ### Private event types
 
-Private event types are hidden from public pages and only accessible via invite links sent by the event type owner.
+Private event types are hidden from public pages and only accessible via invite links sent by the event type owner or team admin.
 
-**Typical use case:** A demo team creates a private group event type. Sales reps send personalized invites to qualified leads. The demo is automatically assigned to the least-busy team member via round-robin.
+**Typical use case:** A demo team creates a private team event type. Sales reps send personalized invites to qualified leads. The demo is automatically assigned to the least-busy team member via round-robin.
 
 ### Invite links
 

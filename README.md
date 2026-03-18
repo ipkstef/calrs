@@ -130,11 +130,13 @@ calrs supports five distinct booking scenarios. Each serves a different use case
 ### Visibility & invites
 
 - **Public** — listed on your profile or team page, bookable by anyone with the URL
-- **Internal** *(team event types only)* — not listed publicly. Any authenticated team member can generate a single-use booking link from the **Organization dashboard** and share it with an external contact (e.g., paste in Slack or a support ticket). The link expires after 7 days and can't be reused
-- **Private** — not listed publicly. Only the event type owner can send invite links to specific guests
+- **Internal** *(team event types only)* — not listed publicly. Any authenticated employee can generate a single-use booking link from the **Organization dashboard** and share it with an external contact (e.g., paste in Slack or a support ticket). The link expires after 7 days and can't be reused. Unlike private teams where only the team admin distributes the link, internal lets **anyone in the organization** be a link distributor — ideal for cross-team services (support, IT help desk)
+- **Private** — not listed publicly. Only the event type owner or team admin can send invite links to specific guests
 - **Booking invites** — tokenized links with guest name, email, optional message, expiration, and usage limits. Guest info auto-filled on the booking form
 - **Quick link generation** — one-click "Get link" on the Organization dashboard generates a single-use invite URL and copies it to clipboard. No form to fill
 - **Availability overrides** — block specific dates (holidays, conferences) or set custom hours per event type. Overrides replace weekly rules for that day
+
+> **Private team vs internal event type:** A private team gates access at the **team level** — the team admin shares one invite link covering all the team's event types. Internal visibility gates access at the **event type level** — any authenticated employee can generate per-event-type links on the fly from the Organization dashboard. Use private teams when you want controlled distribution by a team admin. Use internal when you want self-serve link generation across the org (e.g., any Sales rep can generate a Support Call link for a customer).
 
 ### Authentication
 
