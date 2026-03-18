@@ -14,19 +14,19 @@
 <div class="card">
   <h1 style="margin-bottom: 1rem;">{% if editing %}Edit event type{% else %}New event type{% endif %}</h1>
 
-  {% if not editing and groups is defined and groups %}
+  {% if not editing and teams is defined and teams %}
   <div class="form-group">
-    <label for="group_id">Group <span class="hint">(optional — leave empty for personal event type)</span></label>
-    <select id="group_id" name="group_id" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+    <label for="team_id">Team <span class="hint">(optional — leave empty for personal event type)</span></label>
+    <select id="team_id" name="team_id" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
       <option value="">Personal</option>
-      {% for g in groups %}
-      <option value="{{ g.id }}" {% if form_group_id is defined and form_group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+      {% for t in teams %}
+      <option value="{{ t.id }}" {% if form_team_id is defined and form_team_id == t.id %}selected{% endif %}>{{ t.name }}</option>
       {% endfor %}
     </select>
   </div>
   {% endif %}
 
-  <div class="form-group" id="scheduling-mode-group" style="{% if not (is_group is defined and is_group) %}display:none;{% endif %}">
+  <div class="form-group" id="scheduling-mode-group" style="{% if not (is_team is defined and is_team) %}display:none;{% endif %}">
     <label for="scheduling_mode">Scheduling mode</label>
     <select id="scheduling_mode" name="scheduling_mode" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
       <option value="round_robin" {% if form_scheduling_mode is defined and form_scheduling_mode == "round_robin" %}selected{% endif %}>Round Robin — assign to one available member</option>
@@ -307,27 +307,27 @@
     }
   });
 
-  // --- Show/hide scheduling mode + priority card based on group selection ---
+  // --- Show/hide scheduling mode + priority card based on team selection ---
   (function() {
-    var groupSel = document.getElementById('group_id');
+    var teamSel = document.getElementById('team_id');
     var modeGroup = document.getElementById('scheduling-mode-group');
     var modeSel = document.getElementById('scheduling_mode');
     var priorityCard = document.getElementById('priority-card');
 
     function toggleMode() {
-      var isGroup = groupSel ? !!groupSel.value : {{ is_group is defined and is_group and "true" or "false" }};
-      if (modeGroup) modeGroup.style.display = isGroup ? '' : 'none';
+      var isTeam = teamSel ? !!teamSel.value : {{ is_team is defined and is_team and "true" or "false" }};
+      if (modeGroup) modeGroup.style.display = isTeam ? '' : 'none';
       togglePriority();
     }
 
     function togglePriority() {
       if (!priorityCard) return;
-      var isGroup = groupSel ? !!groupSel.value : {{ is_group is defined and is_group and "true" or "false" }};
+      var isTeam = teamSel ? !!teamSel.value : {{ is_team is defined and is_team and "true" or "false" }};
       var isRR = modeSel && modeSel.value === 'round_robin';
-      priorityCard.style.display = (isGroup && isRR) ? '' : 'none';
+      priorityCard.style.display = (isTeam && isRR) ? '' : 'none';
     }
 
-    if (groupSel) groupSel.addEventListener('change', toggleMode);
+    if (teamSel) teamSel.addEventListener('change', toggleMode);
     if (modeSel) modeSel.addEventListener('change', togglePriority);
     toggleMode();
   })();

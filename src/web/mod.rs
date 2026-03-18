@@ -617,20 +617,20 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route("/dashboard/settings/avatar", post(upload_avatar))
         .route("/dashboard/settings/avatar/delete", post(delete_avatar))
         .route("/avatar/{user_id}", get(serve_avatar))
-        // Group settings & avatar
+        // Team settings & avatar
         .route(
-            "/dashboard/groups/{group_id}/settings",
+            "/dashboard/teams/{team_id}/settings",
             get(group_settings_page).post(group_settings_save),
         )
         .route(
-            "/dashboard/groups/{group_id}/avatar",
+            "/dashboard/teams/{team_id}/avatar",
             post(upload_group_avatar),
         )
         .route(
-            "/dashboard/groups/{group_id}/avatar/delete",
+            "/dashboard/teams/{team_id}/avatar/delete",
             post(delete_group_avatar),
         )
-        .route("/group-avatar/{group_id}", get(serve_group_avatar))
+        .route("/team-avatar/{team_id}", get(serve_group_avatar))
         // Troubleshoot
         .route("/dashboard/troubleshoot", get(troubleshoot))
         // Admin routes
@@ -824,7 +824,7 @@ async fn dashboard(
     let user = &auth_user.user;
 
     let event_type_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.group_id IS NULL")
+        sqlx::query_scalar("SELECT COUNT(*) FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.team_id IS NULL")
             .bind(&user.id)
             .fetch_one(&state.pool)
             .await
@@ -915,7 +915,7 @@ async fn dashboard_event_types(
                 et.visibility
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
-         WHERE a.user_id = ? AND et.group_id IS NULL
+         WHERE a.user_id = ? AND et.team_id IS NULL
          ORDER BY et.created_at",
     )
     .bind(&user.id)
@@ -925,7 +925,7 @@ async fn dashboard_event_types(
 
     let is_admin = user.role == "admin";
 
-    let group_event_types: Vec<(
+    let team_event_types: Vec<(
         String,
         String,
         String,
@@ -939,27 +939,27 @@ async fn dashboard_event_types(
         String,
     )> = if is_admin {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, g.name, g.slug,
+            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, t.name, t.slug,
                     (SELECT COUNT(*) FROM bookings b WHERE b.event_type_id = et.id AND b.status IN ('confirmed', 'pending')) as active_bookings,
-                    et.visibility, g.id, et.scheduling_mode
+                    et.visibility, t.id, et.scheduling_mode
              FROM event_types et
-             JOIN groups g ON g.id = et.group_id
-             WHERE et.group_id IS NOT NULL
-             ORDER BY g.name, et.created_at",
+             JOIN teams t ON t.id = et.team_id
+             WHERE et.team_id IS NOT NULL
+             ORDER BY t.name, et.created_at",
         )
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, g.name, g.slug,
+            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, t.name, t.slug,
                     (SELECT COUNT(*) FROM bookings b WHERE b.event_type_id = et.id AND b.status IN ('confirmed', 'pending')) as active_bookings,
-                    et.visibility, g.id, et.scheduling_mode
+                    et.visibility, t.id, et.scheduling_mode
              FROM event_types et
-             JOIN groups g ON g.id = et.group_id
-             JOIN user_groups ug ON ug.group_id = g.id
-             WHERE ug.user_id = ?
-             ORDER BY g.name, et.created_at",
+             JOIN teams t ON t.id = et.team_id
+             JOIN team_members tm ON tm.team_id = t.id
+             WHERE tm.user_id = ?
+             ORDER BY t.name, et.created_at",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -967,14 +967,14 @@ async fn dashboard_event_types(
         .unwrap_or_default()
     };
 
-    let user_has_groups: bool = if is_admin {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM groups")
+    let user_has_teams: bool = if is_admin {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM teams")
             .fetch_one(&state.pool)
             .await
             .unwrap_or(0)
             > 0
     } else {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_groups WHERE user_id = ?")
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM team_members WHERE user_id = ?")
             .bind(&user.id)
             .fetch_one(&state.pool)
             .await
@@ -994,11 +994,11 @@ async fn dashboard_event_types(
         })
         .collect();
 
-    let group_et_ctx: Vec<minijinja::Value> = group_event_types
+    let team_et_ctx: Vec<minijinja::Value> = team_event_types
         .iter()
         .map(
-            |(id, slug, title, duration, enabled, group_name, group_slug, active_bookings, vis, group_id, scheduling_mode)| {
-                context! { id => id, slug => slug, title => title, duration_min => duration, enabled => enabled, group_name => group_name, group_slug => group_slug, active_bookings => active_bookings, visibility => vis, group_id => group_id, scheduling_mode => scheduling_mode }
+            |(id, slug, title, duration, enabled, team_name, team_slug, active_bookings, vis, team_id, scheduling_mode)| {
+                context! { id => id, slug => slug, title => title, duration_min => duration, enabled => enabled, team_name => team_name, team_slug => team_slug, active_bookings => active_bookings, visibility => vis, team_id => team_id, scheduling_mode => scheduling_mode }
             },
         )
         .collect();
@@ -1010,8 +1010,8 @@ async fn dashboard_event_types(
             sidebar => sidebar_context(&auth_user, "event-types"),
             username => user.username,
             event_types => et_ctx,
-            group_event_types => group_et_ctx,
-            user_has_groups => user_has_groups,
+            team_event_types => team_et_ctx,
+            user_has_teams => user_has_teams,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })
@@ -1149,12 +1149,12 @@ async fn dashboard_organization(
     )> = sqlx::query_as(
         "SELECT et.id, et.slug, et.title, et.duration_min, u.name,
                 u.username,
-                CASE WHEN et.group_id IS NOT NULL THEN g.name ELSE NULL END,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END
+                CASE WHEN et.team_id IS NOT NULL THEN t.name ELSE NULL END,
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          JOIN users u ON u.id = a.user_id
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          WHERE et.visibility = 'internal' AND et.enabled = 1
          ORDER BY et.created_at",
     )
@@ -1165,7 +1165,7 @@ async fn dashboard_organization(
     let ets_ctx: Vec<minijinja::Value> = internal_ets
         .iter()
         .map(
-            |(id, slug, title, duration, host_name, username, group_name, group_slug)| {
+            |(id, slug, title, duration, host_name, username, team_name, team_slug)| {
                 context! {
                     id => id,
                     slug => slug,
@@ -1173,8 +1173,8 @@ async fn dashboard_organization(
                     duration_min => duration,
                     host_name => host_name,
                     username => username,
-                    group_name => group_name,
-                    group_slug => group_slug,
+                    team_name => team_name,
+                    team_slug => team_slug,
                 }
             },
         )
@@ -1698,14 +1698,14 @@ async fn serve_avatar(
     }
 }
 
-// --- Group settings & avatar ---
+// --- Team settings & avatar ---
 
-async fn is_group_member(pool: &SqlitePool, user_id: &str, group_id: &str) -> bool {
+async fn is_team_member(pool: &SqlitePool, user_id: &str, team_id: &str) -> bool {
     sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM user_groups WHERE user_id = ? AND group_id = ?",
+        "SELECT COUNT(*) FROM team_members WHERE user_id = ? AND team_id = ?",
     )
     .bind(user_id)
-    .bind(group_id)
+    .bind(team_id)
     .fetch_one(pool)
     .await
     .unwrap_or(0)
@@ -1721,34 +1721,34 @@ struct GroupSettingsForm {
 async fn group_settings_page(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
-        return Html("Group not found.".to_string());
+    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
+        return Html("Team not found.".to_string());
     }
 
-    let group: Option<(String, String, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, name, description, avatar_path FROM groups WHERE id = ?")
-            .bind(&group_id)
+    let team: Option<(String, String, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT id, name, description, avatar_path FROM teams WHERE id = ?")
+            .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let (gid, group_name, description, avatar_path) = match group {
-        Some(g) => g,
-        None => return Html("Group not found.".to_string()),
+    let (tid, team_name, description, avatar_path) = match team {
+        Some(t) => t,
+        None => return Html("Team not found.".to_string()),
     };
 
     let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT u.id, u.name, u.avatar_path FROM users u \
-         JOIN user_groups ug ON ug.user_id = u.id \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
+         JOIN team_members tm ON tm.user_id = u.id \
+         WHERE tm.team_id = ? AND u.enabled = 1 \
          ORDER BY u.name",
     )
-    .bind(&gid)
+    .bind(&tid)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -1765,7 +1765,7 @@ async fn group_settings_page(
         })
         .collect();
 
-    let tmpl = match state.templates.get_template("group_settings.html") {
+    let tmpl = match state.templates.get_template("team_settings.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
     };
@@ -1773,11 +1773,11 @@ async fn group_settings_page(
     Html(
         tmpl.render(context! {
             sidebar => sidebar_context(&auth_user, "event-types"),
-            group_id => gid,
-            group_name => group_name,
-            group_description => description.unwrap_or_default(),
-            group_has_avatar => avatar_path.is_some(),
-            group_initials => compute_initials(&group_name),
+            team_id => tid,
+            team_name => team_name,
+            team_description => description.unwrap_or_default(),
+            team_has_avatar => avatar_path.is_some(),
+            team_initials => compute_initials(&team_name),
             members => members_ctx,
             success => query.get("success").map(|_| "Settings saved."),
         })
@@ -1789,7 +1789,7 @@ async fn group_settings_save(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Form(form): Form<GroupSettingsForm>,
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
@@ -1797,7 +1797,7 @@ async fn group_settings_save(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
+    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
     let desc = form
@@ -1809,24 +1809,20 @@ async fn group_settings_save(
         .take(5000)
         .collect::<String>();
     let desc = if desc.is_empty() { None } else { Some(desc) };
-    let _ = sqlx::query("UPDATE groups SET description = ? WHERE id = ?")
+    let _ = sqlx::query("UPDATE teams SET description = ? WHERE id = ?")
         .bind(&desc)
-        .bind(&group_id)
+        .bind(&team_id)
         .execute(&state.pool)
         .await;
-    tracing::info!(group_id = %group_id, user_id = %user.id, "group settings updated");
-    Redirect::to(&format!(
-        "/dashboard/groups/{}/settings?success=1",
-        group_id
-    ))
-    .into_response()
+    tracing::info!(team_id = %team_id, user_id = %user.id, "team settings updated");
+    Redirect::to(&format!("/dashboard/teams/{}/settings?success=1", team_id)).into_response()
 }
 
 async fn upload_group_avatar(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Query(csrf_query): Query<CsrfQuery>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
@@ -1835,10 +1831,10 @@ async fn upload_group_avatar(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
+    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
-    let redirect_url = format!("/dashboard/groups/{}/settings", group_id);
+    let redirect_url = format!("/dashboard/teams/{}/settings", team_id);
     while let Ok(Some(field)) = multipart.next_field().await {
         if field.name() == Some("avatar") {
             let content_type = field.content_type().unwrap_or("").to_string();
@@ -1858,14 +1854,14 @@ async fn upload_group_avatar(
                 }
                 let avatars_dir = state.data_dir.join("avatars");
                 let _ = tokio::fs::create_dir_all(&avatars_dir).await;
-                let filename = format!("group_{}.{}", group_id, ext);
+                let filename = format!("team_{}.{}", team_id, ext);
                 let avatar_path = avatars_dir.join(&filename);
 
                 // Remove old avatar if different extension
                 let old: Option<(String,)> = sqlx::query_as(
-                    "SELECT avatar_path FROM groups WHERE id = ? AND avatar_path IS NOT NULL",
+                    "SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL",
                 )
-                .bind(&group_id)
+                .bind(&team_id)
                 .fetch_optional(&state.pool)
                 .await
                 .unwrap_or(None);
@@ -1877,12 +1873,12 @@ async fn upload_group_avatar(
                 }
 
                 if tokio::fs::write(&avatar_path, &bytes).await.is_ok() {
-                    let _ = sqlx::query("UPDATE groups SET avatar_path = ? WHERE id = ?")
+                    let _ = sqlx::query("UPDATE teams SET avatar_path = ? WHERE id = ?")
                         .bind(&filename)
-                        .bind(&group_id)
+                        .bind(&team_id)
                         .execute(&state.pool)
                         .await;
-                    tracing::info!(group_id = %group_id, user_id = %user.id, "group avatar uploaded");
+                    tracing::info!(team_id = %team_id, user_id = %user.id, "team avatar uploaded");
                 }
             }
         }
@@ -1894,7 +1890,7 @@ async fn delete_group_avatar(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Form(csrf): Form<CsrfForm>,
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &csrf._csrf) {
@@ -1902,12 +1898,12 @@ async fn delete_group_avatar(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
+    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
     let old: Option<(String,)> =
-        sqlx::query_as("SELECT avatar_path FROM groups WHERE id = ? AND avatar_path IS NOT NULL")
-            .bind(&group_id)
+        sqlx::query_as("SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+            .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
@@ -1915,21 +1911,21 @@ async fn delete_group_avatar(
         let full_path = state.data_dir.join("avatars").join(&avatar_path);
         let _ = tokio::fs::remove_file(&full_path).await;
     }
-    let _ = sqlx::query("UPDATE groups SET avatar_path = NULL WHERE id = ?")
-        .bind(&group_id)
+    let _ = sqlx::query("UPDATE teams SET avatar_path = NULL WHERE id = ?")
+        .bind(&team_id)
         .execute(&state.pool)
         .await;
-    tracing::info!(group_id = %group_id, user_id = %user.id, "group avatar deleted");
-    Redirect::to(&format!("/dashboard/groups/{}/settings", group_id)).into_response()
+    tracing::info!(team_id = %team_id, user_id = %user.id, "team avatar deleted");
+    Redirect::to(&format!("/dashboard/teams/{}/settings", team_id)).into_response()
 }
 
 async fn serve_group_avatar(
     State(state): State<Arc<AppState>>,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
 ) -> impl IntoResponse {
     let avatar_path: Option<(String,)> =
-        sqlx::query_as("SELECT avatar_path FROM groups WHERE id = ? AND avatar_path IS NOT NULL")
-            .bind(&group_id)
+        sqlx::query_as("SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+            .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
@@ -2323,8 +2319,8 @@ struct EventTypeForm {
     avail_start: Option<String>,   // legacy: "09:00"
     avail_end: Option<String>,     // legacy: "17:00"
     avail_windows: Option<String>, // "09:00-12:00,13:00-17:00"
-    // Group (optional)
-    group_id: Option<String>,
+    // Team (optional)
+    team_id: Option<String>,
     // Calendar selection (comma-separated IDs)
     calendar_ids: Option<String>,
     // Reminder
@@ -2339,9 +2335,9 @@ async fn new_event_type_form(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    // Get groups the user belongs to
+    // Get teams the user belongs to
     let groups: Vec<(String, String)> = sqlx::query_as(
-        "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
+        "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? ORDER BY t.name",
     )
     .bind(&user.id)
     .fetch_all(&state.pool)
@@ -2471,19 +2467,19 @@ async fn create_event_type(
         .as_deref()
         .filter(|s| !s.trim().is_empty());
 
-    // Check if a group_id was provided and it's non-empty
-    let group_id = form.group_id.as_deref().filter(|s| !s.trim().is_empty());
+    // Check if a team_id was provided and it's non-empty
+    let team_id = form.team_id.as_deref().filter(|s| !s.trim().is_empty());
 
-    // "internal" visibility is only allowed for group event types
+    // "internal" visibility is only allowed for team event types
     let visibility = match form.visibility.as_deref().unwrap_or("public") {
-        "internal" if group_id.is_none() => "private".to_string(),
+        "internal" if team_id.is_none() => "private".to_string(),
         other => other.to_string(),
     };
 
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, group_id, created_by_user_id, reminder_minutes, visibility, max_additional_guests)
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id, reminder_minutes, visibility, max_additional_guests)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
@@ -2498,8 +2494,8 @@ async fn create_event_type(
     .bind(requires_confirmation as i32)
     .bind(location_type)
     .bind(location_value)
-    .bind(group_id)
-    .bind(if group_id.is_some() { Some(&user.id) } else { None })
+    .bind(team_id)
+    .bind(if team_id.is_some() { Some(&user.id) } else { None })
     .bind(reminder_minutes)
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
@@ -2563,7 +2559,7 @@ async fn edit_event_type_form(
     let user = &auth_user.user;
 
     let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, i32, String, Option<String>, Option<i32>, String, i32, String, Option<String>)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.visibility, et.max_additional_guests, et.scheduling_mode, et.group_id
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.visibility, et.max_additional_guests, et.scheduling_mode, et.team_id
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          WHERE a.user_id = ? AND et.slug = ?",
@@ -2590,7 +2586,7 @@ async fn edit_event_type_form(
         visibility,
         max_additional_guests,
         scheduling_mode,
-        group_id,
+        team_id,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -2669,17 +2665,17 @@ async fn edit_event_type_form(
         .collect::<Vec<_>>()
         .join(",");
 
-    // Fetch group members with per-ET weights for round-robin priority
-    let is_round_robin_group = group_id.is_some() && scheduling_mode == "round_robin";
+    // Fetch team members with per-ET weights for round-robin priority
+    let is_round_robin_group = team_id.is_some() && scheduling_mode == "round_robin";
     let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
-        let gid = group_id.as_deref().unwrap();
+        let tid = team_id.as_deref().unwrap();
         let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT u.id, u.name, u.avatar_path \
-             FROM users u JOIN user_groups ug ON ug.user_id = u.id \
-             WHERE ug.group_id = ? AND u.enabled = 1 \
+             FROM users u JOIN team_members tm ON tm.user_id = u.id \
+             WHERE tm.team_id = ? AND u.enabled = 1 \
              ORDER BY u.name",
         )
-        .bind(gid)
+        .bind(tid)
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -2740,7 +2736,7 @@ async fn edit_event_type_form(
             form_reminder_minutes => reminder_min.unwrap_or(0),
             form_max_additional_guests => max_additional_guests,
             form_scheduling_mode => scheduling_mode,
-            is_group => group_id.is_some(),
+            is_group => team_id.is_some(),
             is_round_robin_group => is_round_robin_group,
             priority_members => members_ctx,
             error => "",
@@ -2783,7 +2779,7 @@ async fn update_event_type(
 
     let new_slug = form.slug.trim().to_lowercase().replace(' ', "-");
     let requires_confirmation = form.requires_confirmation.as_deref() == Some("on");
-    // "internal" visibility is only allowed for group event types; personal edit never has a group
+    // "internal" visibility is only allowed for team event types; personal edit never has a team
     let visibility = match form.visibility.as_deref().unwrap_or("public") {
         "internal" => "private".to_string(),
         other => other.to_string(),
@@ -2966,11 +2962,11 @@ async fn update_group_event_type_member_priority(
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
 
-    // Resolve event type via group membership
+    // Resolve event type via team membership
     let et: Option<(String,)> = if is_admin {
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -2979,8 +2975,8 @@ async fn update_group_event_type_member_priority(
     } else {
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
-             JOIN user_groups ug ON ug.group_id = et.group_id \
-             WHERE ug.user_id = ? AND et.slug = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id \
+             WHERE tm.user_id = ? AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -4804,11 +4800,11 @@ async fn invite_management_page(
         Option<String>,
     )> = sqlx::query_as(
         "SELECT et.id, et.title, et.slug,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END,
-                CASE WHEN et.group_id IS NULL THEN u.username ELSE NULL END,
-                CASE WHEN et.group_id IS NOT NULL THEN g.name ELSE u.name END
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                CASE WHEN et.team_id IS NULL THEN u.username ELSE NULL END,
+                CASE WHEN et.team_id IS NOT NULL THEN t.name ELSE u.name END
          FROM event_types et
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
          WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
@@ -4884,7 +4880,7 @@ async fn invite_management_page(
             event_type_id => et_id,
             event_type_title => et_title,
             event_type_slug => et_slug,
-            group_slug => group_slug,
+            team_slug => group_slug,
             username => username,
             owner_name => owner_name,
             invites => invites_ctx,
@@ -4909,10 +4905,10 @@ async fn send_invite(
     // Verify event type exists and is private
     let et: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT et.id, et.title,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END,
-                CASE WHEN et.group_id IS NULL THEN u.username ELSE NULL END
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                CASE WHEN et.team_id IS NULL THEN u.username ELSE NULL END
          FROM event_types et
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
          WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
@@ -4922,7 +4918,7 @@ async fn send_invite(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_title, group_slug, username) = match et {
+    let (et_id, et_title, team_slug, username) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
@@ -4972,8 +4968,8 @@ async fn send_invite(
                 .unwrap_or(None);
 
         if let Some(slug) = et_slug {
-            let invite_url = if let Some(gs) = &group_slug {
-                format!("{}/team/{}/{}?invite={}", base_url, gs, slug, token)
+            let invite_url = if let Some(ts) = &team_slug {
+                format!("{}/team/{}/{}?invite={}", base_url, ts, slug, token)
             } else if let Some(un) = &username {
                 format!("{}/u/{}/{}?invite={}", base_url, un, slug, token)
             } else {
@@ -5055,10 +5051,10 @@ async fn generate_quick_link(
 
     let et: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT et.id, et.slug,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END,
-                CASE WHEN et.group_id IS NULL THEN u.username ELSE NULL END
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                CASE WHEN et.team_id IS NULL THEN u.username ELSE NULL END
          FROM event_types et
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
          WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
@@ -5068,7 +5064,7 @@ async fn generate_quick_link(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_slug, group_slug, username) = match et {
+    let (et_id, et_slug, team_slug, username) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/organization").into_response(),
     };
@@ -5093,8 +5089,8 @@ async fn generate_quick_link(
     tracing::info!(event_type = %et_id, created_by = %auth_user.user.email, "quick invite link generated");
 
     let base_url = std::env::var("CALRS_BASE_URL").unwrap_or_default();
-    let invite_url = if let Some(gs) = &group_slug {
-        format!("{}/team/{}/{}?invite={}", base_url, gs, et_slug, token)
+    let invite_url = if let Some(ts) = &team_slug {
+        format!("{}/team/{}/{}?invite={}", base_url, ts, et_slug, token)
     } else if let Some(un) = &username {
         format!("{}/u/{}/{}?invite={}", base_url, un, et_slug, token)
     } else {
@@ -5292,13 +5288,13 @@ async fn new_group_event_type_form(
     let is_admin = user.role == "admin";
 
     let groups: Vec<(String, String)> = if is_admin {
-        sqlx::query_as("SELECT g.id, g.name FROM groups g ORDER BY g.name")
+        sqlx::query_as("SELECT t.id, t.name FROM teams t ORDER BY t.name")
             .fetch_all(&state.pool)
             .await
             .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? ORDER BY t.name",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -5308,9 +5304,9 @@ async fn new_group_event_type_form(
 
     if groups.is_empty() {
         return Html(if is_admin {
-            "No groups exist yet.".to_string()
+            "No teams exist yet.".to_string()
         } else {
-            "You don't belong to any groups.".to_string()
+            "You don't belong to any teams.".to_string()
         });
     }
 
@@ -5330,7 +5326,7 @@ async fn new_group_event_type_form(
             editing => false,
             is_group => true,
             groups => groups_ctx,
-            form_group_id => groups.first().map(|(id, _)| id.as_str()).unwrap_or(""),
+            form_team_id => groups.first().map(|(id, _)| id.as_str()).unwrap_or(""),
             form_title => "",
             form_slug => "",
             form_description => "",
@@ -5364,25 +5360,25 @@ async fn create_group_event_type(
     }
     let user = &auth_user.user;
 
-    let group_id = match form.group_id.as_deref().filter(|s| !s.trim().is_empty()) {
-        Some(gid) => gid.to_string(),
+    let team_id = match form.team_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(tid) => tid.to_string(),
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
     let is_admin = user.role == "admin";
 
-    // Verify user belongs to this group (admins can manage any group)
+    // Verify user belongs to this team (admins can manage any team)
     if !is_admin {
         let membership: Option<(String,)> =
-            sqlx::query_as("SELECT group_id FROM user_groups WHERE user_id = ? AND group_id = ?")
+            sqlx::query_as("SELECT team_id FROM team_members WHERE user_id = ? AND team_id = ?")
                 .bind(&user.id)
-                .bind(&group_id)
+                .bind(&team_id)
                 .fetch_optional(&state.pool)
                 .await
                 .unwrap_or(None);
 
         if membership.is_none() {
-            return Html("You don't belong to this group.".to_string()).into_response();
+            return Html("You don't belong to this team.".to_string()).into_response();
         }
     }
 
@@ -5404,17 +5400,17 @@ async fn create_group_event_type(
         return Html("Slug is required.".to_string()).into_response();
     }
 
-    // Check uniqueness within the group
+    // Check uniqueness within the team
     let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM event_types WHERE group_id = ? AND slug = ?")
-            .bind(&group_id)
+        sqlx::query_as("SELECT id FROM event_types WHERE team_id = ? AND slug = ?")
+            .bind(&team_id)
             .bind(&slug)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
     if existing.is_some() {
-        return Html("An event type with this slug already exists in this group.".to_string())
+        return Html("An event type with this slug already exists in this team.".to_string())
             .into_response();
     }
 
@@ -5427,7 +5423,7 @@ async fn create_group_event_type(
         .filter(|s| !s.trim().is_empty());
 
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, group_id, created_by_user_id)
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
@@ -5442,7 +5438,7 @@ async fn create_group_event_type(
     .bind(requires_confirmation as i32)
     .bind(location_type)
     .bind(location_value)
-    .bind(&group_id)
+    .bind(&team_id)
     .bind(&user.id)
     .execute(&state.pool)
     .await;
@@ -5501,9 +5497,9 @@ async fn edit_group_event_type_form(
         String,
     )> = if is_admin {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.group_id, et.visibility, et.max_additional_guests, et.scheduling_mode
+            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.team_id, et.visibility, et.max_additional_guests, et.scheduling_mode
              FROM event_types et
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -5511,10 +5507,10 @@ async fn edit_group_event_type_form(
         .unwrap_or(None)
     } else {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.group_id, et.visibility, et.max_additional_guests, et.scheduling_mode
+            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.team_id, et.visibility, et.max_additional_guests, et.scheduling_mode
              FROM event_types et
-             JOIN user_groups ug ON ug.group_id = et.group_id
-             WHERE ug.user_id = ? AND et.slug = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id
+             WHERE tm.user_id = ? AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -5536,7 +5532,7 @@ async fn edit_group_event_type_form(
         loc_type,
         loc_value,
         reminder_min,
-        group_id,
+        team_id,
         visibility,
         max_additional_guests,
         scheduling_mode,
@@ -5581,16 +5577,16 @@ async fn edit_group_event_type_form(
         .cloned()
         .unwrap_or_else(|| ("09:00".to_string(), "17:00".to_string()));
 
-    // Fetch group members with per-ET weights for round-robin priority
+    // Fetch team members with per-ET weights for round-robin priority
     let is_round_robin_group = scheduling_mode == "round_robin";
     let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
         let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT u.id, u.name, u.avatar_path \
-             FROM users u JOIN user_groups ug ON ug.user_id = u.id \
-             WHERE ug.group_id = ? AND u.enabled = 1 \
+             FROM users u JOIN team_members tm ON tm.user_id = u.id \
+             WHERE tm.team_id = ? AND u.enabled = 1 \
              ORDER BY u.name",
         )
-        .bind(&group_id)
+        .bind(&team_id)
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -5677,9 +5673,9 @@ async fn update_group_event_type(
 
     let et: Option<(String, String)> = if is_admin {
         sqlx::query_as(
-            "SELECT et.id, et.group_id
+            "SELECT et.id, et.team_id
              FROM event_types et
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -5687,10 +5683,10 @@ async fn update_group_event_type(
         .unwrap_or(None)
     } else {
         sqlx::query_as(
-            "SELECT et.id, et.group_id
+            "SELECT et.id, et.team_id
              FROM event_types et
-             JOIN user_groups ug ON ug.group_id = et.group_id
-             WHERE ug.user_id = ? AND et.slug = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id
+             WHERE tm.user_id = ? AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -5699,7 +5695,7 @@ async fn update_group_event_type(
         .unwrap_or(None)
     };
 
-    let (et_id, group_id) = match et {
+    let (et_id, team_id) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
@@ -5708,11 +5704,11 @@ async fn update_group_event_type(
     let requires_confirmation = form.requires_confirmation.as_deref() == Some("on");
     let visibility = form.visibility.as_deref().unwrap_or("public").to_string();
 
-    // Check slug uniqueness within the group if changed
+    // Check slug uniqueness within the team if changed
     if new_slug != slug {
         let existing: Option<(String,)> =
-            sqlx::query_as("SELECT id FROM event_types WHERE group_id = ? AND slug = ?")
-                .bind(&group_id)
+            sqlx::query_as("SELECT id FROM event_types WHERE team_id = ? AND slug = ?")
+                .bind(&team_id)
                 .bind(&new_slug)
                 .fetch_optional(&state.pool)
                 .await
@@ -5722,7 +5718,7 @@ async fn update_group_event_type(
             return render_event_type_form_error(
                 &state,
                 &auth_user,
-                "An event type with this slug already exists in this group.",
+                "An event type with this slug already exists in this team.",
                 &form,
                 true,
             )
@@ -5810,7 +5806,7 @@ async fn toggle_group_event_type(
     if is_admin {
         let _ = sqlx::query(
             "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND group_id IS NOT NULL",
+             WHERE slug = ? AND team_id IS NOT NULL",
         )
         .bind(&slug)
         .execute(&state.pool)
@@ -5818,7 +5814,7 @@ async fn toggle_group_event_type(
     } else {
         let _ = sqlx::query(
             "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND group_id IS NOT NULL AND group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?)",
+             WHERE slug = ? AND team_id IS NOT NULL AND team_id IN (SELECT team_id FROM team_members WHERE user_id = ?)",
         )
         .bind(&slug)
         .bind(&user.id)
@@ -5848,7 +5844,7 @@ async fn delete_group_event_type(
     let et: Option<(String,)> = if is_admin {
         sqlx::query_as(
             "SELECT et.id FROM event_types et
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -5857,8 +5853,8 @@ async fn delete_group_event_type(
     } else {
         sqlx::query_as(
             "SELECT et.id FROM event_types et
-             JOIN user_groups ug ON ug.group_id = et.group_id
-             WHERE et.slug = ? AND ug.user_id = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id
+             WHERE et.slug = ? AND tm.user_id = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .bind(&user.id)
@@ -5949,36 +5945,36 @@ async fn group_profile(
     State(state): State<Arc<AppState>>,
     Path(group_slug): Path<String>,
 ) -> impl IntoResponse {
-    let group: Option<(String, String, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, name, description, avatar_path FROM groups WHERE slug = ?")
+    let team: Option<(String, String, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT id, name, description, avatar_path FROM teams WHERE slug = ?")
             .bind(&group_slug)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let (group_id, group_name, group_description, group_avatar_path) = match group {
-        Some(g) => g,
-        None => return Html("Group not found.".to_string()),
+    let (team_id, team_name, team_description, team_avatar_path) = match team {
+        Some(t) => t,
+        None => return Html("Team not found.".to_string()),
     };
 
     let event_types: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(
         "SELECT et.slug, et.title, et.description, et.duration_min
          FROM event_types et
-         WHERE et.group_id = ? AND et.enabled = 1 AND et.visibility = 'public'
+         WHERE et.team_id = ? AND et.enabled = 1 AND et.visibility = 'public'
          ORDER BY et.created_at",
     )
-    .bind(&group_id)
+    .bind(&team_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
 
     let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT u.id, u.name, u.avatar_path FROM users u \
-         JOIN user_groups ug ON ug.user_id = u.id \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
+         JOIN team_members tm ON tm.user_id = u.id \
+         WHERE tm.team_id = ? AND u.enabled = 1 \
          ORDER BY u.name",
     )
-    .bind(&group_id)
+    .bind(&team_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -5995,7 +5991,7 @@ async fn group_profile(
         })
         .collect();
 
-    let tmpl = match state.templates.get_template("group_profile.html") {
+    let tmpl = match state.templates.get_template("team_profile.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
     };
@@ -6009,12 +6005,12 @@ async fn group_profile(
 
     Html(
         tmpl.render(context! {
-            group_id => group_id,
-            group_name => group_name,
-            group_slug => group_slug,
-            group_description => group_description,
-            group_has_avatar => group_avatar_path.is_some(),
-            group_initials => compute_initials(&group_name),
+            team_id => team_id,
+            team_name => team_name,
+            team_slug => group_slug,
+            team_description => team_description,
+            team_has_avatar => team_avatar_path.is_some(),
+            team_initials => compute_initials(&team_name),
             members => members_ctx,
             event_types => et_ctx,
             company_link => state.company_link.read().await.clone(),
@@ -6029,10 +6025,10 @@ async fn show_group_slots(
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
     let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, String)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, g.name, et.visibility, et.scheduling_mode
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, t.name, et.visibility, et.scheduling_mode
          FROM event_types et
-         JOIN groups g ON g.id = et.group_id
-         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+         JOIN teams t ON t.id = et.team_id
+         WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
     )
     .bind(&group_slug)
     .bind(&slug)
@@ -6051,7 +6047,7 @@ async fn show_group_slots(
         min_notice,
         loc_type,
         loc_value,
-        group_name,
+        team_name,
         visibility,
         scheduling_mode,
     ) = match et {
@@ -6106,25 +6102,25 @@ async fn show_group_slots(
         month_year,
     ) = build_month_params(year, month, host_tz, guest_tz);
 
-    // Build group busy source: fetch busy times per member
+    // Build team busy source: fetch busy times per member
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
 
-    let group_id: Option<String> =
-        sqlx::query_scalar("SELECT group_id FROM event_types WHERE id = ?")
+    let team_id: Option<String> =
+        sqlx::query_scalar("SELECT team_id FROM event_types WHERE id = ?")
             .bind(&et_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None)
             .flatten();
-    let busy = if let Some(ref gid) = group_id {
+    let busy = if let Some(ref tid) = team_id {
         let members: Vec<(String,)> = sqlx::query_as(
-            "SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id \
+            "SELECT u.id FROM users u JOIN team_members tm ON tm.user_id = u.id \
              LEFT JOIN event_type_member_weights etw ON etw.user_id = u.id AND etw.event_type_id = ? \
-             WHERE ug.group_id = ? AND u.enabled = 1 \
-             AND COALESCE(etw.weight, ug.weight, 1) > 0",
-        ).bind(&et_id).bind(gid).fetch_all(&state.pool).await.unwrap_or_default();
+             WHERE tm.team_id = ? AND u.enabled = 1 \
+             AND COALESCE(etw.weight, 1) > 0",
+        ).bind(&et_id).bind(tid).fetch_all(&state.pool).await.unwrap_or_default();
         // Sync all group members' calendars if stale
         for (uid,) in &members {
             crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
@@ -6220,8 +6216,8 @@ async fn show_group_slots(
                 location_type => loc_type,
                 location_value => loc_value,
             },
-            host_name => group_name,
-            group_slug => group_slug,
+            host_name => team_name,
+            team_slug => group_slug,
             days => days_ctx,
             available_dates => available_dates,
             month_label => month_label,
@@ -6247,10 +6243,10 @@ async fn show_group_book_form(
     Query(query): Query<BookQuery>,
 ) -> impl IntoResponse {
     let et: Option<(String, String, String, Option<String>, i32, String, Option<String>, String, String, i32)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, g.name, et.visibility, et.max_additional_guests
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, t.name, et.visibility, et.max_additional_guests
          FROM event_types et
-         JOIN groups g ON g.id = et.group_id
-         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+         JOIN teams t ON t.id = et.team_id
+         WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
     )
     .bind(&group_slug)
     .bind(&slug)
@@ -6266,7 +6262,7 @@ async fn show_group_book_form(
         duration,
         loc_type,
         loc_value,
-        group_name,
+        team_name,
         visibility,
         max_additional_guests,
     ) = match et {
@@ -6342,8 +6338,8 @@ async fn show_group_book_form(
                 location_type => loc_type,
                 location_value => loc_value,
             },
-            host_name => group_name,
-            group_slug => group_slug,
+            host_name => team_name,
+            team_slug => group_slug,
             date => query.date,
             date_label => date_label,
             time_start => query.time,
@@ -6390,10 +6386,10 @@ async fn handle_group_booking(
     }
 
     let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>, String, Option<i32>, String, i32)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.group_id, et.reminder_minutes, et.visibility, et.max_additional_guests
+        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.team_id, et.reminder_minutes, et.visibility, et.max_additional_guests
          FROM event_types et
-         JOIN groups g ON g.id = et.group_id
-         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+         JOIN teams t ON t.id = et.team_id
+         WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
     )
     .bind(&group_slug)
     .bind(&slug)
@@ -6412,7 +6408,7 @@ async fn handle_group_booking(
         requires_confirmation,
         loc_type,
         loc_value,
-        group_id,
+        team_id,
         reminder_min,
         visibility,
         max_additional_guests,
@@ -6517,7 +6513,7 @@ async fn handle_group_booking(
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let assigned = pick_group_member(
         &state.pool,
-        &group_id,
+        &team_id,
         &et_id,
         slot_start,
         slot_end,
@@ -7464,11 +7460,11 @@ fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
     None
 }
 
-/// Pick an available group member for a booking slot.
+/// Pick an available team member for a booking slot.
 /// Returns (user_id, name, email) of the member with fewest recent bookings.
 async fn pick_group_member(
     pool: &SqlitePool,
-    group_id: &str,
+    team_id: &str,
     event_type_id: &str,
     slot_start: NaiveDateTime,
     slot_end: NaiveDateTime,
@@ -7479,18 +7475,18 @@ async fn pick_group_member(
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-    // Fetch members with per-event-type weight (fallback to group-level, then default 1)
+    // Fetch members with per-event-type weight (fallback to default 1)
     // weight=0 means excluded from this event type
     let members: Vec<(String, String, String, i64)> = sqlx::query_as(
         "SELECT u.id, u.name, COALESCE(u.booking_email, u.email), \
-         COALESCE(etw.weight, ug.weight, 1) \
-         FROM users u JOIN user_groups ug ON ug.user_id = u.id \
+         COALESCE(etw.weight, 1) \
+         FROM users u JOIN team_members tm ON tm.user_id = u.id \
          LEFT JOIN event_type_member_weights etw ON etw.user_id = u.id AND etw.event_type_id = ? \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
-         AND COALESCE(etw.weight, ug.weight, 1) > 0",
+         WHERE tm.team_id = ? AND u.enabled = 1 \
+         AND COALESCE(etw.weight, 1) > 0",
     )
     .bind(event_type_id)
-    .bind(group_id)
+    .bind(team_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -9023,7 +9019,7 @@ async fn troubleshoot(
         "SELECT et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
-         WHERE a.user_id = ? AND et.group_id IS NULL AND et.enabled = 1
+         WHERE a.user_id = ? AND et.team_id IS NULL AND et.enabled = 1
          ORDER BY et.created_at",
     )
     .bind(&user.id)
