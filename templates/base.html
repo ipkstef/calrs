@@ -33,7 +33,7 @@
       --surface-hover: #fafafa;
       --text: #18181b;
       --text-secondary: #52525b;
-      --text-muted: #a1a1aa;
+      --text-muted: #6b7280;
       --border: #e4e4e7;
       --border-hover: #a1a1aa;
       --accent: #2563eb;
@@ -56,7 +56,7 @@
       --surface-hover: #27272a;
       --text: #fafafa;
       --text-secondary: #a1a1aa;
-      --text-muted: #71717a;
+      --text-muted: #9ca3af;
       --border: #27272a;
       --border-hover: #52525b;
       --accent: #3b82f6;
@@ -70,6 +70,7 @@
       --shadow: 0 1px 3px rgba(0,0,0,0.3);
       --shadow-lg: 0 4px 6px rgba(0,0,0,0.25);
     }
+    html.dark .badge-warning { background: rgba(234,179,8,0.15); color: #fbbf24; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -214,6 +215,10 @@
       transform: scale(0.97);
       box-shadow: none;
     }
+    .slot-btn:focus-visible, .slot-pill:focus-visible, .btn:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
 
     /* Form */
     .form-group { margin-bottom: 1.25rem; }
@@ -287,7 +292,7 @@
     .empty {
       color: var(--text-muted);
       text-align: center;
-      padding: 2.5rem 1rem;
+      padding: 2rem 1rem;
     }
     .empty-icon {
       font-size: 2.5rem;
@@ -371,28 +376,36 @@
     .badge {
       display: inline-block;
       font-size: 0.7rem;
-      font-weight: 600;
+      font-weight: 500;
       padding: 0.15rem 0.5rem;
-      border-radius: 9999px;
-      letter-spacing: 0.02em;
+      border-radius: 999px;
       vertical-align: middle;
     }
-    .badge-disabled {
-      background: var(--error-bg);
-      color: var(--error-text);
+    .badge-success {
+      background: var(--success-bg, rgba(34,197,94,0.1));
+      color: var(--success, #16a34a);
     }
-    .badge-pending {
-      background: rgba(245, 158, 11, 0.12);
-      color: #d97706;
+    .badge-warning {
+      background: rgba(234,179,8,0.1);
+      color: #a16207;
     }
-    .badge-confirmed {
-      background: rgba(22, 163, 74, 0.1);
-      color: var(--success);
+    .badge-info {
+      background: var(--accent-subtle, rgba(99,102,241,0.1));
+      color: var(--accent);
     }
-    .badge-requires {
-      background: rgba(245, 158, 11, 0.12);
-      color: #d97706;
+    .badge-muted {
+      background: var(--surface-hover);
+      color: var(--text-muted);
     }
+    .badge-error {
+      background: rgba(239,68,68,0.1);
+      color: var(--error-text, #dc2626);
+    }
+    /* Legacy aliases */
+    .badge-disabled { background: var(--error-bg); color: var(--error-text); }
+    .badge-pending { background: rgba(234,179,8,0.1); color: #a16207; }
+    .badge-confirmed { background: var(--success-bg, rgba(34,197,94,0.1)); color: var(--success); }
+    .badge-requires { background: rgba(234,179,8,0.1); color: #a16207; }
 
     /* Checkmark animation */
     @keyframes checkPop {
@@ -408,6 +421,27 @@
   {% block head %}{% endblock %}
 </head>
 <body>
+  <!-- Global sync loader overlay -->
+  <div id="calrs-sync-loader" style="display:none; position:fixed; inset:0; z-index:10000; background:var(--bg); align-items:center; justify-content:center; flex-direction:column; gap:1.25rem;">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: calrs-spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+    <div style="font-size:1.125rem; font-weight:600; color:var(--text); text-align:center;">Checking availability</div>
+    <div style="font-size:0.875rem; color:var(--text-muted); text-align:center;">Please wait, loading the latest calendar data...</div>
+  </div>
+  <style>
+    @keyframes calrs-spin { to { transform: rotate(360deg); } }
+  </style>
+  <script>
+  var calrsLoader = {
+    show: function() {
+      var el = document.getElementById('calrs-sync-loader');
+      if (el) el.style.display = 'flex';
+    },
+    hide: function() {
+      var el = document.getElementById('calrs-sync-loader');
+      if (el) el.style.display = 'none';
+    }
+  };
+  </script>
   {% if impersonating %}
   <div style="position: fixed; top: 0; left: 0; right: 0; z-index: 9999; background: #f59e0b; color: #000; text-align: center; padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 0.75rem;">
     <span>You are impersonating <strong>{{ impersonating_name }}</strong></span>
@@ -506,6 +540,35 @@
     if (getTheme() === 'system') apply();
   });
 })();
+</script>
+<script>
+// Show sync loader on links/forms with data-calrs-sync attribute
+(function() {
+  document.addEventListener('click', function(e) {
+    var link = e.target.closest('a[data-calrs-sync]');
+    if (link && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      calrsLoader.show();
+    }
+  });
+  document.addEventListener('submit', function(e) {
+    var form = e.target.closest('form[data-calrs-sync]');
+    if (form) calrsLoader.show();
+  });
+  document.addEventListener('change', function(e) {
+    var el = e.target.closest('[data-calrs-sync-onchange]');
+    if (el) calrsLoader.show();
+  });
+})();
+</script>
+<script>
+window.calrsFormat12h = function(time24) {
+  var parts = time24.split(':');
+  var h = parseInt(parts[0], 10);
+  var m = parts[1];
+  var suffix = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return h + ':' + m + ' ' + suffix;
+};
 </script>
 </body>
 </html>

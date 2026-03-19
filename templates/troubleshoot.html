@@ -6,26 +6,27 @@
 {% if no_event_types %}
 <div class="card">
   <h1>Troubleshoot availability</h1>
-  <p class="empty">No event types found. Create one from the dashboard first.</p>
+  <p class="empty">No event types found. <a href="/dashboard/event-types/new" style="color: var(--accent); text-decoration: none;">Create one</a> to start troubleshooting availability.</p>
 </div>
 {% else %}
 <div class="card">
   <h1>Troubleshoot availability</h1>
   <p class="subtitle">See why time slots are available or blocked for <strong>{{ et_title }}</strong> ({{ duration }}min{% if buf_before %}, {{ buf_before }}min buffer before{% endif %}{% if buf_after %}, {{ buf_after }}min buffer after{% endif %}{% if min_notice %}, {{ min_notice }}min notice{% endif %}).</p>
 
-  <form method="get" action="/dashboard/troubleshoot" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 1rem 0;">
-    <select name="event_type" onchange="this.form.submit()" style="padding: 0.375rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text);">
+  <form id="troubleshoot-form" method="get" action="/dashboard/troubleshoot" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 1rem 0;">
+    <select name="event_type" style="padding: 0.375rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text);">
       {% for et in event_types %}
         <option value="{{ et.slug }}" {% if et.selected %}selected{% endif %}>{{ et.title }}</option>
       {% endfor %}
     </select>
     <div style="display: flex; align-items: center; gap: 0.375rem;">
       <a href="/dashboard/troubleshoot?date={{ prev_date }}&event_type={{ selected_slug }}" class="slot-btn" style="text-decoration: none; padding: 0.375rem 0.625rem;">&larr;</a>
-      <input type="date" name="date" value="{{ selected_date }}" onchange="this.form.submit()" style="padding: 0.375rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text);">
+      <input type="date" name="date" value="{{ selected_date }}" style="padding: 0.375rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text);">
       <a href="/dashboard/troubleshoot?date={{ next_date }}&event_type={{ selected_slug }}" class="slot-btn" style="text-decoration: none; padding: 0.375rem 0.625rem;">&rarr;</a>
     </div>
   </form>
 
+  <div id="troubleshoot-content">
   <p style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">{{ date_label }}</p>
 
   {% if date_is_blocked is defined and date_is_blocked %}
@@ -97,6 +98,80 @@
   <p style="font-size: 0.85rem; color: var(--text-muted);">No blocked slots during availability hours. All times are bookable.</p>
     {% endif %}
   {% endif %}
+  </div>{# troubleshoot-content #}
 </div>
+
+<script>
+(function() {
+  var content = document.getElementById('troubleshoot-content');
+  if (!content) return;
+
+  function loadPage(url) {
+    content.style.opacity = '0.5';
+    content.style.transition = 'opacity 0.15s';
+    fetch(url).then(function(r) { return r.text(); }).then(function(html) {
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(html, 'text/html');
+      var newContent = doc.getElementById('troubleshoot-content');
+      if (newContent) {
+        content.innerHTML = newContent.innerHTML;
+        content.style.opacity = '1';
+      }
+      // Update controls from the new page
+      var newForm = doc.getElementById('troubleshoot-form');
+      if (newForm) {
+        // Update prev/next links
+        var links = document.querySelectorAll('#troubleshoot-form .slot-btn[href]');
+        var newLinks = newForm.querySelectorAll('.slot-btn[href]');
+        links.forEach(function(l, i) { if (newLinks[i]) l.href = newLinks[i].href; });
+        // Update date input
+        var dateInput = document.querySelector('input[name="date"]');
+        var newDate = newForm.querySelector('input[name="date"]');
+        if (dateInput && newDate) dateInput.value = newDate.value;
+        // Update subtitle
+        var subtitle = document.querySelector('.subtitle');
+        var newSub = doc.querySelector('.subtitle');
+        if (subtitle && newSub) subtitle.innerHTML = newSub.innerHTML;
+      }
+      history.pushState(null, '', url);
+    }).catch(function() {
+      window.location.href = url;
+    });
+  }
+
+  // Intercept prev/next links
+  document.addEventListener('click', function(e) {
+    var link = e.target.closest('a.slot-btn');
+    if (link && link.closest('#troubleshoot-form')) {
+      e.preventDefault();
+      loadPage(link.href);
+    }
+  });
+
+  // Intercept date change
+  var dateInput = document.querySelector('input[name="date"]');
+  if (dateInput) {
+    dateInput.addEventListener('change', function() {
+      var url = '/dashboard/troubleshoot?date=' + this.value + '&event_type=' + document.querySelector('select[name="event_type"]').value;
+      loadPage(url);
+    });
+  }
+
+  // Intercept event type change
+  var etSelect = document.querySelector('select[name="event_type"]');
+  if (etSelect) {
+    etSelect.addEventListener('change', function() {
+      var date = document.querySelector('input[name="date"]').value;
+      var url = '/dashboard/troubleshoot?date=' + date + '&event_type=' + this.value;
+      loadPage(url);
+    });
+  }
+
+  // Handle browser back/forward
+  window.addEventListener('popstate', function() {
+    loadPage(window.location.href);
+  });
+})();
+</script>
 {% endif %}
 {% endblock dashboard_content %}

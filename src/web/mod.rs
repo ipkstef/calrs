@@ -10,7 +10,6 @@ use chrono::{
 };
 use chrono_tz::Tz;
 use minijinja::{context, Environment};
-use serde::de;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -171,25 +170,9 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
         .await
         .unwrap_or_default();
 
-        // Team link booking reminders
-        let tl_due: Vec<(String, String, String, String, String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT tlb.id, tlb.guest_name, tlb.guest_email, COALESCE(tlb.guest_timezone, 'UTC'), tlb.start_at, tlb.end_at, tl.title, tlb.cancel_token
-             FROM team_link_bookings tlb
-             JOIN team_links tl ON tl.id = tlb.team_link_id
-             WHERE tlb.status = 'confirmed'
-               AND tlb.reminder_sent_at IS NULL
-               AND tl.reminder_minutes IS NOT NULL
-               AND tl.reminder_minutes > 0
-               AND datetime(tlb.start_at, '-' || tl.reminder_minutes || ' minutes') <= datetime('now')
-               AND datetime(tlb.start_at) > datetime('now')",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-
         let base_url = std::env::var("CALRS_BASE_URL").ok();
 
-        if due.is_empty() && tl_due.is_empty() {
+        if due.is_empty() {
             continue;
         }
 
@@ -258,101 +241,6 @@ pub async fn run_reminder_loop(pool: SqlitePool, secret_key: [u8; 32]) {
                     .await;
 
             tracing::info!(booking_id = %bid, "reminder sent");
-        }
-
-        for (
-            bid,
-            guest_name,
-            guest_email,
-            guest_timezone,
-            start_at,
-            end_at,
-            event_title,
-            cancel_token,
-        ) in &tl_due
-        {
-            let members: Vec<(String, String)> = sqlx::query_as(
-                "SELECT u.name, COALESCE(u.booking_email, u.email)
-                 FROM users u
-                 JOIN team_link_members tlm ON tlm.user_id = u.id
-                 JOIN team_link_bookings tlb ON tlb.team_link_id = tlm.team_link_id
-                 WHERE tlb.id = ? AND u.enabled = 1",
-            )
-            .bind(bid)
-            .fetch_all(&pool)
-            .await
-            .unwrap_or_default();
-
-            let host_name = members
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let date = start_at.get(..10).unwrap_or(start_at).to_string();
-            let start_time = extract_time_24h(start_at);
-            let end_time = extract_time_24h(end_at);
-
-            for (member_name, member_email) in &members {
-                let details = crate::email::BookingDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone: guest_timezone.clone(),
-                    host_name: member_name.clone(),
-                    host_email: member_email.clone(),
-                    uid: String::new(),
-                    notes: None,
-                    location: None,
-                    reminder_minutes: None,
-                    additional_attendees: vec![],
-                };
-                let _ = crate::email::send_host_reminder(&smtp_config, &details).await;
-            }
-
-            if let Some((_, first_email)) = members.first() {
-                let details = crate::email::BookingDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone: guest_timezone.clone(),
-                    host_name: host_name.clone(),
-                    host_email: first_email.clone(),
-                    uid: String::new(),
-                    notes: None,
-                    location: None,
-                    reminder_minutes: None,
-                    additional_attendees: vec![],
-                };
-
-                let guest_cancel_url = cancel_token.as_ref().and_then(|t| {
-                    base_url
-                        .as_ref()
-                        .map(|base| format!("{}/booking/cancel/{}", base.trim_end_matches('/'), t))
-                });
-
-                let _ = crate::email::send_guest_reminder(
-                    &smtp_config,
-                    &details,
-                    guest_cancel_url.as_deref(),
-                )
-                .await;
-            }
-
-            let _ = sqlx::query(
-                "UPDATE team_link_bookings SET reminder_sent_at = datetime('now') WHERE id = ?",
-            )
-            .bind(bid)
-            .execute(&pool)
-            .await;
-
-            tracing::info!(booking_id = %bid, "team link reminder sent");
         }
 
         // Background sync: pick the stalest enabled source and sync it.
@@ -543,14 +431,14 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route("/dashboard", get(dashboard))
         .route("/dashboard/event-types", get(dashboard_event_types))
         .route("/dashboard/bookings", get(dashboard_bookings))
+        .route("/dashboard/teams", get(dashboard_teams))
+        .route(
+            "/dashboard/teams/new",
+            get(show_team_form).post(create_team),
+        )
         .route("/dashboard/sources", get(dashboard_sources))
         .route("/dashboard/organization", get(dashboard_organization))
-        .route("/dashboard/team-links", get(dashboard_team_links_page))
         .route("/dashboard/bookings/{id}/cancel", post(cancel_booking))
-        .route(
-            "/dashboard/team-bookings/{id}/cancel",
-            post(cancel_team_link_booking),
-        )
         .route("/dashboard/bookings/{id}/confirm", post(confirm_booking))
         .route(
             "/dashboard/event-types/new",
@@ -617,20 +505,21 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
         .route("/dashboard/settings/avatar", post(upload_avatar))
         .route("/dashboard/settings/avatar/delete", post(delete_avatar))
         .route("/avatar/{user_id}", get(serve_avatar))
-        // Group settings & avatar
+        // Team settings & avatar
         .route(
-            "/dashboard/groups/{group_id}/settings",
-            get(group_settings_page).post(group_settings_save),
+            "/dashboard/teams/{team_id}/settings",
+            get(team_settings_page).post(team_settings_save),
         )
         .route(
-            "/dashboard/groups/{group_id}/avatar",
-            post(upload_group_avatar),
+            "/dashboard/teams/{team_id}/avatar",
+            post(upload_team_avatar),
         )
         .route(
-            "/dashboard/groups/{group_id}/avatar/delete",
-            post(delete_group_avatar),
+            "/dashboard/teams/{team_id}/avatar/delete",
+            post(delete_team_avatar),
         )
-        .route("/group-avatar/{group_id}", get(serve_group_avatar))
+        .route("/dashboard/teams/{team_id}/delete", post(delete_team))
+        .route("/team-avatar/{team_id}", get(serve_team_avatar))
         // Troubleshoot
         .route("/dashboard/troubleshoot", get(troubleshoot))
         // Admin routes
@@ -692,38 +581,22 @@ pub async fn create_router(pool: SqlitePool, data_dir: PathBuf, secret_key: [u8;
             get(serve_font_inter_latin_ext),
         )
         // Group public routes
-        .route("/team/{group_slug}", get(group_profile))
-        .route("/team/{group_slug}/{slug}", get(show_group_slots))
+        .route("/team/{team_slug}", get(team_profile_page))
+        .route("/team/{team_slug}/{slug}", get(show_group_slots))
         .route(
-            "/team/{group_slug}/{slug}/book",
+            "/team/{team_slug}/{slug}/book",
             get(show_group_book_form).post(handle_group_booking),
         )
         // Legacy /g/ redirects
-        .route("/g/{group_slug}", get(redirect_g_to_team))
-        .route("/g/{group_slug}/{slug}", get(redirect_g_to_team_slug))
+        .route("/g/{team_slug}", get(redirect_g_to_team))
+        .route("/g/{team_slug}/{slug}", get(redirect_g_to_team_slug))
         .route(
-            "/g/{group_slug}/{slug}/book",
+            "/g/{team_slug}/{slug}/book",
             get(redirect_g_to_team_slug_book),
         )
-        // Team link management
-        .route(
-            "/dashboard/team-links/new",
-            get(new_team_link_form).post(create_team_link),
-        )
-        .route(
-            "/dashboard/team-links/{token}/edit",
-            get(edit_team_link_form).post(update_team_link),
-        )
-        .route(
-            "/dashboard/team-links/{token}/delete",
-            post(delete_team_link),
-        )
-        // Team link public routes
-        .route("/t/{token}", get(show_team_link_slots))
-        .route(
-            "/t/{token}/book",
-            get(show_team_link_book_form).post(handle_team_link_booking),
-        )
+        // Legacy team link redirects → unified teams
+        .route("/t/{token}", get(redirect_team_link_to_team))
+        .route("/t/{token}/book", get(redirect_team_link_to_team))
         // User-scoped public booking routes
         .route("/booking/approve/{token}", get(approve_booking_by_token))
         .route(
@@ -787,6 +660,45 @@ fn compute_initials(name: &str) -> String {
     }
 }
 
+/// Build OIDC groups context with member details for stacked avatars.
+async fn build_groups_ctx(
+    pool: &sqlx::SqlitePool,
+    oidc_groups: &[(String, String, i64)],
+    linked_set: &std::collections::HashSet<String>,
+) -> Vec<minijinja::Value> {
+    let mut out = Vec::new();
+    for (id, name, member_count) in oidc_groups {
+        let group_members: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT u.id, u.name, u.avatar_path FROM users u \
+             JOIN user_groups ug ON ug.user_id = u.id \
+             WHERE ug.group_id = ? AND u.enabled = 1 ORDER BY u.name LIMIT 8",
+        )
+        .bind(id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        let members_ctx: Vec<minijinja::Value> = group_members
+            .iter()
+            .map(|(uid, uname, ap)| {
+                context! {
+                    id => uid,
+                    name => uname,
+                    has_avatar => ap.is_some(),
+                    initials => compute_initials(uname),
+                }
+            })
+            .collect();
+        out.push(context! {
+            id => id,
+            name => name,
+            member_count => member_count,
+            members => members_ctx,
+            linked => linked_set.contains(id),
+        });
+    }
+    out
+}
+
 /// Build sidebar context for dashboard templates.
 fn sidebar_context(auth_user: &crate::auth::AuthUser, active: &str) -> minijinja::Value {
     let user = &auth_user.user;
@@ -824,7 +736,7 @@ async fn dashboard(
     let user = &auth_user.user;
 
     let event_type_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.group_id IS NULL")
+        sqlx::query_scalar("SELECT COUNT(*) FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.team_id IS NULL")
             .bind(&user.id)
             .fetch_one(&state.pool)
             .await
@@ -850,21 +762,25 @@ async fn dashboard(
             .await
             .unwrap_or(0);
 
-    let team_upcoming_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM team_link_bookings tlb JOIN team_links tl ON tl.id = tlb.team_link_id JOIN team_link_members tlm ON tlm.team_link_id = tl.id WHERE tlm.user_id = ? AND tlb.status = 'confirmed' AND tlb.start_at >= datetime('now')")
-            .bind(&user.id)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(0);
-
-    let upcoming_count = upcoming_count + team_upcoming_count;
-
     let source_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM caldav_sources cs JOIN accounts a ON a.id = cs.account_id WHERE a.user_id = ?")
             .bind(&user.id)
             .fetch_one(&state.pool)
             .await
             .unwrap_or(0);
+
+    let team_count: i64 = if user.role == "admin" {
+        sqlx::query_scalar("SELECT COUNT(*) FROM teams")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0)
+    } else {
+        sqlx::query_scalar("SELECT COUNT(*) FROM team_members WHERE user_id = ?")
+            .bind(&user.id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0)
+    };
 
     let tmpl = match state.templates.get_template("dashboard_overview.html") {
         Ok(t) => t,
@@ -893,6 +809,8 @@ async fn dashboard(
             upcoming_count => upcoming_count,
             pending_count => pending_count,
             source_count => source_count,
+            team_count => team_count,
+            is_admin => user.role == "admin",
             pending_bookings => pending_ctx,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
@@ -915,7 +833,7 @@ async fn dashboard_event_types(
                 et.visibility
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
-         WHERE a.user_id = ? AND et.group_id IS NULL
+         WHERE a.user_id = ? AND et.team_id IS NULL
          ORDER BY et.created_at",
     )
     .bind(&user.id)
@@ -925,7 +843,20 @@ async fn dashboard_event_types(
 
     let is_admin = user.role == "admin";
 
-    let group_event_types: Vec<(
+    // Get team IDs where user has admin role (for showing edit/toggle/delete buttons)
+    let admin_team_ids: std::collections::HashSet<String> = if is_admin {
+        std::collections::HashSet::new() // global admins can manage all
+    } else {
+        let ids: Vec<(String,)> =
+            sqlx::query_as("SELECT team_id FROM team_members WHERE user_id = ? AND role = 'admin'")
+                .bind(&user.id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+        ids.into_iter().map(|(id,)| id).collect()
+    };
+
+    let team_event_types: Vec<(
         String,
         String,
         String,
@@ -939,27 +870,27 @@ async fn dashboard_event_types(
         String,
     )> = if is_admin {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, g.name, g.slug,
+            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, t.name, t.slug,
                     (SELECT COUNT(*) FROM bookings b WHERE b.event_type_id = et.id AND b.status IN ('confirmed', 'pending')) as active_bookings,
-                    et.visibility, g.id, et.scheduling_mode
+                    et.visibility, t.id, et.scheduling_mode
              FROM event_types et
-             JOIN groups g ON g.id = et.group_id
-             WHERE et.group_id IS NOT NULL
-             ORDER BY g.name, et.created_at",
+             JOIN teams t ON t.id = et.team_id
+             WHERE et.team_id IS NOT NULL
+             ORDER BY t.name, et.created_at",
         )
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, g.name, g.slug,
+            "SELECT et.id, et.slug, et.title, et.duration_min, et.enabled, t.name, t.slug,
                     (SELECT COUNT(*) FROM bookings b WHERE b.event_type_id = et.id AND b.status IN ('confirmed', 'pending')) as active_bookings,
-                    et.visibility, g.id, et.scheduling_mode
+                    et.visibility, t.id, et.scheduling_mode
              FROM event_types et
-             JOIN groups g ON g.id = et.group_id
-             JOIN user_groups ug ON ug.group_id = g.id
-             WHERE ug.user_id = ?
-             ORDER BY g.name, et.created_at",
+             JOIN teams t ON t.id = et.team_id
+             JOIN team_members tm ON tm.team_id = t.id
+             WHERE tm.user_id = ?
+             ORDER BY t.name, et.created_at",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -967,41 +898,58 @@ async fn dashboard_event_types(
         .unwrap_or_default()
     };
 
-    let user_has_groups: bool = if is_admin {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM groups")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(0)
-            > 0
-    } else {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_groups WHERE user_id = ?")
-            .bind(&user.id)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(0)
-            > 0
-    };
+    // Whether user can create new team event types (global admin or team admin of at least one team)
+    let can_create_team_et = is_admin || !admin_team_ids.is_empty();
 
     let tmpl = match state.templates.get_template("dashboard_event_types.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
     };
 
-    let et_ctx: Vec<minijinja::Value> = event_types
-        .iter()
-        .map(|(id, slug, title, duration, enabled, req_conf, active_bookings, vis)| {
-            context! { id => id, slug => slug, title => title, duration_min => duration, enabled => enabled, requires_confirmation => *req_conf != 0, active_bookings => active_bookings, visibility => vis }
-        })
-        .collect();
+    // Build a single unified list: personal event types first, then team ones
+    let mut all_et_ctx: Vec<minijinja::Value> = Vec::new();
 
-    let group_et_ctx: Vec<minijinja::Value> = group_event_types
-        .iter()
-        .map(
-            |(id, slug, title, duration, enabled, group_name, group_slug, active_bookings, vis, group_id, scheduling_mode)| {
-                context! { id => id, slug => slug, title => title, duration_min => duration, enabled => enabled, group_name => group_name, group_slug => group_slug, active_bookings => active_bookings, visibility => vis, group_id => group_id, scheduling_mode => scheduling_mode }
-            },
-        )
-        .collect();
+    for (id, slug, title, duration, enabled, req_conf, active_bookings, vis) in &event_types {
+        all_et_ctx.push(context! {
+            id => id, slug => slug, title => title, duration_min => duration,
+            enabled => enabled, requires_confirmation => *req_conf != 0,
+            active_bookings => active_bookings, visibility => vis,
+            is_team => false, can_manage => true,
+            edit_url => format!("/dashboard/event-types/{}/edit", slug),
+            toggle_url => format!("/dashboard/event-types/{}/toggle", slug),
+            delete_url => format!("/dashboard/event-types/{}/delete", slug),
+            overrides_url => format!("/dashboard/event-types/{}/overrides", slug),
+            view_url => if vis != "private" { user.username.as_ref().map(|u| format!("/u/{}/{}", u, slug)) } else { None::<String> },
+        });
+    }
+
+    for (
+        id,
+        slug,
+        title,
+        duration,
+        enabled,
+        team_name,
+        team_slug,
+        active_bookings,
+        vis,
+        team_id,
+        scheduling_mode,
+    ) in &team_event_types
+    {
+        let can_manage = is_admin || admin_team_ids.contains(team_id);
+        all_et_ctx.push(context! {
+            id => id, slug => slug, title => title, duration_min => duration,
+            enabled => enabled, active_bookings => active_bookings, visibility => vis,
+            is_team => true, team_name => team_name, team_slug => team_slug,
+            team_id => team_id, scheduling_mode => scheduling_mode, can_manage => can_manage,
+            edit_url => format!("/dashboard/group-event-types/{}/edit", slug),
+            toggle_url => format!("/dashboard/group-event-types/{}/toggle", slug),
+            delete_url => format!("/dashboard/group-event-types/{}/delete", slug),
+            overrides_url => format!("/dashboard/event-types/{}/overrides", slug),
+            view_url => if vis != "private" { Some(format!("/team/{}/{}", team_slug, slug)) } else { None::<String> },
+        });
+    }
 
     let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
 
@@ -1009,9 +957,9 @@ async fn dashboard_event_types(
         tmpl.render(context! {
             sidebar => sidebar_context(&auth_user, "event-types"),
             username => user.username,
-            event_types => et_ctx,
-            group_event_types => group_et_ctx,
-            user_has_groups => user_has_groups,
+            all_event_types => all_et_ctx,
+            has_any => !event_types.is_empty() || !team_event_types.is_empty(),
+            can_create_team_et => can_create_team_et,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })
@@ -1055,21 +1003,6 @@ async fn dashboard_bookings(
         .await
         .unwrap_or_default();
 
-    // Team link bookings where this user is a member
-    let team_bookings: Vec<(String, String, String, String, String, String)> = sqlx::query_as(
-        "SELECT tlb.id, tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title
-         FROM team_link_bookings tlb
-         JOIN team_links tl ON tl.id = tlb.team_link_id
-         JOIN team_link_members tlm ON tlm.team_link_id = tl.id
-         WHERE tlm.user_id = ? AND tlb.status = 'confirmed' AND tlb.start_at >= datetime('now')
-         ORDER BY tlb.start_at
-         LIMIT 50",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
     let tmpl = match state.templates.get_template("dashboard_bookings.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -1082,39 +1015,18 @@ async fn dashboard_bookings(
         })
         .collect();
 
-    // Merge regular + team link bookings, sorted by start_at
-    // Tuple: (id, name, email, start, end, title, is_team, awaiting_reschedule)
-    let mut all_bookings: Vec<(String, String, String, String, String, String, bool, bool)> =
-        upcoming_bookings
-            .into_iter()
-            .map(|(id, name, email, start, end, title, resched)| {
-                (id, name, email, start, end, title, false, resched != 0)
-            })
-            .chain(
-                team_bookings
-                    .into_iter()
-                    .map(|(id, name, email, start, end, title)| {
-                        (id, name, email, start, end, title, true, false)
-                    }),
-            )
-            .collect();
-    all_bookings.sort_by(|a, b| a.3.cmp(&b.3));
-
-    let bookings_ctx: Vec<minijinja::Value> = all_bookings
+    let bookings_ctx: Vec<minijinja::Value> = upcoming_bookings
         .iter()
-        .map(
-            |(id, name, email, start, end, title, is_team, awaiting_reschedule)| {
-                context! {
-                    id => id,
-                    guest_name => name,
-                    guest_email => email,
-                    start_at => format_booking_range(start, end),
-                    event_title => title,
-                    is_team_link => *is_team,
-                    awaiting_reschedule => *awaiting_reschedule,
-                }
-            },
-        )
+        .map(|(id, name, email, start, end, title, resched)| {
+            context! {
+                id => id,
+                guest_name => name,
+                guest_email => email,
+                start_at => format_booking_range(start, end),
+                event_title => title,
+                awaiting_reschedule => *resched != 0,
+            }
+        })
         .collect();
 
     let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
@@ -1126,6 +1038,433 @@ async fn dashboard_bookings(
             bookings => bookings_ctx,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+// --- Dashboard: Teams ---
+
+async fn dashboard_teams(
+    State(state): State<Arc<AppState>>,
+    auth_user: crate::auth::AuthUser,
+) -> impl IntoResponse {
+    let user = &auth_user.user;
+    let is_admin = user.role == "admin";
+
+    // For non-admin users, also fetch which teams they admin
+    let teams: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        i64,
+    )> = if is_admin {
+        sqlx::query_as(
+            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path, t.invite_token,
+                    (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) as member_count
+             FROM teams t
+             ORDER BY t.name",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    } else {
+        sqlx::query_as(
+            "SELECT t.id, t.name, t.slug, t.description, t.visibility, t.avatar_path, t.invite_token,
+                    (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) as member_count
+             FROM teams t
+             JOIN team_members tm2 ON tm2.team_id = t.id
+             WHERE tm2.user_id = ?
+             ORDER BY t.name",
+        )
+        .bind(&user.id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    };
+
+    let admin_team_ids: std::collections::HashSet<String> = if is_admin {
+        // Global admins can manage all teams
+        std::collections::HashSet::new()
+    } else {
+        let ids: Vec<(String,)> =
+            sqlx::query_as("SELECT team_id FROM team_members WHERE user_id = ? AND role = 'admin'")
+                .bind(&user.id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+        ids.into_iter().map(|(id,)| id).collect()
+    };
+
+    let tmpl = match state.templates.get_template("dashboard_teams.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    let teams_ctx: Vec<minijinja::Value> = teams
+        .iter()
+        .map(
+            |(id, name, slug, description, visibility, avatar_path, invite_token, member_count)| {
+                let initials = name
+                    .split_whitespace()
+                    .filter_map(|w| w.chars().next())
+                    .take(2)
+                    .collect::<String>()
+                    .to_uppercase();
+                let user_is_team_admin = is_admin || admin_team_ids.contains(id);
+                context! {
+                    id => id,
+                    name => name,
+                    slug => slug,
+                    description => description,
+                    visibility => visibility,
+                    has_avatar => avatar_path.is_some(),
+                    initials => initials,
+                    member_count => member_count,
+                    is_team_admin => user_is_team_admin,
+                    invite_token => invite_token,
+                }
+            },
+        )
+        .collect();
+
+    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
+
+    Html(
+        tmpl.render(context! {
+            sidebar => sidebar_context(&auth_user, "teams"),
+            teams => teams_ctx,
+            is_admin => is_admin,
+            impersonating => impersonating,
+            impersonating_name => impersonating_name,
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+// --- Team creation form ---
+
+#[derive(Deserialize)]
+struct TeamForm {
+    _csrf: Option<String>,
+    name: String,
+    slug: String,
+    description: Option<String>,
+    visibility: Option<String>,
+    #[serde(default)]
+    members: String,
+    #[serde(default)]
+    group_ids: String,
+}
+
+/// Split a comma-separated form field into a Vec of non-empty trimmed strings.
+fn split_csv_ids(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn admin_sidebar_context(user: &crate::models::User, active: &str) -> minijinja::Value {
+    context! {
+        user_name => user.name,
+        user_title => user.title.as_deref().unwrap_or(""),
+        user_id => user.id,
+        user_role => "admin",
+        user_timezone => user.timezone,
+        has_avatar => user.avatar_path.is_some(),
+        user_initials => compute_initials(&user.name),
+        active => active,
+        version => env!("CARGO_PKG_VERSION"),
+    }
+}
+
+async fn show_team_form(
+    State(state): State<Arc<AppState>>,
+    admin: crate::auth::AdminUser,
+) -> impl IntoResponse {
+    let user = &admin.0;
+
+    // Fetch all enabled users
+    let all_users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let users_ctx: Vec<minijinja::Value> = all_users
+        .iter()
+        .map(|(id, name, email, avatar_path)| {
+            context! {
+                id => id,
+                name => name,
+                email => email,
+                is_self => id == &user.id,
+                has_avatar => avatar_path.is_some(),
+                initials => compute_initials(name),
+            }
+        })
+        .collect();
+
+    // Fetch OIDC groups with member details (for stacked avatars)
+    let oidc_groups: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT g.id, g.name, COUNT(ug.user_id) as member_count \
+         FROM groups g LEFT JOIN user_groups ug ON ug.group_id = g.id \
+         GROUP BY g.id ORDER BY g.name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let groups_ctx =
+        build_groups_ctx(&state.pool, &oidc_groups, &std::collections::HashSet::new()).await;
+
+    let tmpl = match state.templates.get_template("team_form.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    Html(
+        tmpl.render(context! {
+            sidebar => admin_sidebar_context(user, "teams"),
+            users => users_ctx,
+            oidc_groups => if groups_ctx.is_empty() { None } else { Some(groups_ctx) },
+            form_name => "",
+            form_slug => "",
+            form_description => "",
+            form_visibility => "public",
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn create_team(
+    State(state): State<Arc<AppState>>,
+    admin: crate::auth::AdminUser,
+    headers: HeaderMap,
+    Form(form): Form<TeamForm>,
+) -> impl IntoResponse {
+    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
+        return resp;
+    }
+    let user = &admin.0;
+
+    let name = form.name.trim().to_string();
+    let slug = form.slug.trim().to_lowercase();
+    let description = form
+        .description
+        .as_deref()
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
+    let visibility = form.visibility.as_deref().unwrap_or("public");
+
+    // Validate
+    if name.is_empty() || slug.is_empty() {
+        return render_team_form_error(&state, user, "Name and slug are required.", &form)
+            .await
+            .into_response();
+    }
+
+    if name.len() > 255 {
+        return render_team_form_error(&state, user, "Name must be at most 255 characters.", &form)
+            .await
+            .into_response();
+    }
+
+    if let Some(ref d) = description {
+        if d.len() > 5000 {
+            return render_team_form_error(
+                &state,
+                user,
+                "Description must be at most 5000 characters.",
+                &form,
+            )
+            .await
+            .into_response();
+        }
+    }
+
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return render_team_form_error(
+            &state,
+            user,
+            "Slug must contain only lowercase letters, numbers, and dashes.",
+            &form,
+        )
+        .await
+        .into_response();
+    }
+
+    // Check slug against reserved names
+    const RESERVED_SLUGS: &[&str] = &["new", "settings", "admin", "api"];
+    if RESERVED_SLUGS.contains(&slug.as_str()) {
+        return render_team_form_error(
+            &state,
+            user,
+            "This slug is reserved. Please choose a different one.",
+            &form,
+        )
+        .await
+        .into_response();
+    }
+
+    // Check slug uniqueness
+    let existing: Option<String> = sqlx::query_scalar("SELECT id FROM teams WHERE slug = ?")
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+    if existing.is_some() {
+        return render_team_form_error(
+            &state,
+            user,
+            "A team with this slug already exists.",
+            &form,
+        )
+        .await
+        .into_response();
+    }
+
+    let team_id = uuid::Uuid::new_v4().to_string();
+    let invite_token = if visibility == "private" {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    };
+
+    // Insert team
+    let _ = sqlx::query(
+        "INSERT INTO teams (id, name, slug, description, visibility, invite_token, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&team_id)
+    .bind(&name)
+    .bind(&slug)
+    .bind(&description)
+    .bind(visibility)
+    .bind(&invite_token)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
+    // Add creator as admin member
+    let _ = sqlx::query(
+        "INSERT INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'admin', 'direct')",
+    )
+    .bind(&team_id)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await;
+
+    // Add selected members (skip creator, already added)
+    let member_ids = split_csv_ids(&form.members);
+    for member_id in &member_ids {
+        if member_id == &user.id {
+            continue;
+        }
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'member', 'direct')",
+        )
+        .bind(&team_id)
+        .bind(member_id)
+        .execute(&state.pool)
+        .await;
+    }
+
+    // Link OIDC groups and add their members
+    let group_ids = split_csv_ids(&form.group_ids);
+    for group_id in &group_ids {
+        let _ = sqlx::query("INSERT OR IGNORE INTO team_groups (team_id, group_id) VALUES (?, ?)")
+            .bind(&team_id)
+            .bind(group_id)
+            .execute(&state.pool)
+            .await;
+
+        // Add group members to team
+        let group_members: Vec<(String,)> =
+            sqlx::query_as("SELECT user_id FROM user_groups WHERE group_id = ?")
+                .bind(group_id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+
+        for (member_user_id,) in &group_members {
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'member', 'group')",
+            )
+            .bind(&team_id)
+            .bind(member_user_id)
+            .execute(&state.pool)
+            .await;
+        }
+    }
+
+    tracing::info!(team_id = %team_id, name = %name, slug = %slug, "Team created");
+
+    Redirect::to("/dashboard/teams").into_response()
+}
+
+async fn render_team_form_error(
+    state: &AppState,
+    user: &crate::models::User,
+    error: &str,
+    form: &TeamForm,
+) -> Html<String> {
+    let all_users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let users_ctx: Vec<minijinja::Value> = all_users
+        .iter()
+        .map(|(id, name, email, avatar_path)| {
+            context! {
+                id => id,
+                name => name,
+                email => email,
+                is_self => id == &user.id,
+                has_avatar => avatar_path.is_some(),
+                initials => compute_initials(name),
+            }
+        })
+        .collect();
+
+    let oidc_groups: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT g.id, g.name, COUNT(ug.user_id) as member_count \
+         FROM groups g LEFT JOIN user_groups ug ON ug.group_id = g.id \
+         GROUP BY g.id ORDER BY g.name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let groups_ctx =
+        build_groups_ctx(&state.pool, &oidc_groups, &std::collections::HashSet::new()).await;
+
+    let tmpl = match state.templates.get_template("team_form.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Template error: {}", e)),
+    };
+
+    Html(
+        tmpl.render(context! {
+            sidebar => admin_sidebar_context(user, "teams"),
+            users => users_ctx,
+            oidc_groups => if groups_ctx.is_empty() { None } else { Some(groups_ctx) },
+            form_name => &form.name,
+            form_slug => &form.slug,
+            form_description => form.description.as_deref().unwrap_or(""),
+            form_visibility => form.visibility.as_deref().unwrap_or("public"),
+            error => error,
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
     )
@@ -1146,15 +1485,17 @@ async fn dashboard_organization(
         Option<String>,
         Option<String>,
         Option<String>,
+        String,
     )> = sqlx::query_as(
         "SELECT et.id, et.slug, et.title, et.duration_min, u.name,
                 u.username,
-                CASE WHEN et.group_id IS NOT NULL THEN g.name ELSE NULL END,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END
+                CASE WHEN et.team_id IS NOT NULL THEN t.name ELSE NULL END,
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                et.visibility
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          JOIN users u ON u.id = a.user_id
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          WHERE et.visibility = 'internal' AND et.enabled = 1
          ORDER BY et.created_at",
     )
@@ -1165,7 +1506,7 @@ async fn dashboard_organization(
     let ets_ctx: Vec<minijinja::Value> = internal_ets
         .iter()
         .map(
-            |(id, slug, title, duration, host_name, username, group_name, group_slug)| {
+            |(id, slug, title, duration, host_name, username, team_name, team_slug, visibility)| {
                 context! {
                     id => id,
                     slug => slug,
@@ -1173,8 +1514,9 @@ async fn dashboard_organization(
                     duration_min => duration,
                     host_name => host_name,
                     username => username,
-                    group_name => group_name,
-                    group_slug => group_slug,
+                    team_name => team_name,
+                    team_slug => team_slug,
+                    visibility => visibility,
                 }
             },
         )
@@ -1282,68 +1624,6 @@ async fn dashboard_sources(
     )
 }
 
-// --- Dashboard: Team Links ---
-
-async fn dashboard_team_links_page(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let team_links: Vec<(String, String, i32, String, String, i32)> = sqlx::query_as(
-        "SELECT DISTINCT tl.token, tl.title, tl.duration_min, tl.created_by_user_id, tl.created_at, tl.one_time_use
-         FROM team_links tl
-         JOIN team_link_members tlm ON tlm.team_link_id = tl.id
-         WHERE tlm.user_id = ?
-         ORDER BY tl.created_at DESC",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let mut team_links_ctx: Vec<minijinja::Value> = Vec::new();
-    for (token, title, duration, created_by, _created_at, one_time_use) in &team_links {
-        let members: Vec<(String,)> = sqlx::query_as(
-            "SELECT u.name FROM users u
-             JOIN team_link_members tlm ON tlm.user_id = u.id
-             JOIN team_links tl ON tl.id = tlm.team_link_id
-             WHERE tl.token = ?
-             ORDER BY u.name",
-        )
-        .bind(token)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
-        let member_names: Vec<&str> = members.iter().map(|(n,)| n.as_str()).collect();
-        team_links_ctx.push(context! {
-            token => token,
-            title => title,
-            duration_min => duration,
-            members => member_names.join(", "),
-            is_owner => created_by == &user.id,
-            one_time_use => *one_time_use != 0,
-        });
-    }
-
-    let tmpl = match state.templates.get_template("dashboard_team_links.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
-
-    Html(
-        tmpl.render(context! {
-            sidebar => sidebar_context(&auth_user, "team-links"),
-            team_links => team_links_ctx,
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
 // --- Settings ---
 
 #[derive(Deserialize)]
@@ -1405,6 +1685,7 @@ fn settings_render(
             user_email => user.email,
             user_id => user.id,
             has_avatar => user.avatar_path.is_some(),
+            username => user.username.as_deref().unwrap_or(""),
             success => success.unwrap_or(""),
             error => error.unwrap_or(""),
             impersonating => impersonating,
@@ -1698,14 +1979,27 @@ async fn serve_avatar(
     }
 }
 
-// --- Group settings & avatar ---
+// --- Team settings & avatar ---
 
-async fn is_group_member(pool: &SqlitePool, user_id: &str, group_id: &str) -> bool {
+async fn is_team_member(pool: &SqlitePool, user_id: &str, team_id: &str) -> bool {
     sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM user_groups WHERE user_id = ? AND group_id = ?",
+        "SELECT COUNT(*) FROM team_members WHERE user_id = ? AND team_id = ?",
     )
     .bind(user_id)
-    .bind(group_id)
+    .bind(team_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        > 0
+}
+
+/// Check if a user has team-admin role for a specific team.
+async fn is_team_admin(pool: &SqlitePool, user_id: &str, team_id: &str) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM team_members WHERE user_id = ? AND team_id = ? AND role = 'admin'",
+    )
+    .bind(user_id)
+    .bind(team_id)
     .fetch_one(pool)
     .await
     .unwrap_or(0)
@@ -1715,81 +2009,154 @@ async fn is_group_member(pool: &SqlitePool, user_id: &str, group_id: &str) -> bo
 #[derive(Deserialize)]
 struct GroupSettingsForm {
     _csrf: Option<String>,
+    name: Option<String>,
+    slug: Option<String>,
     description: Option<String>,
+    #[serde(default)]
+    members: String,
+    #[serde(default)]
+    group_ids: String,
 }
 
-async fn group_settings_page(
+async fn team_settings_page(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
-        return Html("Group not found.".to_string());
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
+        return Html("Team not found or you are not a team admin.".to_string());
     }
 
-    let group: Option<(String, String, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, name, description, avatar_path FROM groups WHERE id = ?")
-            .bind(&group_id)
+    let team: Option<(String, String, String, Option<String>, Option<String>, String, Option<String>)> =
+        sqlx::query_as("SELECT id, name, slug, description, avatar_path, visibility, invite_token FROM teams WHERE id = ?")
+            .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let (gid, group_name, description, avatar_path) = match group {
-        Some(g) => g,
-        None => return Html("Group not found.".to_string()),
+    let (tid, team_name, team_slug, description, avatar_path, visibility, invite_token) = match team
+    {
+        Some(t) => t,
+        None => return Html("Team not found.".to_string()),
     };
 
-    let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.avatar_path FROM users u \
-         JOIN user_groups ug ON ug.user_id = u.id \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
+    let members: Vec<(String, String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.avatar_path, tm.role, tm.source FROM users u \
+         JOIN team_members tm ON tm.user_id = u.id \
+         WHERE tm.team_id = ? AND u.enabled = 1 \
          ORDER BY u.name",
     )
-    .bind(&gid)
+    .bind(&tid)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
 
     let members_ctx: Vec<minijinja::Value> = members
         .iter()
-        .map(|(id, name, ap)| {
+        .map(|(id, name, ap, role, source)| {
             context! {
                 id => id,
                 name => name,
                 has_avatar => ap.is_some(),
                 initials => compute_initials(name),
+                role => role,
+                source => source,
             }
         })
         .collect();
 
-    let tmpl = match state.templates.get_template("group_settings.html") {
+    // All enabled users for the member picker
+    let all_users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let member_ids: std::collections::HashSet<&str> =
+        members.iter().map(|(id, _, _, _, _)| id.as_str()).collect();
+
+    let all_users_ctx: Vec<minijinja::Value> = all_users
+        .iter()
+        .map(|(id, name, email, avatar_path)| {
+            context! {
+                id => id,
+                name => name,
+                email => email,
+                has_avatar => avatar_path.is_some(),
+                initials => compute_initials(name),
+                is_member => member_ids.contains(id.as_str()),
+            }
+        })
+        .collect();
+
+    // OIDC groups with member counts + linked status
+    let oidc_groups: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT g.id, g.name, COUNT(ug.user_id) as member_count \
+         FROM groups g LEFT JOIN user_groups ug ON ug.group_id = g.id \
+         GROUP BY g.id ORDER BY g.name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let linked_group_ids: Vec<(String,)> =
+        sqlx::query_as("SELECT group_id FROM team_groups WHERE team_id = ?")
+            .bind(&tid)
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
+    let linked_set: std::collections::HashSet<String> =
+        linked_group_ids.into_iter().map(|(id,)| id).collect();
+
+    let groups_ctx = build_groups_ctx(&state.pool, &oidc_groups, &linked_set).await;
+
+    let linked_groups_only: Vec<(String, String, i64)> = oidc_groups
+        .iter()
+        .filter(|(id, _, _)| linked_set.contains(id))
+        .cloned()
+        .collect();
+    let linked_groups_ctx = build_groups_ctx(
+        &state.pool,
+        &linked_groups_only,
+        &std::collections::HashSet::new(),
+    )
+    .await;
+
+    let tmpl = match state.templates.get_template("team_settings.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
     };
 
     Html(
         tmpl.render(context! {
-            sidebar => sidebar_context(&auth_user, "event-types"),
-            group_id => gid,
-            group_name => group_name,
-            group_description => description.unwrap_or_default(),
-            group_has_avatar => avatar_path.is_some(),
-            group_initials => compute_initials(&group_name),
+            sidebar => sidebar_context(&auth_user, "teams"),
+            team_id => tid,
+            team_name => team_name,
+            team_slug => team_slug,
+            team_description => description.unwrap_or_default(),
+            team_has_avatar => avatar_path.is_some(),
+            team_initials => compute_initials(&team_name),
+            visibility => visibility,
+            invite_token => invite_token,
             members => members_ctx,
+            all_users => all_users_ctx,
+            oidc_groups => if groups_ctx.is_empty() { None } else { Some(groups_ctx) },
+            linked_groups => linked_groups_ctx,
             success => query.get("success").map(|_| "Settings saved."),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
     )
 }
 
-async fn group_settings_save(
+async fn team_settings_save(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Form(form): Form<GroupSettingsForm>,
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
@@ -1797,9 +2164,48 @@ async fn group_settings_save(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
+    // Update name if provided
+    if let Some(ref name) = form.name {
+        let name = name.trim().chars().take(255).collect::<String>();
+        if !name.is_empty() {
+            let _ = sqlx::query("UPDATE teams SET name = ? WHERE id = ?")
+                .bind(&name)
+                .bind(&team_id)
+                .execute(&state.pool)
+                .await;
+        }
+    }
+
+    // Update slug if provided (validate format and uniqueness)
+    if let Some(ref slug) = form.slug {
+        let slug = slug
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .take(100)
+            .collect::<String>();
+        if !slug.is_empty() {
+            let conflict: Option<(String,)> =
+                sqlx::query_as("SELECT id FROM teams WHERE slug = ? AND id != ?")
+                    .bind(&slug)
+                    .bind(&team_id)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .unwrap_or(None);
+            if conflict.is_none() {
+                let _ = sqlx::query("UPDATE teams SET slug = ? WHERE id = ?")
+                    .bind(&slug)
+                    .bind(&team_id)
+                    .execute(&state.pool)
+                    .await;
+            }
+        }
+    }
+
     let desc = form
         .description
         .as_deref()
@@ -1809,24 +2215,108 @@ async fn group_settings_save(
         .take(5000)
         .collect::<String>();
     let desc = if desc.is_empty() { None } else { Some(desc) };
-    let _ = sqlx::query("UPDATE groups SET description = ? WHERE id = ?")
+    let _ = sqlx::query("UPDATE teams SET description = ? WHERE id = ?")
         .bind(&desc)
-        .bind(&group_id)
+        .bind(&team_id)
         .execute(&state.pool)
         .await;
-    tracing::info!(group_id = %group_id, user_id = %user.id, "group settings updated");
-    Redirect::to(&format!(
-        "/dashboard/groups/{}/settings?success=1",
-        group_id
-    ))
-    .into_response()
+
+    // Sync direct members (preserve group-synced members).
+    // The hidden input is always present (populated by JS). An empty value means
+    // either "remove all direct members" (valid for global admins) or JS failure.
+    // We proceed either way — the safety net below re-adds non-admin users.
+    let member_ids = split_csv_ids(&form.members);
+    // 1. Remove direct members not in the submitted list
+    let _ = sqlx::query(
+        "DELETE FROM team_members WHERE team_id = ? AND source = 'direct' AND user_id NOT IN \
+         (SELECT value FROM json_each(?))",
+    )
+    .bind(&team_id)
+    .bind(serde_json::to_string(&member_ids).unwrap_or_else(|_| "[]".to_string()))
+    .execute(&state.pool)
+    .await;
+
+    // 2. Add new direct members (INSERT OR IGNORE to not conflict with group-synced)
+    for member_id in &member_ids {
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'member', 'direct')",
+        )
+        .bind(&team_id)
+        .bind(member_id)
+        .execute(&state.pool)
+        .await;
+    }
+
+    // Ensure at least one admin remains. Global admins can remove themselves
+    // (they can still manage the team via the admin panel).
+    if !is_admin {
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'admin', 'direct')",
+        )
+        .bind(&team_id)
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await;
+    }
+
+    // Sync linked OIDC groups
+    let group_ids = split_csv_ids(&form.group_ids);
+    // 1. Remove unlinked groups
+    let _ = sqlx::query(
+        "DELETE FROM team_groups WHERE team_id = ? AND group_id NOT IN \
+         (SELECT value FROM json_each(?))",
+    )
+    .bind(&team_id)
+    .bind(serde_json::to_string(&group_ids).unwrap_or_else(|_| "[]".to_string()))
+    .execute(&state.pool)
+    .await;
+
+    // 2. Add newly linked groups and their members
+    for gid in &group_ids {
+        let _ = sqlx::query("INSERT OR IGNORE INTO team_groups (team_id, group_id) VALUES (?, ?)")
+            .bind(&team_id)
+            .bind(gid)
+            .execute(&state.pool)
+            .await;
+
+        // Add group members as team members with source='group'
+        let group_members: Vec<(String,)> =
+            sqlx::query_as("SELECT user_id FROM user_groups WHERE group_id = ?")
+                .bind(gid)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+        for (uid,) in &group_members {
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'member', 'group')",
+            )
+            .bind(&team_id)
+            .bind(uid)
+            .execute(&state.pool)
+            .await;
+        }
+    }
+
+    // 3. Remove group-sourced members whose groups are no longer linked
+    let _ = sqlx::query(
+        "DELETE FROM team_members WHERE team_id = ? AND source = 'group' \
+         AND user_id NOT IN (SELECT ug.user_id FROM user_groups ug \
+         JOIN team_groups tg ON tg.group_id = ug.group_id WHERE tg.team_id = ?)",
+    )
+    .bind(&team_id)
+    .bind(&team_id)
+    .execute(&state.pool)
+    .await;
+
+    tracing::info!(team_id = %team_id, user_id = %user.id, "team settings updated");
+    Redirect::to(&format!("/dashboard/teams/{}/settings?success=1", team_id)).into_response()
 }
 
-async fn upload_group_avatar(
+async fn upload_team_avatar(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Query(csrf_query): Query<CsrfQuery>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
@@ -1835,10 +2325,10 @@ async fn upload_group_avatar(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
-    let redirect_url = format!("/dashboard/groups/{}/settings", group_id);
+    let redirect_url = format!("/dashboard/teams/{}/settings", team_id);
     while let Ok(Some(field)) = multipart.next_field().await {
         if field.name() == Some("avatar") {
             let content_type = field.content_type().unwrap_or("").to_string();
@@ -1858,14 +2348,14 @@ async fn upload_group_avatar(
                 }
                 let avatars_dir = state.data_dir.join("avatars");
                 let _ = tokio::fs::create_dir_all(&avatars_dir).await;
-                let filename = format!("group_{}.{}", group_id, ext);
+                let filename = format!("team_{}.{}", team_id, ext);
                 let avatar_path = avatars_dir.join(&filename);
 
                 // Remove old avatar if different extension
                 let old: Option<(String,)> = sqlx::query_as(
-                    "SELECT avatar_path FROM groups WHERE id = ? AND avatar_path IS NOT NULL",
+                    "SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL",
                 )
-                .bind(&group_id)
+                .bind(&team_id)
                 .fetch_optional(&state.pool)
                 .await
                 .unwrap_or(None);
@@ -1877,12 +2367,12 @@ async fn upload_group_avatar(
                 }
 
                 if tokio::fs::write(&avatar_path, &bytes).await.is_ok() {
-                    let _ = sqlx::query("UPDATE groups SET avatar_path = ? WHERE id = ?")
+                    let _ = sqlx::query("UPDATE teams SET avatar_path = ? WHERE id = ?")
                         .bind(&filename)
-                        .bind(&group_id)
+                        .bind(&team_id)
                         .execute(&state.pool)
                         .await;
-                    tracing::info!(group_id = %group_id, user_id = %user.id, "group avatar uploaded");
+                    tracing::info!(team_id = %team_id, user_id = %user.id, "team avatar uploaded");
                 }
             }
         }
@@ -1890,11 +2380,11 @@ async fn upload_group_avatar(
     Redirect::to(&redirect_url).into_response()
 }
 
-async fn delete_group_avatar(
+async fn delete_team_avatar(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
     headers: HeaderMap,
-    Path(group_id): Path<String>,
+    Path(team_id): Path<String>,
     Form(csrf): Form<CsrfForm>,
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &csrf._csrf) {
@@ -1902,12 +2392,12 @@ async fn delete_group_avatar(
     }
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
-    if !is_admin && !is_group_member(&state.pool, &user.id, &group_id).await {
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
         return Redirect::to("/dashboard/event-types").into_response();
     }
     let old: Option<(String,)> =
-        sqlx::query_as("SELECT avatar_path FROM groups WHERE id = ? AND avatar_path IS NOT NULL")
-            .bind(&group_id)
+        sqlx::query_as("SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+            .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
@@ -1915,27 +2405,82 @@ async fn delete_group_avatar(
         let full_path = state.data_dir.join("avatars").join(&avatar_path);
         let _ = tokio::fs::remove_file(&full_path).await;
     }
-    let _ = sqlx::query("UPDATE groups SET avatar_path = NULL WHERE id = ?")
-        .bind(&group_id)
+    let _ = sqlx::query("UPDATE teams SET avatar_path = NULL WHERE id = ?")
+        .bind(&team_id)
         .execute(&state.pool)
         .await;
-    tracing::info!(group_id = %group_id, user_id = %user.id, "group avatar deleted");
-    Redirect::to(&format!("/dashboard/groups/{}/settings", group_id)).into_response()
+    tracing::info!(team_id = %team_id, user_id = %user.id, "team avatar deleted");
+    Redirect::to(&format!("/dashboard/teams/{}/settings", team_id)).into_response()
 }
 
-async fn serve_group_avatar(
+async fn delete_team(
     State(state): State<Arc<AppState>>,
-    Path(group_id): Path<String>,
+    auth_user: crate::auth::AuthUser,
+    headers: HeaderMap,
+    Path(team_id): Path<String>,
+    Form(csrf): Form<CsrfForm>,
 ) -> impl IntoResponse {
-    let avatar_path: Option<(String,)> =
-        sqlx::query_as("SELECT avatar_path FROM groups WHERE id = ? AND avatar_path IS NOT NULL")
-            .bind(&group_id)
+    if let Err(resp) = verify_csrf_token(&headers, &csrf._csrf) {
+        return resp;
+    }
+    let user = &auth_user.user;
+    let is_admin = user.role == "admin";
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
+        return Redirect::to("/dashboard/teams").into_response();
+    }
+    // Delete avatar file if present
+    let old: Option<(String,)> =
+        sqlx::query_as("SELECT avatar_path FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+            .bind(&team_id)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+    if let Some((avatar_path,)) = old {
+        let full_path = state.data_dir.join("avatars").join(&avatar_path);
+        let _ = tokio::fs::remove_file(&full_path).await;
+    }
+    // Nullify team_id on event types (don't delete them — they belong to the creator's account)
+    let _ = sqlx::query("UPDATE event_types SET team_id = NULL WHERE team_id = ?")
+        .bind(&team_id)
+        .execute(&state.pool)
+        .await;
+    // Delete team (CASCADE removes team_members, team_groups)
+    let _ = sqlx::query("DELETE FROM teams WHERE id = ?")
+        .bind(&team_id)
+        .execute(&state.pool)
+        .await;
+    tracing::info!(team_id = %team_id, user_id = %user.id, "team deleted");
+    Redirect::to("/dashboard/teams").into_response()
+}
+
+async fn serve_team_avatar(
+    State(state): State<Arc<AppState>>,
+    Path(team_id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let team_info: Option<(Option<String>, String, Option<String>)> =
+        sqlx::query_as("SELECT avatar_path, visibility, invite_token FROM teams WHERE id = ? AND avatar_path IS NOT NULL")
+            .bind(&team_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let filename = match avatar_path {
-        Some((f,)) => f,
+    let (avatar_path_opt, visibility, db_invite_token) = match team_info {
+        Some(t) => t,
+        None => return (axum::http::StatusCode::NOT_FOUND, "").into_response(),
+    };
+
+    // Private teams require a valid invite token to serve the avatar
+    if visibility == "private" {
+        let provided = query.get("invite");
+        match (&db_invite_token, provided) {
+            (Some(expected), Some(given)) if expected == given => {} // OK
+            _ => return (axum::http::StatusCode::NOT_FOUND, "").into_response(),
+        }
+    }
+
+    let filename = match avatar_path_opt {
+        Some(f) => f,
         None => return (axum::http::StatusCode::NOT_FOUND, "").into_response(),
     };
 
@@ -2066,124 +2611,6 @@ async fn cancel_booking(
 
         let _ = crate::email::send_guest_cancellation(&smtp_config, &details).await;
         let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
-    }
-
-    Redirect::to("/dashboard/bookings").into_response()
-}
-
-// --- Cancel team link booking (any member can cancel) ---
-
-async fn cancel_team_link_booking(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path(booking_id): Path<String>,
-    Form(form): Form<CancelForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    // Verify the user is a member of the team link for this booking
-    let booking: Option<(String, String, String, String, String, String, String)> = sqlx::query_as(
-        "SELECT tlb.id, tlb.uid, tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title
-         FROM team_link_bookings tlb
-         JOIN team_links tl ON tl.id = tlb.team_link_id
-         JOIN team_link_members tlm ON tlm.team_link_id = tl.id
-         WHERE tlb.id = ? AND tlm.user_id = ? AND tlb.status = 'confirmed'",
-    )
-    .bind(&booking_id)
-    .bind(&user.id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (bid, uid, guest_name, guest_email, start_at, end_at, event_title) = match booking {
-        Some(b) => b,
-        None => return Redirect::to("/dashboard/bookings").into_response(),
-    };
-
-    // Get the guest timezone
-    let guest_timezone: String = sqlx::query_scalar(
-        "SELECT COALESCE(guest_timezone, 'UTC') FROM team_link_bookings WHERE id = ?",
-    )
-    .bind(&bid)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or_else(|_| "UTC".to_string());
-
-    // Cancel the booking
-    let _ = sqlx::query("UPDATE team_link_bookings SET status = 'cancelled' WHERE id = ?")
-        .bind(&bid)
-        .execute(&state.pool)
-        .await;
-
-    tracing::info!(booking_id = %bid, "team link booking cancelled by member");
-
-    // Get all members for CalDAV delete and notifications
-    let members: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, COALESCE(u.booking_email, u.email)
-         FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         JOIN team_link_bookings tlb ON tlb.team_link_id = tlm.team_link_id
-         WHERE tlb.id = ? AND u.enabled = 1",
-    )
-    .bind(&bid)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    // Delete from each member's CalDAV calendar
-    for (member_uid, _, _) in &members {
-        caldav_delete_for_user(&state.pool, &state.secret_key, member_uid, &uid).await;
-    }
-
-    // Send cancellation emails
-    if let Ok(Some(smtp_config)) =
-        crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-    {
-        let date = start_at.get(..10).unwrap_or(&start_at).to_string();
-        let start_time = extract_time_24h(&start_at);
-        let end_time = extract_time_24h(&end_at);
-        let reason = form.reason.filter(|r| !r.trim().is_empty());
-
-        for (_, member_name, member_email) in &members {
-            let details = crate::email::CancellationDetails {
-                event_title: event_title.clone(),
-                date: date.clone(),
-                start_time: start_time.clone(),
-                end_time: end_time.clone(),
-                guest_name: guest_name.clone(),
-                guest_email: guest_email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: member_name.clone(),
-                host_email: member_email.clone(),
-                uid: uid.clone(),
-                reason: reason.clone(),
-                cancelled_by_host: true,
-            };
-            let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
-        }
-
-        // Send cancellation to guest
-        if let Some((_, first_name, first_email)) = members.first() {
-            let details = crate::email::CancellationDetails {
-                event_title: event_title.clone(),
-                date: date.clone(),
-                start_time: start_time.clone(),
-                end_time: end_time.clone(),
-                guest_name: guest_name.clone(),
-                guest_email: guest_email.clone(),
-                guest_timezone,
-                host_name: first_name.clone(),
-                host_email: first_email.clone(),
-                uid,
-                reason,
-                cancelled_by_host: true,
-            };
-            let _ = crate::email::send_guest_cancellation(&smtp_config, &details).await;
-        }
     }
 
     Redirect::to("/dashboard/bookings").into_response()
@@ -2323,35 +2750,68 @@ struct EventTypeForm {
     avail_start: Option<String>,   // legacy: "09:00"
     avail_end: Option<String>,     // legacy: "17:00"
     avail_windows: Option<String>, // "09:00-12:00,13:00-17:00"
-    // Group (optional)
-    group_id: Option<String>,
+    // Team (optional)
+    team_id: Option<String>,
     // Calendar selection (comma-separated IDs)
     calendar_ids: Option<String>,
     // Reminder
     reminder_minutes: Option<i32>,
     // Additional guests
     max_additional_guests: Option<i32>,
+    // Member priorities for round-robin (creation flow): "uid1:3,uid2:1,uid3:2"
+    #[serde(default)]
+    member_priorities: String,
 }
 
 async fn new_event_type_form(
     State(state): State<Arc<AppState>>,
     auth_user: crate::auth::AuthUser,
+    Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let user = &auth_user.user;
+    let preset = query.get("preset").map(|s| s.as_str()).unwrap_or("");
 
-    // Get groups the user belongs to
-    let groups: Vec<(String, String)> = sqlx::query_as(
-        "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    // Get teams where the user is a team admin (global admins see all teams)
+    let groups: Vec<(String, String)> = if user.role == "admin" {
+        sqlx::query_as("SELECT t.id, t.name FROM teams t ORDER BY t.name")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default()
+    } else {
+        sqlx::query_as(
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? AND tm.role = 'admin' ORDER BY t.name",
+        )
+        .bind(&user.id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    };
 
-    let groups_ctx: Vec<minijinja::Value> = groups
-        .iter()
-        .map(|(id, name)| context! { id => id, name => name })
-        .collect();
+    // Fetch members for each team (for client-side priority card)
+    let mut groups_ctx: Vec<minijinja::Value> = Vec::new();
+    for (id, name) in &groups {
+        let team_members: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT u.id, u.name, u.avatar_path FROM users u \
+             JOIN team_members tm ON tm.user_id = u.id \
+             WHERE tm.team_id = ? AND u.enabled = 1 ORDER BY u.name",
+        )
+        .bind(id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+        let members_ctx: Vec<minijinja::Value> = team_members
+            .iter()
+            .map(|(uid, uname, ap)| {
+                context! {
+                    user_id => uid,
+                    name => uname,
+                    has_avatar => ap.is_some(),
+                    initials => compute_initials(uname),
+                }
+            })
+            .collect();
+        groups_ctx.push(context! { id => id, name => name, members => members_ctx });
+    }
 
     // Get user's calendars (is_busy=1) for calendar selection
     let calendars: Vec<(String, Option<String>, String)> = sqlx::query_as(
@@ -2386,7 +2846,8 @@ async fn new_event_type_form(
             impersonating => impersonating,
             impersonating_name => impersonating_name,
             editing => false,
-            groups => groups_ctx,
+            preset => preset,
+            teams => groups_ctx,
             calendars => calendars_ctx,
             selected_calendar_ids => "",
             form_title => "",
@@ -2396,8 +2857,8 @@ async fn new_event_type_form(
             form_buffer_before => 0,
             form_buffer_after => 0,
             form_min_notice => 60,
-            form_requires_confirmation => false,
-            form_visibility => "public",
+            form_requires_confirmation => matches!(preset, "private"),
+            form_visibility => match preset { "private" => "private", "internal" => "internal", _ => "public" },
             form_location_type => "link",
             form_location_value => "",
             form_avail_days => "1,2,3,4,5",
@@ -2442,14 +2903,27 @@ async fn create_event_type(
             .into_response();
     }
 
-    // Check uniqueness
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM event_types WHERE account_id = ? AND slug = ?")
-            .bind(&account_id)
+    // Check if a team_id was provided and it's non-empty
+    let team_id = form.team_id.as_deref().filter(|s| !s.trim().is_empty());
+
+    // Check uniqueness — scope to team_id when creating a team event type, otherwise to account_id
+    let existing: Option<(String,)> = if let Some(tid) = team_id {
+        sqlx::query_as("SELECT id FROM event_types WHERE team_id = ? AND slug = ?")
+            .bind(tid)
             .bind(&slug)
             .fetch_optional(&state.pool)
             .await
-            .unwrap_or(None);
+            .unwrap_or(None)
+    } else {
+        sqlx::query_as(
+            "SELECT id FROM event_types WHERE account_id = ? AND slug = ? AND team_id IS NULL",
+        )
+        .bind(&account_id)
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+    };
 
     if existing.is_some() {
         return render_event_type_form_error(
@@ -2471,19 +2945,30 @@ async fn create_event_type(
         .as_deref()
         .filter(|s| !s.trim().is_empty());
 
-    // Check if a group_id was provided and it's non-empty
-    let group_id = form.group_id.as_deref().filter(|s| !s.trim().is_empty());
+    // Verify team admin rights if a team_id is specified
+    if let Some(tid) = team_id {
+        let is_global_admin = user.role == "admin";
+        if !is_global_admin && !is_team_admin(&state.pool, &user.id, tid).await {
+            return render_event_type_form_error(
+                &state,
+                &auth_user,
+                "You are not an admin of this team.",
+                &form,
+                false,
+            )
+            .into_response();
+        }
+    }
 
-    // "internal" visibility is only allowed for group event types
     let visibility = match form.visibility.as_deref().unwrap_or("public") {
-        "internal" if group_id.is_none() => "private".to_string(),
-        other => other.to_string(),
+        v @ ("public" | "internal" | "private") => v.to_string(),
+        _ => "public".to_string(),
     };
 
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, group_id, created_by_user_id, reminder_minutes, visibility, max_additional_guests)
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id, reminder_minutes, visibility, max_additional_guests)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
@@ -2498,8 +2983,8 @@ async fn create_event_type(
     .bind(requires_confirmation as i32)
     .bind(location_type)
     .bind(location_value)
-    .bind(group_id)
-    .bind(if group_id.is_some() { Some(&user.id) } else { None })
+    .bind(team_id)
+    .bind(if team_id.is_some() { Some(&user.id) } else { None })
     .bind(reminder_minutes)
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
@@ -2552,6 +3037,39 @@ async fn create_event_type(
         }
     }
 
+    // Save member priorities (creation flow: "uid1:3,uid2:1,uid3:2")
+    // Only insert weights for users who are actually team members.
+    if let Some(tid) = team_id {
+        if !form.member_priorities.is_empty() {
+            let valid_members: Vec<(String,)> =
+                sqlx::query_as("SELECT user_id FROM team_members WHERE team_id = ?")
+                    .bind(tid)
+                    .fetch_all(&state.pool)
+                    .await
+                    .unwrap_or_default();
+            let valid_set: std::collections::HashSet<&str> =
+                valid_members.iter().map(|(id,)| id.as_str()).collect();
+
+            for entry in form.member_priorities.split(',') {
+                let parts: Vec<&str> = entry.split(':').collect();
+                if parts.len() == 2 {
+                    let uid = parts[0].trim();
+                    let weight: i64 = parts[1].trim().parse().unwrap_or(1);
+                    if !uid.is_empty() && valid_set.contains(uid) {
+                        let _ = sqlx::query(
+                            "INSERT OR REPLACE INTO event_type_member_weights (event_type_id, user_id, weight) VALUES (?, ?, ?)",
+                        )
+                        .bind(&et_id)
+                        .bind(uid)
+                        .bind(weight)
+                        .execute(&state.pool)
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
     Redirect::to("/dashboard/event-types").into_response()
 }
 
@@ -2563,7 +3081,7 @@ async fn edit_event_type_form(
     let user = &auth_user.user;
 
     let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, i32, String, Option<String>, Option<i32>, String, i32, String, Option<String>)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.visibility, et.max_additional_guests, et.scheduling_mode, et.group_id
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.visibility, et.max_additional_guests, et.scheduling_mode, et.team_id
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          WHERE a.user_id = ? AND et.slug = ?",
@@ -2590,7 +3108,7 @@ async fn edit_event_type_form(
         visibility,
         max_additional_guests,
         scheduling_mode,
-        group_id,
+        team_id,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -2669,17 +3187,17 @@ async fn edit_event_type_form(
         .collect::<Vec<_>>()
         .join(",");
 
-    // Fetch group members with per-ET weights for round-robin priority
-    let is_round_robin_group = group_id.is_some() && scheduling_mode == "round_robin";
+    // Fetch team members with per-ET weights for round-robin priority
+    let is_round_robin_group = team_id.is_some() && scheduling_mode == "round_robin";
     let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
-        let gid = group_id.as_deref().unwrap();
+        let tid = team_id.as_deref().unwrap();
         let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT u.id, u.name, u.avatar_path \
-             FROM users u JOIN user_groups ug ON ug.user_id = u.id \
-             WHERE ug.group_id = ? AND u.enabled = 1 \
+             FROM users u JOIN team_members tm ON tm.user_id = u.id \
+             WHERE tm.team_id = ? AND u.enabled = 1 \
              ORDER BY u.name",
         )
-        .bind(gid)
+        .bind(tid)
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -2740,7 +3258,7 @@ async fn edit_event_type_form(
             form_reminder_minutes => reminder_min.unwrap_or(0),
             form_max_additional_guests => max_additional_guests,
             form_scheduling_mode => scheduling_mode,
-            is_group => group_id.is_some(),
+            is_group => team_id.is_some(),
             is_round_robin_group => is_round_robin_group,
             priority_members => members_ctx,
             error => "",
@@ -2783,10 +3301,9 @@ async fn update_event_type(
 
     let new_slug = form.slug.trim().to_lowercase().replace(' ', "-");
     let requires_confirmation = form.requires_confirmation.as_deref() == Some("on");
-    // "internal" visibility is only allowed for group event types; personal edit never has a group
     let visibility = match form.visibility.as_deref().unwrap_or("public") {
-        "internal" => "private".to_string(),
-        other => other.to_string(),
+        v @ ("public" | "internal" | "private") => v.to_string(),
+        _ => "public".to_string(),
     };
 
     // Check slug uniqueness if changed
@@ -2966,11 +3483,11 @@ async fn update_group_event_type_member_priority(
     let user = &auth_user.user;
     let is_admin = user.role == "admin";
 
-    // Resolve event type via group membership
+    // Resolve event type via team membership (LIMIT 1 to avoid cross-team slug collisions)
     let et: Option<(String,)> = if is_admin {
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -2979,8 +3496,8 @@ async fn update_group_event_type_member_priority(
     } else {
         sqlx::query_as(
             "SELECT et.id FROM event_types et \
-             JOIN user_groups ug ON ug.group_id = et.group_id \
-             WHERE ug.user_id = ? AND et.slug = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id \
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -3116,1080 +3633,6 @@ async fn delete_event_type(
     tracing::info!(event_type_id = %et_id, user = %auth_user.user.email, "event type deleted");
 
     Redirect::to("/dashboard/event-types").into_response()
-}
-
-// --- Team links ---
-
-/// Deserialize a form field that may be a single string or a sequence of strings.
-/// HTML checkboxes with the same name send a single value when only one is checked.
-fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    struct StringOrVec;
-    impl<'de> de::Visitor<'de> for StringOrVec {
-        type Value = Vec<String>;
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a string or sequence of strings")
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            Ok(vec![v.to_owned()])
-        }
-        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
-            Ok(vec![v])
-        }
-        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut v = Vec::new();
-            while let Some(s) = seq.next_element()? {
-                v.push(s);
-            }
-            Ok(v)
-        }
-    }
-    deserializer.deserialize_any(StringOrVec)
-}
-
-#[derive(Deserialize)]
-struct TeamLinkForm {
-    _csrf: Option<String>,
-    title: String,
-    description: Option<String>,
-    duration_min: i32,
-    buffer_before: Option<i32>,
-    buffer_after: Option<i32>,
-    min_notice_min: Option<i32>,
-    availability_start: String,
-    availability_end: String,
-    avail_windows: Option<String>,
-    #[serde(default, deserialize_with = "string_or_vec")]
-    days: Vec<String>,
-    #[serde(default, deserialize_with = "string_or_vec")]
-    members: Vec<String>,
-    one_time_use: Option<String>,
-    location_type: Option<String>,
-    location_value: Option<String>,
-    reminder_minutes: Option<i32>,
-}
-
-async fn new_team_link_form(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let users_ctx: Vec<minijinja::Value> = users
-        .iter()
-        .map(|(id, name, email, avatar_path)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
-        })
-        .collect();
-
-    let tmpl = match state.templates.get_template("team_link_form.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
-    Html(
-        tmpl.render(context! {
-            users => users_ctx,
-            current_user_id => user.id,
-            form_title => "",
-            form_description => "",
-            form_duration => 30,
-            form_buffer_before => 0,
-            form_buffer_after => 0,
-            form_min_notice => 60,
-            form_start => "09:00",
-            form_end => "17:00",
-            form_avail_windows => "",
-            form_days => vec!["1", "2", "3", "4", "5"],
-            form_members => vec![&user.id],
-            form_location_type => "",
-            form_location_value => "",
-            form_reminder_minutes => 0,
-            error => "",
-            sidebar => sidebar_context(&auth_user, "team-links"),
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-async fn create_team_link(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    axum_extra::extract::Form(form): axum_extra::extract::Form<TeamLinkForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    if form.title.trim().is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Title is required.", &form)
-            .await
-            .into_response();
-    }
-
-    if form.members.is_empty() || (form.members.len() == 1 && form.members[0] == user.id) {
-        return render_team_link_form_error(
-            &state,
-            &auth_user,
-            "Select at least one other team member.",
-            &form,
-        )
-        .await
-        .into_response();
-    }
-
-    if form.days.is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Select at least one day.", &form)
-            .await
-            .into_response();
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let token = uuid::Uuid::new_v4().to_string();
-    let days_str = form.days.join(",");
-
-    let one_time_use = form.one_time_use.as_deref() == Some("on");
-
-    // Parse and normalize availability windows
-    let windows = parse_avail_windows(
-        form.avail_windows.as_deref(),
-        Some(&form.availability_start),
-        Some(&form.availability_end),
-    );
-    let avail_windows: String = windows
-        .iter()
-        .map(|(s, e)| format!("{}-{}", s, e))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let location_type = form.location_type.as_deref().filter(|v| !v.is_empty());
-    let location_value = form.location_value.as_deref().filter(|v| !v.is_empty());
-    let description = form.description.as_deref().filter(|v| !v.trim().is_empty());
-    let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
-
-    let _ = sqlx::query(
-        "INSERT INTO team_links (id, token, title, description, duration_min, buffer_before, buffer_after, min_notice_min, availability_start, availability_end, availability_days, availability_windows, created_by_user_id, one_time_use, location_type, location_value, reminder_minutes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&token)
-    .bind(form.title.trim())
-    .bind(description)
-    .bind(form.duration_min)
-    .bind(form.buffer_before.unwrap_or(0))
-    .bind(form.buffer_after.unwrap_or(0))
-    .bind(form.min_notice_min.unwrap_or(60))
-    .bind(&form.availability_start)
-    .bind(&form.availability_end)
-    .bind(&days_str)
-    .bind(&avail_windows)
-    .bind(&user.id)
-    .bind(one_time_use)
-    .bind(location_type)
-    .bind(location_value)
-    .bind(reminder_minutes)
-    .execute(&state.pool)
-    .await;
-
-    // Always include the creator as a member
-    let mut all_members = form.members.clone();
-    if !all_members.contains(&user.id) {
-        all_members.push(user.id.clone());
-    }
-
-    for member_id in &all_members {
-        let mid = uuid::Uuid::new_v4().to_string();
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO team_link_members (id, team_link_id, user_id) VALUES (?, ?, ?)",
-        )
-        .bind(&mid)
-        .bind(&id)
-        .bind(member_id)
-        .execute(&state.pool)
-        .await;
-    }
-
-    Redirect::to("/dashboard/team-links").into_response()
-}
-
-async fn render_team_link_form_error(
-    state: &AppState,
-    auth_user: &crate::auth::AuthUser,
-    error: &str,
-    form: &TeamLinkForm,
-) -> Html<String> {
-    let user = &auth_user.user;
-    let users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    let tmpl = match state.templates.get_template("team_link_form.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let users_ctx: Vec<minijinja::Value> = users
-        .iter()
-        .map(|(id, name, email, avatar_path)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
-        })
-        .collect();
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(auth_user);
-    Html(
-        tmpl.render(context! {
-            users => users_ctx,
-            current_user_id => user.id,
-            form_title => form.title.as_str(),
-            form_description => form.description.as_deref().unwrap_or(""),
-            form_duration => form.duration_min,
-            form_buffer_before => form.buffer_before.unwrap_or(0),
-            form_buffer_after => form.buffer_after.unwrap_or(0),
-            form_min_notice => form.min_notice_min.unwrap_or(60),
-            form_start => form.availability_start.as_str(),
-            form_end => form.availability_end.as_str(),
-            form_avail_windows => form.avail_windows.as_deref().unwrap_or(""),
-            form_days => form.days,
-            form_members => form.members,
-            form_location_type => form.location_type.as_deref().unwrap_or(""),
-            form_location_value => form.location_value.as_deref().unwrap_or(""),
-            form_reminder_minutes => form.reminder_minutes.unwrap_or(0),
-            error => error,
-            sidebar => sidebar_context(auth_user, "team-links"),
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-async fn edit_team_link_form(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    Path(token): Path<String>,
-) -> impl IntoResponse {
-    let user = &auth_user.user;
-
-    let tl: Option<(
-        String,
-        String,
-        i32,
-        i32,
-        i32,
-        i32,
-        String,
-        String,
-        String,
-        Option<String>,
-        i32,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
-    )> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min,
-                    availability_start, availability_end, availability_days, availability_windows, one_time_use,
-                    location_type, location_value, description, reminder_minutes
-             FROM team_links WHERE token = ? AND created_by_user_id = ?",
-    )
-    .bind(&token)
-    .bind(&user.id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (
-        tl_id,
-        title,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        avail_start,
-        avail_end,
-        avail_days,
-        avail_windows_db,
-        one_time_use,
-        location_type,
-        location_value,
-        description,
-        reminder_minutes,
-    ) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()),
-    };
-
-    // Build windows string: prefer new column, fall back to legacy start/end
-    let avail_windows = avail_windows_db
-        .filter(|w| !w.is_empty())
-        .unwrap_or_else(|| format!("{}-{}", avail_start, avail_end));
-
-    let members: Vec<(String,)> =
-        sqlx::query_as("SELECT user_id FROM team_link_members WHERE team_link_id = ?")
-            .bind(&tl_id)
-            .fetch_all(&state.pool)
-            .await
-            .unwrap_or_default();
-    let member_ids: Vec<String> = members.into_iter().map(|(id,)| id).collect();
-
-    let days: Vec<&str> = avail_days.split(',').collect();
-
-    let users: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, email, avatar_path FROM users WHERE enabled = 1 ORDER BY name",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let users_ctx: Vec<minijinja::Value> = users
-        .iter()
-        .map(|(id, name, email, avatar_path)| {
-            context! { id => id, name => name, email => email, is_self => id == &user.id, has_avatar => avatar_path.is_some(), initials => compute_initials(name) }
-        })
-        .collect();
-
-    let tmpl = match state.templates.get_template("team_link_form.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Template error: {}", e)),
-    };
-
-    let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
-    Html(
-        tmpl.render(context! {
-            users => users_ctx,
-            current_user_id => user.id,
-            form_title => title,
-            form_description => description.as_deref().unwrap_or(""),
-            form_duration => duration,
-            form_buffer_before => buf_before,
-            form_buffer_after => buf_after,
-            form_min_notice => min_notice,
-            form_start => avail_start,
-            form_end => avail_end,
-            form_avail_windows => avail_windows,
-            form_days => days,
-            form_members => member_ids,
-            form_location_type => location_type.as_deref().unwrap_or(""),
-            form_location_value => location_value.as_deref().unwrap_or(""),
-            form_reminder_minutes => reminder_minutes.unwrap_or(0),
-            form_one_time_use => one_time_use != 0,
-            editing => true,
-            edit_token => token,
-            error => "",
-            sidebar => sidebar_context(&auth_user, "team-links"),
-            impersonating => impersonating,
-            impersonating_name => impersonating_name,
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e)),
-    )
-}
-
-async fn update_team_link(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path(token): Path<String>,
-    axum_extra::extract::Form(form): axum_extra::extract::Form<TeamLinkForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    // Verify ownership
-    let tl: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM team_links WHERE token = ? AND created_by_user_id = ?")
-            .bind(&token)
-            .bind(&user.id)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None);
-
-    let (tl_id,) = match tl {
-        Some(t) => t,
-        None => return Redirect::to("/dashboard/team-links").into_response(),
-    };
-
-    if form.title.trim().is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Title is required.", &form)
-            .await
-            .into_response();
-    }
-
-    if form.members.is_empty() || (form.members.len() == 1 && form.members[0] == user.id) {
-        return render_team_link_form_error(
-            &state,
-            &auth_user,
-            "Select at least one other team member.",
-            &form,
-        )
-        .await
-        .into_response();
-    }
-
-    if form.days.is_empty() {
-        return render_team_link_form_error(&state, &auth_user, "Select at least one day.", &form)
-            .await
-            .into_response();
-    }
-
-    let days_str = form.days.join(",");
-    let one_time_use = form.one_time_use.as_deref() == Some("on");
-
-    let windows = parse_avail_windows(
-        form.avail_windows.as_deref(),
-        Some(&form.availability_start),
-        Some(&form.availability_end),
-    );
-    let avail_windows: String = windows
-        .iter()
-        .map(|(s, e)| format!("{}-{}", s, e))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let location_type = form.location_type.as_deref().filter(|v| !v.is_empty());
-    let location_value = form.location_value.as_deref().filter(|v| !v.is_empty());
-    let description = form.description.as_deref().filter(|v| !v.trim().is_empty());
-    let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
-
-    let _ = sqlx::query(
-        "UPDATE team_links SET title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?,
-                min_notice_min = ?, availability_start = ?, availability_end = ?,
-                availability_days = ?, availability_windows = ?, one_time_use = ?,
-                location_type = ?, location_value = ?, reminder_minutes = ?
-         WHERE id = ?",
-    )
-    .bind(form.title.trim())
-    .bind(description)
-    .bind(form.duration_min)
-    .bind(form.buffer_before.unwrap_or(0))
-    .bind(form.buffer_after.unwrap_or(0))
-    .bind(form.min_notice_min.unwrap_or(60))
-    .bind(&form.availability_start)
-    .bind(&form.availability_end)
-    .bind(&days_str)
-    .bind(&avail_windows)
-    .bind(one_time_use)
-    .bind(location_type)
-    .bind(location_value)
-    .bind(reminder_minutes)
-    .bind(&tl_id)
-    .execute(&state.pool)
-    .await;
-
-    // Replace members: delete old, insert new
-    let _ = sqlx::query("DELETE FROM team_link_members WHERE team_link_id = ?")
-        .bind(&tl_id)
-        .execute(&state.pool)
-        .await;
-
-    let mut all_members = form.members.clone();
-    if !all_members.contains(&user.id) {
-        all_members.push(user.id.clone());
-    }
-
-    for member_id in &all_members {
-        let mid = uuid::Uuid::new_v4().to_string();
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO team_link_members (id, team_link_id, user_id) VALUES (?, ?, ?)",
-        )
-        .bind(&mid)
-        .bind(&tl_id)
-        .bind(member_id)
-        .execute(&state.pool)
-        .await;
-    }
-
-    Redirect::to("/dashboard/team-links").into_response()
-}
-
-async fn delete_team_link(
-    State(state): State<Arc<AppState>>,
-    auth_user: crate::auth::AuthUser,
-    headers: HeaderMap,
-    Path(token): Path<String>,
-    Form(csrf): Form<CsrfForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &csrf._csrf) {
-        return resp;
-    }
-    let user = &auth_user.user;
-
-    // Only the creator can delete
-    let _ = sqlx::query("DELETE FROM team_links WHERE token = ? AND created_by_user_id = ?")
-        .bind(&token)
-        .bind(&user.id)
-        .execute(&state.pool)
-        .await;
-
-    Redirect::to("/dashboard/team-links").into_response()
-}
-
-async fn show_team_link_slots(
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    Query(query): Query<SlotsQuery>,
-) -> impl IntoResponse {
-    let tl: Option<(String, String, i32, i32, i32, i32, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min, availability_start, availability_end, availability_days, availability_windows, location_type, location_value, description, created_by_user_id
-         FROM team_links WHERE token = ?",
-    )
-    .bind(&token)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (
-        tl_id,
-        title,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        avail_start,
-        avail_end,
-        avail_days,
-        avail_windows_db,
-        tl_location_type,
-        tl_location_value,
-        tl_description,
-        creator_user_id,
-    ) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()),
-    };
-
-    // Get member user IDs and names
-    let members: Vec<(String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         WHERE tlm.team_link_id = ? AND u.enabled = 1
-         ORDER BY u.name",
-    )
-    .bind(&tl_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    if members.is_empty() {
-        return Html("No team members found.".to_string());
-    }
-
-    let member_names: Vec<&str> = members.iter().map(|(_, n)| n.as_str()).collect();
-    let host_name = member_names.join(", ");
-
-    let host_tz = get_user_tz(&state.pool, &creator_user_id).await;
-    let guest_tz = parse_guest_tz(query.tz.as_deref());
-    let guest_tz_name = guest_tz.name().to_string();
-
-    let (year, mo) = parse_month_param(query.month.as_deref(), guest_tz);
-    let (
-        start_offset,
-        days_ahead,
-        month_label,
-        prev_month,
-        next_month,
-        first_weekday,
-        days_in_month,
-        today_date,
-        month_year,
-    ) = build_month_params(year, mo, host_tz, guest_tz);
-
-    // Sync all members' calendars if stale
-    for (uid, _) in &members {
-        crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
-    }
-
-    // Build Team busy source: fetch busy times per member
-    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
-    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
-
-    let mut member_busy = HashMap::new();
-    for (uid, _) in &members {
-        member_busy.insert(
-            uid.clone(),
-            fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz, None).await,
-        );
-    }
-    let busy = BusySource::Team(member_busy);
-
-    // Parse availability days and windows, build rules
-    let day_nums: Vec<i32> = avail_days
-        .split(',')
-        .filter_map(|d| d.trim().parse::<i32>().ok())
-        .collect();
-    let windows = parse_avail_windows(
-        avail_windows_db.as_deref(),
-        Some(&avail_start),
-        Some(&avail_end),
-    );
-    let rules: Vec<(i32, String, String)> = day_nums
-        .iter()
-        .flat_map(|d| windows.iter().map(move |(s, e)| (*d, s.clone(), e.clone())))
-        .collect();
-
-    let slot_days = compute_slots_from_rules(
-        &rules,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        start_offset,
-        days_ahead,
-        host_tz,
-        guest_tz,
-        busy,
-        &[], // team links don't have per-event-type overrides
-    );
-
-    let days_ctx: Vec<minijinja::Value> = slot_days
-        .iter()
-        .map(|d| {
-            let slots: Vec<minijinja::Value> = d
-                .slots
-                .iter()
-                .map(|s| {
-                    context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time }
-                })
-                .collect();
-            context! { date => d.date, label => d.label, slots => slots }
-        })
-        .collect();
-
-    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
-
-    let tz_options: Vec<minijinja::Value> = common_timezones()
-        .iter()
-        .map(|(iana, label)| {
-            context! { value => iana, label => label, selected => (*iana == guest_tz_name) }
-        })
-        .collect();
-
-    let tmpl = match state.templates.get_template("slots.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Internal error: {}", e)),
-    };
-    let rendered = tmpl
-        .render(context! {
-            event_type => context! {
-                slug => token,
-                title => title,
-                duration_min => duration,
-                description => tl_description.as_deref().unwrap_or(""),
-                location_type => tl_location_type.as_deref().unwrap_or(""),
-                location_value => tl_location_value.as_deref().unwrap_or(""),
-            },
-            host_name => host_name,
-            team_token => token,
-            days => days_ctx,
-            available_dates => available_dates,
-            month_label => month_label,
-            month_year => month_year,
-            prev_month => prev_month,
-            next_month => next_month,
-            first_weekday => first_weekday,
-            days_in_month => days_in_month,
-            today_date => today_date,
-            guest_tz => guest_tz_name,
-            tz_options => tz_options,
-            company_link => state.company_link.read().await.clone(),
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e));
-
-    Html(rendered)
-}
-
-async fn show_team_link_book_form(
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    Query(query): Query<BookQuery>,
-) -> impl IntoResponse {
-    let tl: Option<(String, String, i32, Option<String>, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, title, duration_min, location_type, location_value, description FROM team_links WHERE token = ?")
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None);
-
-    let (tl_id, title, duration, tl_location_type, tl_location_value, tl_description) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()),
-    };
-
-    let members: Vec<(String,)> = sqlx::query_as(
-        "SELECT u.name FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         WHERE tlm.team_link_id = ? AND u.enabled = 1
-         ORDER BY u.name",
-    )
-    .bind(&tl_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    let host_name = members
-        .iter()
-        .map(|(n,)| n.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let guest_tz = parse_guest_tz(query.tz.as_deref());
-    let guest_tz_name = guest_tz.name().to_string();
-
-    let date = match NaiveDate::parse_from_str(&query.date, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return Html("Invalid date format.".to_string()),
-    };
-    let time = match NaiveTime::parse_from_str(&query.time, "%H:%M") {
-        Ok(t) => t,
-        Err(_) => return Html("Invalid time format.".to_string()),
-    };
-    let end_time = (date.and_time(time) + Duration::minutes(duration as i64))
-        .time()
-        .format("%H:%M")
-        .to_string();
-    let date_label = date.format("%A, %B %-d, %Y").to_string();
-
-    let tmpl = match state.templates.get_template("book.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Internal error: {}", e)),
-    };
-    let rendered = tmpl
-        .render(context! {
-            event_type => context! {
-                slug => token,
-                title => title,
-                duration_min => duration,
-                description => tl_description.as_deref().unwrap_or(""),
-                location_type => tl_location_type.as_deref().unwrap_or(""),
-                location_value => tl_location_value.as_deref().unwrap_or(""),
-            },
-            host_name => host_name,
-            team_token => token,
-            date => query.date,
-            date_label => date_label,
-            time_start => query.time,
-            time_end => end_time,
-            guest_tz => guest_tz_name,
-            error => "",
-            form_name => "",
-            form_email => "",
-            form_notes => "",
-            max_additional_guests => 0,
-            company_link => state.company_link.read().await.clone(),
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e));
-
-    Html(rendered)
-}
-
-async fn handle_team_link_booking(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Path(token): Path<String>,
-    Form(form): Form<BookForm>,
-) -> impl IntoResponse {
-    if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
-        return resp;
-    }
-    // Rate limit by IP
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .unwrap_or("unknown")
-        .trim()
-        .to_string();
-    if state.booking_limiter.check_limited(&client_ip).await {
-        tracing::warn!(ip = %client_ip, "rate limited");
-        return Html("Too many booking attempts. Please try again in a few minutes.".to_string())
-            .into_response();
-    }
-
-    if let Err(e) = validate_booking_input(&form.name, &form.email, &form.notes) {
-        return Html(e).into_response();
-    }
-
-    // Parse additional guests (team links don't support additional guests)
-    let additional_attendees =
-        match parse_additional_guests(&form.additional_guests, 0, &form.email) {
-            Ok(emails) => emails,
-            Err(e) => return Html(e).into_response(),
-        };
-
-    let tl: Option<(String, String, i32, i32, i32, i32, String, i32, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, title, duration_min, buffer_before, buffer_after, min_notice_min, created_by_user_id, one_time_use, location_type, location_value
-         FROM team_links WHERE token = ?",
-    )
-    .bind(&token)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let (
-        tl_id,
-        tl_title,
-        duration,
-        buffer_before,
-        buffer_after,
-        min_notice,
-        creator_id,
-        one_time_use,
-        tl_location_type,
-        tl_location_value,
-    ) = match tl {
-        Some(t) => t,
-        None => return Html("Team link not found.".to_string()).into_response(),
-    };
-
-    let date = match NaiveDate::parse_from_str(&form.date, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return Html("Invalid date.".to_string()).into_response(),
-    };
-    if let Err(e) = validate_date_not_too_far(date) {
-        return Html(e).into_response();
-    }
-    let start_time = match NaiveTime::parse_from_str(&form.time, "%H:%M") {
-        Ok(t) => t,
-        Err(_) => return Html("Invalid time.".to_string()).into_response(),
-    };
-
-    let slot_start = date.and_time(start_time);
-    let slot_end = slot_start + Duration::minutes(duration as i64);
-
-    // Validate minimum notice
-    let now = chrono::Local::now().naive_local();
-    if slot_start < now + Duration::minutes(min_notice as i64) {
-        return Html("This slot is no longer available (too soon).".to_string()).into_response();
-    }
-
-    // Get all members
-    let members: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, COALESCE(u.booking_email, u.email) FROM users u
-         JOIN team_link_members tlm ON tlm.user_id = u.id
-         WHERE tlm.team_link_id = ? AND u.enabled = 1",
-    )
-    .bind(&tl_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let host_tz = get_user_tz(&state.pool, &creator_id).await;
-
-    let buf_start = slot_start - Duration::minutes(buffer_before as i64);
-    let buf_end = slot_end + Duration::minutes(buffer_after as i64);
-
-    // Create team link booking
-    let booking_id = uuid::Uuid::new_v4().to_string();
-    let uid = format!("{}@calrs", uuid::Uuid::new_v4());
-    let cancel_token = uuid::Uuid::new_v4().to_string();
-    let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let guest_tz = parse_guest_tz(form.tz.as_deref());
-    let guest_timezone = guest_tz.name().to_string();
-
-    // Start a transaction to ensure atomicity of availability check + insert.
-    let mut tx = match state.pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Html(format!("Database error: {}", e)).into_response();
-        }
-    };
-
-    // Validate ALL members are still free
-    for (member_uid, _, _) in &members {
-        let busy =
-            fetch_busy_times_for_user(&state.pool, member_uid, buf_start, buf_end, host_tz, None)
-                .await;
-        if has_conflict(&busy, buf_start, buf_end) {
-            let _ = tx.rollback().await;
-            return Html("This slot is no longer available.".to_string()).into_response();
-        }
-    }
-
-    let insert_result = sqlx::query(
-        "INSERT INTO team_link_bookings (id, team_link_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)",
-    )
-    .bind(&booking_id)
-    .bind(&tl_id)
-    .bind(&uid)
-    .bind(&form.name)
-    .bind(&form.email)
-    .bind(&guest_timezone)
-    .bind(&form.notes)
-    .bind(&start_at)
-    .bind(&end_at)
-    .bind(&cancel_token)
-    .execute(&mut *tx)
-    .await;
-
-    match insert_result {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = tx.rollback().await;
-            return Html(format!("Database error: {}", e)).into_response();
-        }
-    }
-
-    // Insert additional attendees
-    for attendee_email in &additional_attendees {
-        let attendee_id = uuid::Uuid::new_v4().to_string();
-        let _ =
-            sqlx::query("INSERT INTO booking_attendees (id, booking_id, email) VALUES (?, ?, ?)")
-                .bind(&attendee_id)
-                .bind(&booking_id)
-                .bind(attendee_email)
-                .execute(&mut *tx)
-                .await;
-    }
-
-    if let Err(e) = tx.commit().await {
-        return Html(format!("Database error: {}", e)).into_response();
-    }
-
-    tracing::info!(booking_id = %booking_id, team_link = %token, guest = %form.email, "team link booking created");
-
-    let member_names: Vec<&str> = members.iter().map(|(_, n, _)| n.as_str()).collect();
-    let host_name = member_names.join(", ");
-    let tl_location = tl_location_value
-        .as_ref()
-        .filter(|v| !v.is_empty())
-        .cloned();
-
-    // Push to each member's CalDAV and send emails
-    if let Ok(Some(smtp_config)) =
-        crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-    {
-        for (member_uid, _member_name, member_email) in &members {
-            let details = crate::email::BookingDetails {
-                event_title: tl_title.clone(),
-                date: form.date.clone(),
-                start_time: form.time.clone(),
-                end_time: slot_end.time().format("%H:%M").to_string(),
-                guest_name: form.name.clone(),
-                guest_email: form.email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: host_name.clone(),
-                host_email: member_email.clone(),
-                uid: uid.clone(),
-                notes: form.notes.clone(),
-                location: tl_location.clone(),
-                reminder_minutes: None,
-                additional_attendees: vec![],
-            };
-
-            // Email notification to each member
-            let _ = crate::email::send_host_notification(&smtp_config, &details).await;
-
-            // CalDAV write-back for each member
-            caldav_push_booking(&state.pool, &state.secret_key, member_uid, &uid, &details).await;
-        }
-
-        // Send confirmation to guest (use first member as "from")
-        if let Some((_, _, first_email)) = members.first() {
-            let details = crate::email::BookingDetails {
-                event_title: tl_title.clone(),
-                date: form.date.clone(),
-                start_time: form.time.clone(),
-                end_time: slot_end.time().format("%H:%M").to_string(),
-                guest_name: form.name.clone(),
-                guest_email: form.email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: host_name.clone(),
-                host_email: first_email.clone(),
-                uid: uid.clone(),
-                notes: form.notes.clone(),
-                location: tl_location.clone(),
-                reminder_minutes: None,
-                additional_attendees: vec![],
-            };
-            let base_url = std::env::var("CALRS_BASE_URL").ok();
-            let cancel_url = base_url.as_ref().map(|base| {
-                format!(
-                    "{}/booking/cancel/{}",
-                    base.trim_end_matches('/'),
-                    cancel_token
-                )
-            });
-            let _ = crate::email::send_guest_confirmation(
-                &smtp_config,
-                &details,
-                cancel_url.as_deref(),
-            )
-            .await;
-        }
-    } else {
-        // Even without SMTP, push to CalDAV
-        for (member_uid, _member_name, member_email) in &members {
-            let details = crate::email::BookingDetails {
-                event_title: tl_title.clone(),
-                date: form.date.clone(),
-                start_time: form.time.clone(),
-                end_time: slot_end.time().format("%H:%M").to_string(),
-                guest_name: form.name.clone(),
-                guest_email: form.email.clone(),
-                guest_timezone: guest_timezone.clone(),
-                host_name: host_name.clone(),
-                host_email: member_email.clone(),
-                uid: uid.clone(),
-                notes: form.notes.clone(),
-                location: tl_location.clone(),
-                reminder_minutes: None,
-                additional_attendees: vec![],
-            };
-            caldav_push_booking(&state.pool, &state.secret_key, member_uid, &uid, &details).await;
-        }
-    }
-
-    // Auto-delete the team link if one-time use
-    if one_time_use != 0 {
-        let _ = sqlx::query("DELETE FROM team_links WHERE id = ?")
-            .bind(&tl_id)
-            .execute(&state.pool)
-            .await;
-    }
-
-    // Render confirmation
-    let date_label = date.format("%A, %B %-d, %Y").to_string();
-    let tmpl = match state.templates.get_template("confirmed.html") {
-        Ok(t) => t,
-        Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-    };
-    let rendered = tmpl
-        .render(context! {
-            event_title => tl_title,
-            date_label => date_label,
-            time_start => form.time,
-            time_end => slot_end.time().format("%H:%M").to_string(),
-            host_name => host_name,
-            guest_email => form.email,
-            notes => form.notes,
-            pending => false,
-            additional_attendees => additional_attendees,
-            location_type => tl_location_type.as_deref().unwrap_or(""),
-            location_value => tl_location.as_deref().unwrap_or(""),
-            company_link => state.company_link.read().await.clone(),
-        })
-        .unwrap_or_else(|e| format!("Template error: {}", e));
-
-    Html(rendered).into_response()
 }
 
 // --- Calendar source management ---
@@ -4804,11 +4247,11 @@ async fn invite_management_page(
         Option<String>,
     )> = sqlx::query_as(
         "SELECT et.id, et.title, et.slug,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END,
-                CASE WHEN et.group_id IS NULL THEN u.username ELSE NULL END,
-                CASE WHEN et.group_id IS NOT NULL THEN g.name ELSE u.name END
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                CASE WHEN et.team_id IS NULL THEN u.username ELSE NULL END,
+                CASE WHEN et.team_id IS NOT NULL THEN t.name ELSE u.name END
          FROM event_types et
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
          WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
@@ -4818,7 +4261,7 @@ async fn invite_management_page(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_title, et_slug, group_slug, username, owner_name) = match et {
+    let (et_id, et_title, et_slug, team_slug, username, owner_name) = match et {
         Some(e) => e,
         None => return Html("Private event type not found.".to_string()),
     };
@@ -4884,7 +4327,7 @@ async fn invite_management_page(
             event_type_id => et_id,
             event_type_title => et_title,
             event_type_slug => et_slug,
-            group_slug => group_slug,
+            team_slug => team_slug,
             username => username,
             owner_name => owner_name,
             invites => invites_ctx,
@@ -4909,10 +4352,10 @@ async fn send_invite(
     // Verify event type exists and is private
     let et: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT et.id, et.title,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END,
-                CASE WHEN et.group_id IS NULL THEN u.username ELSE NULL END
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                CASE WHEN et.team_id IS NULL THEN u.username ELSE NULL END
          FROM event_types et
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
          WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
@@ -4922,7 +4365,7 @@ async fn send_invite(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_title, group_slug, username) = match et {
+    let (et_id, et_title, team_slug, username) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
@@ -4972,8 +4415,8 @@ async fn send_invite(
                 .unwrap_or(None);
 
         if let Some(slug) = et_slug {
-            let invite_url = if let Some(gs) = &group_slug {
-                format!("{}/team/{}/{}?invite={}", base_url, gs, slug, token)
+            let invite_url = if let Some(ts) = &team_slug {
+                format!("{}/team/{}/{}?invite={}", base_url, ts, slug, token)
             } else if let Some(un) = &username {
                 format!("{}/u/{}/{}?invite={}", base_url, un, slug, token)
             } else {
@@ -5055,10 +4498,10 @@ async fn generate_quick_link(
 
     let et: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT et.id, et.slug,
-                CASE WHEN et.group_id IS NOT NULL THEN g.slug ELSE NULL END,
-                CASE WHEN et.group_id IS NULL THEN u.username ELSE NULL END
+                CASE WHEN et.team_id IS NOT NULL THEN t.slug ELSE NULL END,
+                CASE WHEN et.team_id IS NULL THEN u.username ELSE NULL END
          FROM event_types et
-         LEFT JOIN groups g ON g.id = et.group_id
+         LEFT JOIN teams t ON t.id = et.team_id
          LEFT JOIN accounts a ON a.id = et.account_id
          LEFT JOIN users u ON u.id = a.user_id
          WHERE et.id = ? AND et.visibility IN ('private', 'internal')",
@@ -5068,7 +4511,7 @@ async fn generate_quick_link(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_slug, group_slug, username) = match et {
+    let (et_id, et_slug, team_slug, username) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/organization").into_response(),
     };
@@ -5093,8 +4536,8 @@ async fn generate_quick_link(
     tracing::info!(event_type = %et_id, created_by = %auth_user.user.email, "quick invite link generated");
 
     let base_url = std::env::var("CALRS_BASE_URL").unwrap_or_default();
-    let invite_url = if let Some(gs) = &group_slug {
-        format!("{}/team/{}/{}?invite={}", base_url, gs, et_slug, token)
+    let invite_url = if let Some(ts) = &team_slug {
+        format!("{}/team/{}/{}?invite={}", base_url, ts, et_slug, token)
     } else if let Some(un) = &username {
         format!("{}/u/{}/{}?invite={}", base_url, un, et_slug, token)
     } else {
@@ -5114,8 +4557,8 @@ async fn overrides_page(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    let et: Option<(String, String)> = sqlx::query_as(
-        "SELECT et.id, et.title FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.slug = ?",
+    let et: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.title, et.team_id FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.slug = ?",
     )
     .bind(&user.id)
     .bind(&slug)
@@ -5123,10 +4566,11 @@ async fn overrides_page(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_title) = match et {
+    let (et_id, et_title, team_id) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
+    let is_team = team_id.is_some();
 
     let overrides: Vec<(String, String, Option<String>, Option<String>, i32)> = sqlx::query_as(
         "SELECT id, date, start_time, end_time, is_blocked FROM availability_overrides WHERE event_type_id = ? ORDER BY date, start_time",
@@ -5166,6 +4610,7 @@ async fn overrides_page(
             event_type_title => et_title,
             event_type_slug => slug,
             overrides => overrides_ctx,
+            is_team => is_team,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })
@@ -5292,13 +4737,13 @@ async fn new_group_event_type_form(
     let is_admin = user.role == "admin";
 
     let groups: Vec<(String, String)> = if is_admin {
-        sqlx::query_as("SELECT g.id, g.name FROM groups g ORDER BY g.name")
+        sqlx::query_as("SELECT t.id, t.name FROM teams t ORDER BY t.name")
             .fetch_all(&state.pool)
             .await
             .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id WHERE ug.user_id = ? ORDER BY g.name",
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? AND tm.role = 'admin' ORDER BY t.name",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -5308,9 +4753,9 @@ async fn new_group_event_type_form(
 
     if groups.is_empty() {
         return Html(if is_admin {
-            "No groups exist yet.".to_string()
+            "No teams exist yet.".to_string()
         } else {
-            "You don't belong to any groups.".to_string()
+            "You are not an admin of any teams.".to_string()
         });
     }
 
@@ -5329,8 +4774,8 @@ async fn new_group_event_type_form(
         tmpl.render(context! {
             editing => false,
             is_group => true,
-            groups => groups_ctx,
-            form_group_id => groups.first().map(|(id, _)| id.as_str()).unwrap_or(""),
+            teams => groups_ctx,
+            form_team_id => groups.first().map(|(id, _)| id.as_str()).unwrap_or(""),
             form_title => "",
             form_slug => "",
             form_description => "",
@@ -5364,26 +4809,16 @@ async fn create_group_event_type(
     }
     let user = &auth_user.user;
 
-    let group_id = match form.group_id.as_deref().filter(|s| !s.trim().is_empty()) {
-        Some(gid) => gid.to_string(),
+    let team_id = match form.team_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(tid) => tid.to_string(),
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
     let is_admin = user.role == "admin";
 
-    // Verify user belongs to this group (admins can manage any group)
-    if !is_admin {
-        let membership: Option<(String,)> =
-            sqlx::query_as("SELECT group_id FROM user_groups WHERE user_id = ? AND group_id = ?")
-                .bind(&user.id)
-                .bind(&group_id)
-                .fetch_optional(&state.pool)
-                .await
-                .unwrap_or(None);
-
-        if membership.is_none() {
-            return Html("You don't belong to this group.".to_string()).into_response();
-        }
+    // Verify user is a team admin (global admins can manage any team)
+    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
+        return Html("You are not an admin of this team.".to_string()).into_response();
     }
 
     // Find the user's account
@@ -5404,17 +4839,17 @@ async fn create_group_event_type(
         return Html("Slug is required.".to_string()).into_response();
     }
 
-    // Check uniqueness within the group
+    // Check uniqueness within the team
     let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM event_types WHERE group_id = ? AND slug = ?")
-            .bind(&group_id)
+        sqlx::query_as("SELECT id FROM event_types WHERE team_id = ? AND slug = ?")
+            .bind(&team_id)
             .bind(&slug)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
     if existing.is_some() {
-        return Html("An event type with this slug already exists in this group.".to_string())
+        return Html("An event type with this slug already exists in this team.".to_string())
             .into_response();
     }
 
@@ -5427,7 +4862,7 @@ async fn create_group_event_type(
         .filter(|s| !s.trim().is_empty());
 
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, group_id, created_by_user_id)
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
@@ -5442,7 +4877,7 @@ async fn create_group_event_type(
     .bind(requires_confirmation as i32)
     .bind(location_type)
     .bind(location_value)
-    .bind(&group_id)
+    .bind(&team_id)
     .bind(&user.id)
     .execute(&state.pool)
     .await;
@@ -5501,9 +4936,9 @@ async fn edit_group_event_type_form(
         String,
     )> = if is_admin {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.group_id, et.visibility, et.max_additional_guests, et.scheduling_mode
+            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.team_id, et.visibility, et.max_additional_guests, et.scheduling_mode
              FROM event_types et
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -5511,10 +4946,10 @@ async fn edit_group_event_type_form(
         .unwrap_or(None)
     } else {
         sqlx::query_as(
-            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.group_id, et.visibility, et.max_additional_guests, et.scheduling_mode
+            "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.reminder_minutes, et.team_id, et.visibility, et.max_additional_guests, et.scheduling_mode
              FROM event_types et
-             JOIN user_groups ug ON ug.group_id = et.group_id
-             WHERE ug.user_id = ? AND et.slug = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -5536,7 +4971,7 @@ async fn edit_group_event_type_form(
         loc_type,
         loc_value,
         reminder_min,
-        group_id,
+        team_id,
         visibility,
         max_additional_guests,
         scheduling_mode,
@@ -5581,16 +5016,16 @@ async fn edit_group_event_type_form(
         .cloned()
         .unwrap_or_else(|| ("09:00".to_string(), "17:00".to_string()));
 
-    // Fetch group members with per-ET weights for round-robin priority
+    // Fetch team members with per-ET weights for round-robin priority
     let is_round_robin_group = scheduling_mode == "round_robin";
     let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
         let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT u.id, u.name, u.avatar_path \
-             FROM users u JOIN user_groups ug ON ug.user_id = u.id \
-             WHERE ug.group_id = ? AND u.enabled = 1 \
+             FROM users u JOIN team_members tm ON tm.user_id = u.id \
+             WHERE tm.team_id = ? AND u.enabled = 1 \
              ORDER BY u.name",
         )
-        .bind(&group_id)
+        .bind(&team_id)
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -5677,9 +5112,9 @@ async fn update_group_event_type(
 
     let et: Option<(String, String)> = if is_admin {
         sqlx::query_as(
-            "SELECT et.id, et.group_id
+            "SELECT et.id, et.team_id
              FROM event_types et
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -5687,10 +5122,10 @@ async fn update_group_event_type(
         .unwrap_or(None)
     } else {
         sqlx::query_as(
-            "SELECT et.id, et.group_id
+            "SELECT et.id, et.team_id
              FROM event_types et
-             JOIN user_groups ug ON ug.group_id = et.group_id
-             WHERE ug.user_id = ? AND et.slug = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id
+             WHERE tm.user_id = ? AND tm.role = 'admin' AND et.slug = ? AND et.team_id IS NOT NULL",
         )
         .bind(&user.id)
         .bind(&slug)
@@ -5699,7 +5134,7 @@ async fn update_group_event_type(
         .unwrap_or(None)
     };
 
-    let (et_id, group_id) = match et {
+    let (et_id, team_id) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
@@ -5708,11 +5143,11 @@ async fn update_group_event_type(
     let requires_confirmation = form.requires_confirmation.as_deref() == Some("on");
     let visibility = form.visibility.as_deref().unwrap_or("public").to_string();
 
-    // Check slug uniqueness within the group if changed
+    // Check slug uniqueness within the team if changed
     if new_slug != slug {
         let existing: Option<(String,)> =
-            sqlx::query_as("SELECT id FROM event_types WHERE group_id = ? AND slug = ?")
-                .bind(&group_id)
+            sqlx::query_as("SELECT id FROM event_types WHERE team_id = ? AND slug = ?")
+                .bind(&team_id)
                 .bind(&new_slug)
                 .fetch_optional(&state.pool)
                 .await
@@ -5722,7 +5157,7 @@ async fn update_group_event_type(
             return render_event_type_form_error(
                 &state,
                 &auth_user,
-                "An event type with this slug already exists in this group.",
+                "An event type with this slug already exists in this team.",
                 &form,
                 true,
             )
@@ -5807,26 +5242,37 @@ async fn toggle_group_event_type(
 
     let is_admin = user.role == "admin";
 
-    if is_admin {
-        let _ = sqlx::query(
-            "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND group_id IS NOT NULL",
-        )
-        .bind(&slug)
-        .execute(&state.pool)
-        .await;
+    // Look up the specific event type ID to avoid cross-team slug collisions
+    let et: Option<(String,)> = if is_admin {
+        sqlx::query_as("SELECT id FROM event_types WHERE slug = ? AND team_id IS NOT NULL LIMIT 1")
+            .bind(&slug)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None)
     } else {
-        let _ = sqlx::query(
-            "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END
-             WHERE slug = ? AND group_id IS NOT NULL AND group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?)",
+        sqlx::query_as(
+            "SELECT et.id FROM event_types et \
+             JOIN team_members tm ON tm.team_id = et.team_id \
+             WHERE et.slug = ? AND et.team_id IS NOT NULL AND tm.user_id = ? AND tm.role = 'admin' \
+             LIMIT 1",
         )
         .bind(&slug)
         .bind(&user.id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+    };
+
+    if let Some((et_id,)) = et {
+        let _ = sqlx::query(
+            "UPDATE event_types SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ?",
+        )
+        .bind(&et_id)
         .execute(&state.pool)
         .await;
-    }
 
-    tracing::debug!(event_type_slug = %slug, "group event type toggled");
+        tracing::debug!(event_type_id = %et_id, event_type_slug = %slug, "group event type toggled");
+    }
 
     Redirect::to("/dashboard/event-types").into_response()
 }
@@ -5848,7 +5294,7 @@ async fn delete_group_event_type(
     let et: Option<(String,)> = if is_admin {
         sqlx::query_as(
             "SELECT et.id FROM event_types et
-             WHERE et.slug = ? AND et.group_id IS NOT NULL",
+             WHERE et.slug = ? AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&slug)
         .fetch_optional(&state.pool)
@@ -5857,8 +5303,8 @@ async fn delete_group_event_type(
     } else {
         sqlx::query_as(
             "SELECT et.id FROM event_types et
-             JOIN user_groups ug ON ug.group_id = et.group_id
-             WHERE et.slug = ? AND ug.user_id = ? AND et.group_id IS NOT NULL",
+             JOIN team_members tm ON tm.team_id = et.team_id
+             WHERE et.slug = ? AND tm.user_id = ? AND tm.role = 'admin' AND et.team_id IS NOT NULL LIMIT 1",
         )
         .bind(&slug)
         .bind(&user.id)
@@ -5914,12 +5360,12 @@ async fn delete_group_event_type(
 
 // --- Legacy /g/ redirects ---
 
-async fn redirect_g_to_team(Path(group_slug): Path<String>) -> impl IntoResponse {
-    Redirect::permanent(&format!("/team/{}", group_slug))
+async fn redirect_g_to_team(Path(team_slug): Path<String>) -> impl IntoResponse {
+    Redirect::permanent(&format!("/team/{}", team_slug))
 }
 
 async fn redirect_g_to_team_slug(
-    Path((group_slug, slug)): Path<(String, String)>,
+    Path((team_slug, slug)): Path<(String, String)>,
     Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let qs = if query.is_empty() {
@@ -5934,51 +5380,99 @@ async fn redirect_g_to_team_slug(
                 .join("&")
         )
     };
-    Redirect::permanent(&format!("/team/{}/{}{}", group_slug, slug, qs))
+    Redirect::permanent(&format!("/team/{}/{}{}", team_slug, slug, qs))
 }
 
 async fn redirect_g_to_team_slug_book(
-    Path((group_slug, slug)): Path<(String, String)>,
+    Path((team_slug, slug)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    Redirect::permanent(&format!("/team/{}/{}/book", group_slug, slug))
+    Redirect::permanent(&format!("/team/{}/{}/book", team_slug, slug))
 }
 
-// --- Group public pages ---
+// --- Legacy /t/ team link redirects ---
 
-async fn group_profile(
+async fn redirect_team_link_to_team(
     State(state): State<Arc<AppState>>,
-    Path(group_slug): Path<String>,
+    Path(token): Path<String>,
 ) -> impl IntoResponse {
-    let group: Option<(String, String, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, name, description, avatar_path FROM groups WHERE slug = ?")
-            .bind(&group_slug)
+    // Look up the team by invite_token (team links were migrated to teams)
+    let team: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT slug FROM teams WHERE invite_token = ?")
+            .bind(&token)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None);
 
-    let (group_id, group_name, group_description, group_avatar_path) = match group {
-        Some(g) => g,
-        None => return Html("Group not found.".to_string()),
+    match team {
+        Some((Some(slug),)) => {
+            Redirect::permanent(&format!("/team/{}?invite={}", slug, token)).into_response()
+        }
+        Some((None,)) => {
+            // Team exists but has no slug — should not happen after migration fix,
+            // but handle gracefully
+            Html("Team not found.".to_string()).into_response()
+        }
+        None => Html("Team not found.".to_string()).into_response(),
+    }
+}
+
+// --- Group public pages ---
+
+async fn team_profile_page(
+    State(state): State<Arc<AppState>>,
+    Path(team_slug): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let team: Option<(String, String, Option<String>, Option<String>, String, Option<String>)> =
+        sqlx::query_as("SELECT id, name, description, avatar_path, visibility, invite_token FROM teams WHERE slug = ?")
+            .bind(&team_slug)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+
+    let (
+        team_id,
+        team_name,
+        team_description,
+        team_avatar_path,
+        team_visibility,
+        team_invite_token,
+    ) = match team {
+        Some(t) => t,
+        None => return Html("Team not found.".to_string()),
     };
+
+    // Gate private teams behind invite token
+    let passed_invite = query.get("invite").cloned().unwrap_or_default();
+    if team_visibility == "private" {
+        match &team_invite_token {
+            Some(expected) if !passed_invite.is_empty() && passed_invite == *expected => {
+                // valid — continue
+            }
+            _ => {
+                return Html("Team not found.".to_string());
+            }
+        }
+    }
 
     let event_types: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(
         "SELECT et.slug, et.title, et.description, et.duration_min
          FROM event_types et
-         WHERE et.group_id = ? AND et.enabled = 1 AND et.visibility = 'public'
+         WHERE et.team_id = ? AND et.enabled = 1 AND et.visibility = 'public'
          ORDER BY et.created_at",
     )
-    .bind(&group_id)
+    .bind(&team_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
 
     let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT u.id, u.name, u.avatar_path FROM users u \
-         JOIN user_groups ug ON ug.user_id = u.id \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
+         JOIN team_members tm ON tm.user_id = u.id \
+         WHERE tm.team_id = ? AND u.enabled = 1 \
          ORDER BY u.name",
     )
-    .bind(&group_id)
+    .bind(&team_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -5995,7 +5489,7 @@ async fn group_profile(
         })
         .collect();
 
-    let tmpl = match state.templates.get_template("group_profile.html") {
+    let tmpl = match state.templates.get_template("team_profile.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
     };
@@ -6003,20 +5497,28 @@ async fn group_profile(
     let et_ctx: Vec<minijinja::Value> = event_types
         .iter()
         .map(|(slug, title, desc, duration)| {
-            context! { slug => slug, title => title, description => desc, duration_min => duration }
+            context! { slug => slug, title => title, description => desc.as_deref().map(crate::utils::render_inline_markdown), duration_min => duration }
         })
         .collect();
 
+    // Pass invite token through if team is private (so links include it)
+    let invite_token_for_template = if team_visibility == "private" && !passed_invite.is_empty() {
+        passed_invite
+    } else {
+        String::new()
+    };
+
     Html(
         tmpl.render(context! {
-            group_id => group_id,
-            group_name => group_name,
-            group_slug => group_slug,
-            group_description => group_description,
-            group_has_avatar => group_avatar_path.is_some(),
-            group_initials => compute_initials(&group_name),
+            team_id => team_id,
+            team_name => team_name,
+            team_slug => team_slug,
+            team_description => team_description.as_deref().map(crate::utils::render_inline_markdown),
+            team_has_avatar => team_avatar_path.is_some(),
+            team_initials => compute_initials(&team_name),
             members => members_ctx,
             event_types => et_ctx,
+            invite_token => invite_token_for_template,
             company_link => state.company_link.read().await.clone(),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
@@ -6025,16 +5527,16 @@ async fn group_profile(
 
 async fn show_group_slots(
     State(state): State<Arc<AppState>>,
-    Path((group_slug, slug)): Path<(String, String)>,
+    Path((team_slug, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, String)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, g.name, et.visibility, et.scheduling_mode
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, t.name, et.visibility, et.scheduling_mode, t.visibility, t.invite_token
          FROM event_types et
-         JOIN groups g ON g.id = et.group_id
-         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+         JOIN teams t ON t.id = et.team_id
+         WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
     )
-    .bind(&group_slug)
+    .bind(&team_slug)
     .bind(&slug)
     .fetch_optional(&state.pool)
     .await
@@ -6051,13 +5553,23 @@ async fn show_group_slots(
         min_notice,
         loc_type,
         loc_value,
-        group_name,
+        team_name,
         visibility,
         scheduling_mode,
+        team_visibility,
+        team_invite_token,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
     };
+
+    // Validate invite token for private teams
+    if team_visibility == "private" {
+        let valid = matches!((&team_invite_token, &query.invite), (Some(expected), Some(provided)) if !provided.is_empty() && provided == expected);
+        if !valid {
+            return Html("Event type not found.".to_string());
+        }
+    }
 
     // Validate invite token for private event types
     if visibility == "private" || visibility == "internal" {
@@ -6106,25 +5618,25 @@ async fn show_group_slots(
         month_year,
     ) = build_month_params(year, month, host_tz, guest_tz);
 
-    // Build group busy source: fetch busy times per member
+    // Build team busy source: fetch busy times per member
     let now_host = Utc::now().with_timezone(&host_tz).naive_local();
     let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
     let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
 
-    let group_id: Option<String> =
-        sqlx::query_scalar("SELECT group_id FROM event_types WHERE id = ?")
+    let team_id: Option<String> =
+        sqlx::query_scalar("SELECT team_id FROM event_types WHERE id = ?")
             .bind(&et_id)
             .fetch_optional(&state.pool)
             .await
             .unwrap_or(None)
             .flatten();
-    let busy = if let Some(ref gid) = group_id {
+    let busy = if let Some(ref tid) = team_id {
         let members: Vec<(String,)> = sqlx::query_as(
-            "SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id \
+            "SELECT u.id FROM users u JOIN team_members tm ON tm.user_id = u.id \
              LEFT JOIN event_type_member_weights etw ON etw.user_id = u.id AND etw.event_type_id = ? \
-             WHERE ug.group_id = ? AND u.enabled = 1 \
-             AND COALESCE(etw.weight, ug.weight, 1) > 0",
-        ).bind(&et_id).bind(gid).fetch_all(&state.pool).await.unwrap_or_default();
+             WHERE tm.team_id = ? AND u.enabled = 1 \
+             AND COALESCE(etw.weight, 1) > 0",
+        ).bind(&et_id).bind(tid).fetch_all(&state.pool).await.unwrap_or_default();
         // Sync all group members' calendars if stale
         for (uid,) in &members {
             crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
@@ -6206,6 +5718,41 @@ async fn show_group_slots(
         .map(|(iana, label)| context! { value => iana, label => label, selected => (*iana == guest_tz_name) })
         .collect();
 
+    // Fetch team ID and avatar for sidebar display
+    let team_info: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, avatar_path FROM teams WHERE slug = ?")
+            .bind(&team_slug)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+    let (team_id, team_avatar_path) = team_info.unwrap_or_default();
+
+    // Fetch active team members for sidebar display (exclude members with weight=0)
+    let team_members_rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.avatar_path FROM users u \
+         JOIN team_members tm ON tm.user_id = u.id \
+         LEFT JOIN event_type_member_weights etw ON etw.user_id = u.id AND etw.event_type_id = ? \
+         WHERE tm.team_id = ? AND u.enabled = 1 AND COALESCE(etw.weight, 1) > 0 \
+         ORDER BY u.name",
+    )
+    .bind(&et_id)
+    .bind(&team_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let team_members_ctx: Vec<minijinja::Value> = team_members_rows
+        .iter()
+        .map(|(uid, uname, ap)| {
+            context! {
+                id => uid,
+                name => uname,
+                has_avatar => ap.is_some(),
+                initials => compute_initials(uname),
+            }
+        })
+        .collect();
+
     let tmpl = match state.templates.get_template("slots.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Internal error: {}", e)),
@@ -6215,13 +5762,17 @@ async fn show_group_slots(
             event_type => context! {
                 slug => et_slug,
                 title => et_title,
-                description => et_desc,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
                 duration_min => duration,
                 location_type => loc_type,
                 location_value => loc_value,
             },
-            host_name => group_name,
-            group_slug => group_slug,
+            host_name => team_name,
+            team_slug => team_slug,
+            team_id => team_id,
+            team_has_avatar => team_avatar_path.is_some(),
+            team_initials => compute_initials(&team_name),
+            team_members => team_members_ctx,
             days => days_ctx,
             available_dates => available_dates,
             month_label => month_label,
@@ -6243,16 +5794,16 @@ async fn show_group_slots(
 
 async fn show_group_book_form(
     State(state): State<Arc<AppState>>,
-    Path((group_slug, slug)): Path<(String, String)>,
+    Path((team_slug, slug)): Path<(String, String)>,
     Query(query): Query<BookQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, String, Option<String>, String, String, i32)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, g.name, et.visibility, et.max_additional_guests
+    let et: Option<(String, String, String, Option<String>, i32, String, Option<String>, String, String, i32, String, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, t.name, et.visibility, et.max_additional_guests, t.visibility, t.invite_token
          FROM event_types et
-         JOIN groups g ON g.id = et.group_id
-         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+         JOIN teams t ON t.id = et.team_id
+         WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
     )
-    .bind(&group_slug)
+    .bind(&team_slug)
     .bind(&slug)
     .fetch_optional(&state.pool)
     .await
@@ -6266,13 +5817,23 @@ async fn show_group_book_form(
         duration,
         loc_type,
         loc_value,
-        group_name,
+        team_name,
         visibility,
         max_additional_guests,
+        team_visibility,
+        team_invite_token,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
     };
+
+    // Validate invite token for private teams
+    if team_visibility == "private" {
+        let valid = matches!((&team_invite_token, &query.invite), (Some(expected), Some(provided)) if !provided.is_empty() && provided == expected);
+        if !valid {
+            return Html("Event type not found.".to_string());
+        }
+    }
 
     // Validate invite token for private event types
     let invite_guest_name;
@@ -6337,13 +5898,13 @@ async fn show_group_book_form(
             event_type => context! {
                 slug => et_slug,
                 title => et_title,
-                description => et_desc,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
                 duration_min => duration,
                 location_type => loc_type,
                 location_value => loc_value,
             },
-            host_name => group_name,
-            group_slug => group_slug,
+            host_name => team_name,
+            team_slug => team_slug,
             date => query.date,
             date_label => date_label,
             time_start => query.time,
@@ -6365,7 +5926,7 @@ async fn show_group_book_form(
 async fn handle_group_booking(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    Path((group_slug, slug)): Path<(String, String)>,
+    Path((team_slug, slug)): Path<(String, String)>,
     Form(form): Form<BookForm>,
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
@@ -6389,13 +5950,13 @@ async fn handle_group_booking(
         return Html(e).into_response();
     }
 
-    let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>, String, Option<i32>, String, i32)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.group_id, et.reminder_minutes, et.visibility, et.max_additional_guests
+    let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>, String, Option<i32>, String, i32, String, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, et.team_id, et.reminder_minutes, et.visibility, et.max_additional_guests, t.visibility, t.invite_token
          FROM event_types et
-         JOIN groups g ON g.id = et.group_id
-         WHERE g.slug = ? AND et.slug = ? AND et.enabled = 1",
+         JOIN teams t ON t.id = et.team_id
+         WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
     )
-    .bind(&group_slug)
+    .bind(&team_slug)
     .bind(&slug)
     .fetch_optional(&state.pool)
     .await
@@ -6412,10 +5973,12 @@ async fn handle_group_booking(
         requires_confirmation,
         loc_type,
         loc_value,
-        group_id,
+        team_id,
         reminder_min,
         visibility,
         max_additional_guests,
+        team_visibility,
+        team_invite_token,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()).into_response(),
@@ -6431,6 +5994,14 @@ async fn handle_group_booking(
         Ok(emails) => emails,
         Err(e) => return Html(e).into_response(),
     };
+
+    // Validate invite token for private teams
+    if team_visibility == "private" {
+        let valid = matches!((&team_invite_token, &form.invite_token), (Some(expected), Some(provided)) if !provided.is_empty() && provided == expected);
+        if !valid {
+            return Html("Event type not found.".to_string()).into_response();
+        }
+    }
 
     // Validate invite token for private event types
     if visibility == "private" || visibility == "internal" {
@@ -6517,7 +6088,7 @@ async fn handle_group_booking(
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let assigned = pick_group_member(
         &state.pool,
-        &group_id,
+        &team_id,
         &et_id,
         slot_start,
         slot_end,
@@ -6738,6 +6309,7 @@ async fn user_profile(
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          WHERE a.user_id = ? AND et.enabled = 1 AND et.visibility = 'public'
+         AND et.team_id IS NULL
          ORDER BY et.created_at",
     )
     .bind(&user_id)
@@ -6753,7 +6325,7 @@ async fn user_profile(
     let et_ctx: Vec<minijinja::Value> = event_types
         .iter()
         .map(|(slug, title, desc, duration)| {
-            context! { slug => slug, title => title, description => desc, duration_min => duration }
+            context! { slug => slug, title => title, description => desc.as_deref().map(crate::utils::render_inline_markdown), duration_min => duration }
         })
         .collect();
 
@@ -6762,7 +6334,7 @@ async fn user_profile(
             host_name => &user_name,
             host_initials => compute_initials(&user_name),
             host_title => user_title,
-            host_bio => user_bio.as_deref().map(crate::utils::render_bio_markdown),
+            host_bio => user_bio.as_deref().map(crate::utils::render_inline_markdown),
             host_user_id => user_id,
             host_has_avatar => avatar_path.is_some(),
             username => username,
@@ -6928,7 +6500,7 @@ async fn show_slots_for_user(
             event_type => context! {
                 slug => et_slug,
                 title => et_title,
-                description => et_desc,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
                 duration_min => duration,
                 location_type => loc_type,
                 location_value => loc_value,
@@ -7063,7 +6635,7 @@ async fn show_book_form_for_user(
             event_type => context! {
                 slug => et_slug,
                 title => et_title,
-                description => et_desc,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
                 duration_min => duration,
                 location_type => loc_type,
                 location_value => loc_value,
@@ -7464,11 +7036,11 @@ fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
     None
 }
 
-/// Pick an available group member for a booking slot.
+/// Pick an available team member for a booking slot.
 /// Returns (user_id, name, email) of the member with fewest recent bookings.
 async fn pick_group_member(
     pool: &SqlitePool,
-    group_id: &str,
+    team_id: &str,
     event_type_id: &str,
     slot_start: NaiveDateTime,
     slot_end: NaiveDateTime,
@@ -7479,18 +7051,18 @@ async fn pick_group_member(
     let buf_start = slot_start - Duration::minutes(buffer_before as i64);
     let buf_end = slot_end + Duration::minutes(buffer_after as i64);
 
-    // Fetch members with per-event-type weight (fallback to group-level, then default 1)
+    // Fetch members with per-event-type weight (fallback to default 1)
     // weight=0 means excluded from this event type
     let members: Vec<(String, String, String, i64)> = sqlx::query_as(
         "SELECT u.id, u.name, COALESCE(u.booking_email, u.email), \
-         COALESCE(etw.weight, ug.weight, 1) \
-         FROM users u JOIN user_groups ug ON ug.user_id = u.id \
+         COALESCE(etw.weight, 1) \
+         FROM users u JOIN team_members tm ON tm.user_id = u.id \
          LEFT JOIN event_type_member_weights etw ON etw.user_id = u.id AND etw.event_type_id = ? \
-         WHERE ug.group_id = ? AND u.enabled = 1 \
-         AND COALESCE(etw.weight, ug.weight, 1) > 0",
+         WHERE tm.team_id = ? AND u.enabled = 1 \
+         AND COALESCE(etw.weight, 1) > 0",
     )
     .bind(event_type_id)
-    .bind(group_id)
+    .bind(team_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -7719,26 +7291,6 @@ async fn fetch_busy_times_for_user_ex(
         }
     }
 
-    // Also include team link bookings where this user is a member
-    let team_bookings: Vec<(String, String)> = sqlx::query_as(
-        "SELECT tlb.start_at, tlb.end_at FROM team_link_bookings tlb
-         JOIN team_link_members tlm ON tlm.team_link_id = tlb.team_link_id
-         WHERE tlm.user_id = ? AND tlb.status = 'confirmed'
-           AND tlb.start_at <= ? AND tlb.end_at >= ?",
-    )
-    .bind(user_id)
-    .bind(&end_iso)
-    .bind(&start_iso)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    for (s, e) in &team_bookings {
-        if let (Some(start), Some(end)) = (parse_datetime(s), parse_datetime(e)) {
-            busy.push((start, end));
-        }
-    }
-
     busy
 }
 
@@ -7897,9 +7449,12 @@ fn compute_slots_from_rules(
                     BusySource::Group(member_busy) => member_busy
                         .values()
                         .any(|times| !has_conflict(times, buf_start, buf_end)),
-                    BusySource::Team(member_busy) => member_busy
-                        .values()
-                        .all(|times| !has_conflict(times, buf_start, buf_end)),
+                    BusySource::Team(member_busy) => {
+                        !member_busy.is_empty()
+                            && member_busy
+                                .values()
+                                .all(|times| !has_conflict(times, buf_start, buf_end))
+                    }
                 };
 
                 if is_free {
@@ -8458,7 +8013,7 @@ async fn show_slots(
             event_type => context! {
                 slug => et_slug,
                 title => et_title,
-                description => et_desc,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
                 duration_min => duration,
             },
             host_name => &host_name,
@@ -8554,7 +8109,7 @@ async fn show_book_form(
             event_type => context! {
                 slug => et_slug,
                 title => et_title,
-                description => et_desc,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
                 duration_min => duration,
             },
             host_name => host_name,
@@ -9023,7 +8578,7 @@ async fn troubleshoot(
         "SELECT et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
-         WHERE a.user_id = ? AND et.group_id IS NULL AND et.enabled = 1
+         WHERE a.user_id = ? AND et.team_id IS NULL AND et.enabled = 1
          ORDER BY et.created_at",
     )
     .bind(&user.id)
@@ -10547,73 +10102,42 @@ async fn guest_cancel_form(
     .await
     .unwrap_or(None);
 
-    // Also try team link bookings
-    let tl_booking: Option<(String, String, String, String, String, String)> = if booking.is_none()
-    {
-        sqlx::query_as(
-            "SELECT tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title,
-                    (SELECT GROUP_CONCAT(u.name, ', ') FROM users u JOIN team_link_members tlm ON tlm.user_id = u.id WHERE tlm.team_link_id = tl.id AND u.enabled = 1)
-             FROM team_link_bookings tlb
-             JOIN team_links tl ON tl.id = tlb.team_link_id
-             WHERE tlb.cancel_token = ? AND tlb.status IN ('confirmed', 'pending')",
-        )
-        .bind(&token)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap_or(None)
-    } else {
-        None
+    let (guest_name, _guest_email, start_at, end_at, event_title, host_name) = match booking {
+        Some(b) => b,
+        None => {
+            // Check if already cancelled
+            let status_row: Option<(String,)> =
+                sqlx::query_as("SELECT status FROM bookings WHERE cancel_token = ?")
+                    .bind(&token)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .unwrap_or(None);
+
+            let (title, message) = match status_row {
+                Some((status,)) if status == "cancelled" => (
+                    "Already cancelled",
+                    "This booking has already been cancelled.",
+                ),
+                Some((status,)) if status == "declined" => (
+                    "Booking declined",
+                    "This booking has been declined by the host.",
+                ),
+                _ => (
+                    "Invalid link",
+                    "This cancellation link is invalid or has expired.",
+                ),
+            };
+
+            let tmpl = match state.templates.get_template("booking_action_error.html") {
+                Ok(t) => t,
+                Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
+            };
+            let rendered = tmpl
+                .render(context! { title, message })
+                .unwrap_or_else(|e| format!("Template error: {}", e));
+            return Html(rendered).into_response();
+        }
     };
-
-    let (guest_name, _guest_email, start_at, end_at, event_title, host_name) =
-        match booking.or(tl_booking) {
-            Some(b) => b,
-            None => {
-                // Check if already cancelled in either table
-                let already: Option<(String,)> =
-                    sqlx::query_as("SELECT status FROM bookings WHERE cancel_token = ?")
-                        .bind(&token)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .unwrap_or(None);
-
-                let tl_already: Option<(String,)> = if already.is_none() {
-                    sqlx::query_as("SELECT status FROM team_link_bookings WHERE cancel_token = ?")
-                        .bind(&token)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .unwrap_or(None)
-                } else {
-                    None
-                };
-
-                let status_row = already.or(tl_already);
-
-                let (title, message) = match status_row {
-                    Some((status,)) if status == "cancelled" => (
-                        "Already cancelled",
-                        "This booking has already been cancelled.",
-                    ),
-                    Some((status,)) if status == "declined" => (
-                        "Booking declined",
-                        "This booking has been declined by the host.",
-                    ),
-                    _ => (
-                        "Invalid link",
-                        "This cancellation link is invalid or has expired.",
-                    ),
-                };
-
-                let tmpl = match state.templates.get_template("booking_action_error.html") {
-                    Ok(t) => t,
-                    Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-                };
-                let rendered = tmpl
-                    .render(context! { title, message })
-                    .unwrap_or_else(|e| format!("Template error: {}", e));
-                return Html(rendered).into_response();
-            }
-        };
 
     let date_label = format_date_label(&start_at);
     let date = start_at.get(..10).unwrap_or(&start_at).to_string();
@@ -10661,130 +10185,6 @@ async fn guest_cancel_booking(
         .fetch_optional(&state.pool)
         .await
         .unwrap_or(None);
-
-    // Try team link bookings if not found in regular bookings
-    let tl_booking: Option<(String, String, String, String, String, String, String)> = if booking
-        .is_none()
-    {
-        sqlx::query_as(
-                "SELECT tlb.id, tlb.uid, tlb.guest_name, tlb.guest_email, tlb.start_at, tlb.end_at, tl.title
-                 FROM team_link_bookings tlb
-                 JOIN team_links tl ON tl.id = tlb.team_link_id
-                 WHERE tlb.cancel_token = ? AND tlb.status IN ('confirmed', 'pending')",
-            )
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None)
-    } else {
-        None
-    };
-
-    if let Some(tl_b) = tl_booking {
-        // Handle team link booking cancellation
-        let (bid, uid, guest_name, guest_email, start_at, end_at, event_title) = tl_b;
-
-        let guest_timezone: String = sqlx::query_scalar(
-            "SELECT COALESCE(guest_timezone, 'UTC') FROM team_link_bookings WHERE id = ?",
-        )
-        .bind(&bid)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or_else(|_| "UTC".to_string());
-
-        let _ = sqlx::query("UPDATE team_link_bookings SET status = 'cancelled' WHERE id = ?")
-            .bind(&bid)
-            .execute(&state.pool)
-            .await;
-
-        tracing::info!(booking_id = %bid, "team link booking cancelled by guest");
-
-        // Get all members for CalDAV delete and notifications
-        let members: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT u.id, u.name, COALESCE(u.booking_email, u.email)
-             FROM users u
-             JOIN team_link_members tlm ON tlm.user_id = u.id
-             JOIN team_link_bookings tlb ON tlb.team_link_id = tlm.team_link_id
-             WHERE tlb.id = ? AND u.enabled = 1",
-        )
-        .bind(&bid)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
-
-        for (member_uid, _, _) in &members {
-            caldav_delete_for_user(&state.pool, &state.secret_key, member_uid, &uid).await;
-        }
-
-        let date_label = format_date_label(&start_at);
-        let date = start_at.get(..10).unwrap_or(&start_at).to_string();
-        let start_time = extract_time_24h(&start_at);
-        let end_time = extract_time_24h(&end_at);
-        let reason = form.reason.filter(|r| !r.trim().is_empty());
-
-        if let Ok(Some(smtp_config)) =
-            crate::email::load_smtp_config(&state.pool, &state.secret_key).await
-        {
-            for (_, member_name, member_email) in &members {
-                let details = crate::email::CancellationDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone: guest_timezone.clone(),
-                    host_name: member_name.clone(),
-                    host_email: member_email.clone(),
-                    uid: uid.clone(),
-                    reason: reason.clone(),
-                    cancelled_by_host: false,
-                };
-                let _ = crate::email::send_host_cancellation(&smtp_config, &details).await;
-            }
-
-            if let Some((_, first_name, first_email)) = members.first() {
-                let details = crate::email::CancellationDetails {
-                    event_title: event_title.clone(),
-                    date: date.clone(),
-                    start_time: start_time.clone(),
-                    end_time: end_time.clone(),
-                    guest_name: guest_name.clone(),
-                    guest_email: guest_email.clone(),
-                    guest_timezone,
-                    host_name: first_name.clone(),
-                    host_email: first_email.clone(),
-                    uid,
-                    reason: reason.clone(),
-                    cancelled_by_host: false,
-                };
-                let _ = crate::email::send_guest_cancellation(&smtp_config, &details).await;
-            }
-        }
-
-        let host_name = members
-            .iter()
-            .map(|(_, n, _)| n.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let tmpl = match state.templates.get_template("booking_cancelled_guest.html") {
-            Ok(t) => t,
-            Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
-        };
-        let rendered = tmpl
-            .render(context! {
-                event_title,
-                date_label,
-                date,
-                start_time,
-                end_time,
-                host_name,
-                reason,
-            })
-            .unwrap_or_else(|e| format!("Template error: {}", e));
-        return Html(rendered).into_response();
-    }
 
     let (
         bid,
@@ -11740,7 +11140,7 @@ async fn caldav_push_booking(
 }
 
 /// Delete a booking from a user's CalDAV calendar by looking up their write-enabled source directly.
-/// Used for team link bookings where we don't track per-booking caldav_calendar_href.
+/// Used for team bookings where we don't track per-booking caldav_calendar_href.
 async fn caldav_delete_for_user(
     pool: &SqlitePool,
     key: &[u8; 32],
@@ -14678,17 +14078,7 @@ mod tests {
         assert_eq!(count.0, 0, "User should not be created");
     }
 
-    // --- Dashboard pages: team links, new event type form ---
-
-    #[tokio::test]
-    async fn team_links_page_returns_200() {
-        let (app, _, session, _) = setup_test_app().await;
-        let response = app
-            .oneshot(get_authed("/dashboard/team-links", &session))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-    }
+    // --- Dashboard pages: new event type form ---
 
     #[tokio::test]
     async fn new_event_type_form_returns_200() {
@@ -15549,106 +14939,6 @@ mod tests {
         assert!(token.is_some(), "Pending booking should have confirm_token");
     }
 
-    // --- Team link CRUD ---
-
-    async fn seed_team_link(pool: &SqlitePool) -> (String, String) {
-        let user_id: String = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        let token = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO team_links (id, token, title, duration_min, created_by_user_id) VALUES (?, ?, 'Team Standup', 15, ?)")
-            .bind(&uuid::Uuid::new_v4().to_string())
-            .bind(&token)
-            .bind(&user_id)
-            .execute(pool)
-            .await
-            .unwrap();
-        // Add the user as a member
-        sqlx::query("INSERT INTO team_link_members (id, team_link_id, user_id) VALUES (?, (SELECT id FROM team_links WHERE token = ?), ?)")
-            .bind(&uuid::Uuid::new_v4().to_string())
-            .bind(&token)
-            .bind(&user_id)
-            .execute(pool)
-            .await
-            .unwrap();
-        (token, user_id)
-    }
-
-    #[tokio::test]
-    async fn team_links_page_shows_created_link() {
-        let (app, pool, session, _) = setup_test_app().await;
-        let (_, _) = seed_team_link(&pool).await;
-
-        let response = app
-            .oneshot(get_authed("/dashboard/team-links", &session))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        let body = body_string(response).await;
-        assert!(body.contains("Team Standup"), "Should show the team link");
-    }
-
-    #[tokio::test]
-    async fn new_team_link_form_returns_200() {
-        let (app, _, session, _) = setup_test_app().await;
-        let response = app
-            .oneshot(get_authed("/dashboard/team-links/new", &session))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-    }
-
-    #[tokio::test]
-    async fn edit_team_link_form_returns_200() {
-        let (app, pool, session, _) = setup_test_app().await;
-        let (token, _) = seed_team_link(&pool).await;
-
-        let response = app
-            .oneshot(get_authed(
-                &format!("/dashboard/team-links/{}/edit", token),
-                &session,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-    }
-
-    #[tokio::test]
-    async fn delete_team_link() {
-        let (app, pool, session, _) = setup_test_app().await;
-        let (token, _) = seed_team_link(&pool).await;
-
-        let csrf = "test-csrf-del-tl";
-        let response = app
-            .oneshot(post_form(
-                &format!("/dashboard/team-links/{}/delete", token),
-                &session,
-                csrf,
-                &format!("_csrf={}", csrf),
-            ))
-            .await
-            .unwrap();
-        assert!(response.status().is_redirection());
-
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM team_links")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count.0, 0, "Team link should be deleted");
-    }
-
-    #[tokio::test]
-    async fn public_team_link_slots_returns_200() {
-        let (app, pool, _, _) = setup_test_app().await;
-        let (token, _) = seed_team_link(&pool).await;
-
-        let response = app.oneshot(get(&format!("/t/{}", token))).await.unwrap();
-        assert_eq!(response.status(), 200);
-        let body = body_string(response).await;
-        assert!(body.contains("Team Standup"));
-    }
-
     // --- Private event type + invite flow ---
 
     #[tokio::test]
@@ -15981,7 +15271,7 @@ mod tests {
     // --- Group profile (no groups in test data, should handle gracefully) ---
 
     #[tokio::test]
-    async fn group_profile_nonexistent_returns_404_or_empty() {
+    async fn team_profile_nonexistent_returns_404_or_empty() {
         let (app, _, _, _) = setup_test_app().await;
         let response = app.oneshot(get("/team/nonexistent")).await.unwrap();
         let status = response.status();
@@ -16060,52 +15350,6 @@ mod tests {
                 || resp_body.contains("empty"),
             "Empty name should show error"
         );
-    }
-
-    // --- Create team link via POST ---
-
-    #[tokio::test]
-    async fn create_team_link_via_post() {
-        let (app, pool, session, _) = setup_test_app().await;
-
-        let user_id: String = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-
-        // Create a second user for the team link (needs at least one other member)
-        let user2_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO users (id, email, name, role, auth_provider, username, enabled) VALUES (?, 'team2@test.com', 'Team Two', 'user', 'local', 'team2', 1)")
-            .bind(&user2_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let csrf = "test-csrf-create-tl";
-        let body = format!(
-            "_csrf={}&title=New+Team+Link&duration_min=30&availability_start=09%3A00&availability_end=17%3A00&days={}&days={}&members={}&members={}",
-            csrf, "1", "2", user_id, user2_id
-        );
-        let response = app
-            .oneshot(post_form(
-                "/dashboard/team-links/new",
-                &session,
-                csrf,
-                &body,
-            ))
-            .await
-            .unwrap();
-        assert!(
-            response.status().is_redirection() || response.status() == 200,
-            "Create team link should succeed, got {}",
-            response.status()
-        );
-
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM team_links")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert!(count.0 >= 1, "Team link should be created");
     }
 
     // --- Admin OIDC update ---

@@ -314,15 +314,15 @@
         <a href="/dashboard/bookings" class="sidebar-link {% if sidebar.active == 'bookings' %}active{% endif %}">
           <span class="icon">&#128203;</span> Bookings
         </a>
-        <a href="/dashboard/team-links" class="sidebar-link {% if sidebar.active == 'team-links' %}active{% endif %}">
-          <span class="icon">&#128101;</span> Team Links
+        <a href="/dashboard/teams" class="sidebar-link {% if sidebar.active == 'teams' %}active{% endif %}">
+          <span class="icon">&#128101;</span> Teams
         </a>
       </div>
 
       <div class="sidebar-section">
-        <div class="sidebar-section-label">Organization</div>
+        <div class="sidebar-section-label">Shared Links</div>
         <a href="/dashboard/organization" class="sidebar-link {% if sidebar.active == 'organization' %}active{% endif %}">
-          <span class="icon">&#127970;</span> Internal Bookings
+          <span class="icon">&#127970;</span> Invite Links
         </a>
       </div>
 
@@ -338,7 +338,7 @@
         <a href="/dashboard/settings" class="sidebar-link {% if sidebar.active == 'settings' %}active{% endif %}">
           <span class="icon">&#9881;</span> Profile & Settings
         </a>
-        <a href="/dashboard/troubleshoot" class="sidebar-link {% if sidebar.active == 'troubleshoot' %}active{% endif %}">
+        <a href="/dashboard/troubleshoot" data-calrs-sync class="sidebar-link {% if sidebar.active == 'troubleshoot' %}active{% endif %}">
           <span class="icon">&#128269;</span> Troubleshoot
         </a>
       </div>
@@ -369,7 +369,7 @@
           </div>
         </a>
         <form method="post" action="/auth/logout" style="flex-shrink: 0;">
-          <button type="submit" class="sidebar-signout" title="Sign out">&#8592;</button>
+          <button type="submit" class="sidebar-signout" title="Sign out" aria-label="Sign out">&#8592;</button>
         </form>
       </div>
       {% if sidebar.version %}<div style="font-size: 0.7rem; color: var(--text-muted); padding: 0.25rem 0.75rem 0; opacity: 0.6;"><a href="https://github.com/olivierlambert/calrs/releases/tag/v{{ sidebar.version }}" target="_blank" rel="noopener" style="color: inherit; text-decoration: none;" title="View release notes">v{{ sidebar.version }}</a></div>{% endif %}
@@ -420,6 +420,89 @@
     </div>
   </main>
 </div>
+<script>
+// Shared markdown preview renderer
+function renderMdPreview(md) {
+  return md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/~~(.+?)~~/g, '<del>$1</del>')
+    .replace(/`(.+?)`/g, '<code style="background:rgba(127,127,127,0.15);padding:0.1em 0.3em;border-radius:3px;font-size:0.85em;">$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:var(--accent);text-decoration:underline;">$1</a>')
+    .replace(/\n/g, '<br>')
+  || '<span style="color:var(--text-muted);">Nothing to preview</span>';
+}
+
+// Shared markdown toolbar handler
+document.querySelectorAll('.md-toolbar').forEach(function(toolbar) {
+  var ta = document.getElementById(toolbar.dataset.target);
+  if (!ta) return;
+  function wrap(before, after) {
+    var start = ta.selectionStart, end = ta.selectionEnd;
+    var sel = ta.value.substring(start, end);
+    var rep = before + (sel || 'text') + after;
+    ta.value = ta.value.substring(0, start) + rep + ta.value.substring(end);
+    ta.focus();
+    ta.selectionStart = start + before.length;
+    ta.selectionEnd = start + before.length + (sel || 'text').length;
+  }
+  toolbar.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var a = btn.dataset.action;
+    if (a === 'bold') wrap('**', '**');
+    else if (a === 'italic') wrap('*', '*');
+    else if (a === 'strikethrough') wrap('~~', '~~');
+    else if (a === 'code') wrap('`', '`');
+    else if (a === 'link') {
+      var start = ta.selectionStart, end = ta.selectionEnd;
+      var sel = ta.value.substring(start, end);
+      var url = prompt('Enter URL:', 'https://');
+      if (url) {
+        var label = sel || 'link text';
+        ta.value = ta.value.substring(0, start) + '[' + label + '](' + url + ')' + ta.value.substring(end);
+        ta.focus();
+      }
+    }
+  });
+  // Hover effect for toolbar buttons
+  toolbar.querySelectorAll('button').forEach(function(btn) {
+    btn.addEventListener('mouseenter', function() { this.style.background = 'var(--surface)'; this.style.borderColor = 'var(--border)'; });
+    btn.addEventListener('mouseleave', function() { this.style.background = 'none'; this.style.borderColor = 'transparent'; });
+  });
+  // Keyboard shortcuts
+  ta.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      if (e.key === 'b') { e.preventDefault(); wrap('**', '**'); }
+      else if (e.key === 'i') { e.preventDefault(); wrap('*', '*'); }
+      else if (e.key === 'k') { e.preventDefault(); toolbar.querySelector('[data-action="link"]').click(); }
+    }
+  });
+  // Preview toggle
+  var previewBtn = toolbar.querySelector('.md-preview-toggle');
+  var previewDiv = document.getElementById(toolbar.dataset.target + '-preview');
+  if (previewBtn && previewDiv) {
+    var showing = false;
+    previewBtn.addEventListener('click', function() {
+      showing = !showing;
+      if (showing) {
+        previewDiv.innerHTML = renderMdPreview(ta.value);
+        previewDiv.style.display = '';
+        ta.style.display = 'none';
+        previewBtn.style.color = 'var(--accent)';
+        previewBtn.style.fontWeight = '600';
+      } else {
+        previewDiv.style.display = 'none';
+        ta.style.display = '';
+        previewBtn.style.color = 'var(--text-muted)';
+        previewBtn.style.fontWeight = '';
+        ta.focus();
+      }
+    });
+  }
+});
+</script>
 {% endblock %}
 {% block footer %}{% endblock %}
 {% block theme_toggle %}{% endblock %}

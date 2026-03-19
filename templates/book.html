@@ -3,11 +3,11 @@
 {% block title %}Book {{ event_type.title }}{% endblock %}
 
 {% block content %}
-{# Compute base path: /t/token, /team/group_slug/slug, /u/username/slug, or /slug #}
+{# Compute base path: /t/token, /team/team_slug/slug, /u/username/slug, or /slug #}
 {% if team_token is defined and team_token %}
   {% set base = "/t/" ~ team_token %}
-{% elif group_slug is defined and group_slug %}
-  {% set base = "/team/" ~ group_slug ~ "/" ~ event_type.slug %}
+{% elif team_slug is defined and team_slug %}
+  {% set base = "/team/" ~ team_slug ~ "/" ~ event_type.slug %}
 {% elif username is defined and username %}
   {% set base = "/u/" ~ username ~ "/" ~ event_type.slug %}
 {% else %}
@@ -126,13 +126,7 @@
   var fmt = localStorage.getItem('calrs_time_format') || '24';
   if (fmt !== '12') return;
   document.querySelectorAll('.book-time').forEach(function(el) {
-    var parts = el.dataset.time.split(':');
-    var h = parseInt(parts[0], 10);
-    var m = parts[1];
-    var suffix = h >= 12 ? 'PM' : 'AM';
-    if (h === 0) h = 12;
-    else if (h > 12) h -= 12;
-    el.textContent = h + ':' + m + ' ' + suffix;
+    el.textContent = calrsFormat12h(el.dataset.time);
   });
 })();
 </script>

@@ -139,6 +139,11 @@ document.querySelectorAll('input[type="color"]').forEach(function(picker) {
 <style>
 .theme-card:hover { border-color: var(--border-hover) !important; box-shadow: var(--shadow); }
 .theme-card-active:hover { border-color: var(--accent) !important; }
+.user-item .user-actions { opacity: 0; max-height: 0; overflow: hidden; transition: opacity 0.15s ease, max-height 0.15s ease; padding-top: 0; padding-bottom: 0; }
+.user-item:hover .user-actions, .user-item:focus-within .user-actions { opacity: 1; max-height: 4rem; overflow: visible; }
+@media (max-width: 768px) {
+  .user-item .user-actions { opacity: 1; max-height: none; overflow: visible; }
+}
 </style>
 
 <!-- Users -->
@@ -151,41 +156,41 @@ document.querySelectorAll('input[type="color"]').forEach(function(picker) {
   <div id="user-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
     {% for u in users %}
     <div class="user-item" data-name="{{ u.name | lower }}" data-email="{{ u.email | lower }}" style="border: 1px solid var(--border); border-radius: var(--radius); padding: 0.875rem 1rem;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap;">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
         <div style="min-width: 0; flex: 1;">
-          <div style="font-weight: 600; font-size: 0.925rem;">{{ u.name }}</div>
-          <div style="font-size: 0.825rem; color: var(--text-secondary); overflow-wrap: break-word;">{{ u.email }}</div>
-          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.375rem; font-size: 0.8rem;">
-            {% if u.role == "admin" %}<span style="color: var(--accent); font-weight: 600;">admin</span>{% else %}<span style="color: var(--text-muted);">user</span>{% endif %}
-            <span style="color: var(--text-muted);">&middot;</span>
-            <span style="color: var(--text-muted);">{{ u.auth_provider }}</span>
-            <span style="color: var(--text-muted);">&middot;</span>
-            {% if u.enabled %}<span style="color: var(--success);">enabled</span>{% else %}<span style="color: var(--error-text);">disabled</span>{% endif %}
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;">
+            <span style="font-weight: 600; font-size: 0.925rem;">{{ u.name }}</span>
+            <span style="font-size: 0.825rem; color: var(--text-secondary); overflow-wrap: break-word;">{{ u.email }}</span>
+            {% if u.role == "admin" %}<span class="badge badge-info">admin</span>{% endif %}
+            {% if not u.enabled %}<span class="badge badge-error">disabled</span>{% endif %}
+            <span style="font-size: 0.75rem; color: var(--text-muted);">{{ u.auth_provider }}</span>
           </div>
           {% if u.groups %}
-          <div style="margin-top: 0.375rem; display: flex; flex-wrap: wrap; gap: 0.25rem;">
+          <div style="margin-top: 0.25rem; display: flex; flex-wrap: wrap; gap: 0.25rem;">
             {% for g in u.groups %}
-            <span style="display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 9999px; background: var(--accent); color: #fff; opacity: 0.85;">{{ g }}</span>
+            <span class="badge badge-info">{{ g }}</span>
             {% endfor %}
           </div>
           {% endif %}
         </div>
-        {% if u.id != current_user_id %}
-        <div style="display: flex; flex-wrap: wrap; gap: 0.375rem; flex-shrink: 0;">
-          <form method="post" action="/dashboard/admin/impersonate/{{ u.id }}" style="margin: 0;">
-            <button type="submit" class="slot-btn" style="font-size: 0.8rem; cursor: pointer; color: #d97706; border-color: #d97706;">Impersonate</button>
-          </form>
-          <form method="post" action="/dashboard/admin/users/{{ u.id }}/toggle-role" style="margin: 0;">
-            <button type="submit" class="slot-btn" style="font-size: 0.8rem; cursor: pointer;">{% if u.role == "admin" %}Demote{% else %}Promote{% endif %}</button>
-          </form>
-          <form method="post" action="/dashboard/admin/users/{{ u.id }}/toggle-enabled" style="margin: 0;">
-            <button type="submit" class="slot-btn" style="font-size: 0.8rem; cursor: pointer; {% if u.enabled %}color: var(--error-text);{% else %}color: var(--success);{% endif %}">{% if u.enabled %}Disable{% else %}Enable{% endif %}</button>
-          </form>
-        </div>
-        {% else %}
-        <span style="font-size: 0.8rem; color: var(--text-muted); flex-shrink: 0;">(you)</span>
-        {% endif %}
       </div>
+      {% if u.id != current_user_id %}
+      <div class="user-actions" style="margin-top: 0.25rem; display: flex; flex-wrap: wrap; gap: 0.375rem; justify-content: flex-end;">
+        <form method="post" action="/dashboard/admin/impersonate/{{ u.id }}" style="margin: 0;">
+          <button type="submit" class="slot-btn" style="font-size: 0.8rem; cursor: pointer; color: #d97706; border-color: #d97706;">Impersonate</button>
+        </form>
+        <form method="post" action="/dashboard/admin/users/{{ u.id }}/toggle-role" style="margin: 0;">
+          <button type="submit" class="slot-btn" style="font-size: 0.8rem; cursor: pointer;">{% if u.role == "admin" %}Demote{% else %}Promote{% endif %}</button>
+        </form>
+        <form method="post" action="/dashboard/admin/users/{{ u.id }}/toggle-enabled" style="margin: 0;">
+          <button type="submit" class="slot-btn" style="font-size: 0.8rem; cursor: pointer; {% if u.enabled %}color: var(--error-text);{% else %}color: var(--success);{% endif %}">{% if u.enabled %}Disable{% else %}Enable{% endif %}</button>
+        </form>
+      </div>
+      {% else %}
+      <div style="margin-top: 0.25rem; text-align: right;">
+        <span style="font-size: 0.8rem; color: var(--text-muted);">(you)</span>
+      </div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
@@ -217,15 +222,18 @@ document.querySelectorAll('input[type="color"]').forEach(function(picker) {
           <td style="padding: 0.5rem 0.5rem 0.5rem 0; vertical-align: top;">{{ g.name }}</td>
           <td style="padding: 0.5rem;">
             {% if g.members %}
-            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+            <div class="group-members" style="display: flex; flex-direction: column; gap: 0.25rem;">
               {% for m in g.members %}
-              <form method="POST" action="/dashboard/admin/groups/{{ g.id }}/members/{{ m.user_id }}/weight" style="display: flex; align-items: center; gap: 0.5rem;">
+              <form method="POST" action="/dashboard/admin/groups/{{ g.id }}/members/{{ m.user_id }}/weight"{% if loop.index > 5 %} class="group-member-extra" data-group="{{ g.id }}" style="display: none; align-items: center; gap: 0.5rem;"{% else %} style="display: flex; align-items: center; gap: 0.5rem;"{% endif %}>
                 <span style="min-width: 100px;">{{ m.name }}</span>
                 <label style="font-size: 0.8rem; color: var(--text-muted);">weight:</label>
                 <input type="number" name="weight" value="{{ m.weight }}" min="1" max="100" style="width: 60px; padding: 0.25rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.8rem; background: var(--surface); color: var(--text);">
                 <button type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent); color: white; border: none; border-radius: var(--radius); cursor: pointer;">Save</button>
               </form>
               {% endfor %}
+              {% if g.members | length > 5 %}
+              <button type="button" class="group-expand-btn" data-group="{{ g.id }}" onclick="toggleGroupMembers('{{ g.id }}')" style="background: none; border: none; color: var(--accent); font-size: 0.8rem; cursor: pointer; padding: 0.25rem 0; text-align: left;">Show {{ g.members | length - 5 }} more&hellip;</button>
+              {% endif %}
             </div>
             {% else %}
             {{ g.member_count }}
@@ -411,5 +419,16 @@ document.querySelectorAll('input[type="color"]').forEach(function(picker) {
 
   if (document.getElementById('group-list')) renderGroupPage();
 })();
+
+window.toggleGroupMembers = function(groupId) {
+  var extras = document.querySelectorAll('.group-member-extra[data-group="' + groupId + '"]');
+  var btn = document.querySelector('.group-expand-btn[data-group="' + groupId + '"]');
+  if (!btn) return;
+  var hidden = extras[0] && extras[0].style.display === 'none';
+  extras.forEach(function(el) {
+    el.style.display = hidden ? 'flex' : 'none';
+  });
+  btn.textContent = hidden ? 'Show fewer' : 'Show ' + extras.length + ' more\u2026';
+};
 </script>
 {% endblock dashboard_content %}

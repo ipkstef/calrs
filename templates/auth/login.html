@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Sign in — calrs{% endblock %}
 {% block content %}
+<style>
+.btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--surface-hover); }
+</style>
 <div class="card" style="margin-top: 3rem;">
   <h1>Sign in</h1>
   <p class="subtitle">Sign in to your calrs account</p>
@@ -27,7 +31,7 @@
       <label for="password">Password</label>
       <input type="password" id="password" name="password" required autocomplete="current-password">
     </div>
-    <button type="submit" class="btn" style="{% if oidc_enabled %}background: var(--surface); color: var(--text); border: 1px solid var(--border);{% endif %}">Sign in with email</button>
+    <button type="submit" class="btn{% if oidc_enabled %} btn-secondary{% endif %}">Sign in with email</button>
   </form>
 
   {% if registration_enabled %}

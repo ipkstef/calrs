@@ -7,7 +7,7 @@
 <div class="card">
   <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
     <h1 style="margin-bottom: 0;">Date overrides</h1>
-    <a href="/dashboard/event-types" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Back to event types</a>
+    {% if is_team %}<a href="/dashboard/teams" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Back to teams</a>{% else %}<a href="/dashboard/event-types" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Back to event types</a>{% endif %}
   </div>
   <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">
     Add date-specific exceptions for <strong>{{ event_type_title }}</strong>
@@ -63,9 +63,9 @@
       <div>
         <strong style="font-size: 0.9rem;">{{ o.date_label }}</strong>
         {% if o.is_blocked %}
-          <span class="badge" style="margin-left: 0.5rem; background: rgba(239,68,68,0.1); color: #ef4444;">blocked</span>
+          <span class="badge badge-error" style="margin-left: 0.5rem;">blocked</span>
         {% else %}
-          <span class="badge" style="margin-left: 0.5rem; background: rgba(59,130,246,0.1); color: #3b82f6;">custom hours</span>
+          <span class="badge badge-info" style="margin-left: 0.5rem;">custom hours</span>
           <span style="color: var(--text-muted); font-size: 0.85rem; margin-left: 0.25rem;">{{ o.start_time }} &ndash; {{ o.end_time }}</span>
         {% endif %}
       </div>
@@ -78,7 +78,7 @@
   {% else %}
   <div class="empty" style="padding: 1.5rem 1rem;">
     <div class="empty-icon">&#128197;</div>
-    <div class="empty-text">No date overrides yet. Add one above to block a day or set custom hours.</div>
+    <div class="empty-text">No date overrides yet.<br>Use the form above to block specific dates (holidays, days off) or set custom hours.</div>
   </div>
   {% endif %}
 </div>

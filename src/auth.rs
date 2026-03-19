@@ -1118,6 +1118,9 @@ pub async fn sync_user_groups(pool: &SqlitePool, user_id: &str, groups: &[String
     .await
     .context("Failed to clear user OIDC groups")?;
 
+    // Collect the group IDs the user currently belongs to (for team sync)
+    let mut current_group_ids: Vec<String> = Vec::new();
+
     for group_path in groups {
         let group_id = uuid::Uuid::new_v4().to_string();
         let slug = generate_group_slug(group_path);
@@ -1150,7 +1153,47 @@ pub async fn sync_user_groups(pool: &SqlitePool, user_id: &str, groups: &[String
             .execute(pool)
             .await
             .context("Failed to insert user_group")?;
+
+        current_group_ids.push(actual_group_id);
     }
+
+    // --- Sync team memberships via team_groups ---
+
+    // Add user to teams linked to their current OIDC groups
+    for group_id in &current_group_ids {
+        let team_ids: Vec<(String,)> =
+            sqlx::query_as("SELECT team_id FROM team_groups WHERE group_id = ?")
+                .bind(group_id)
+                .fetch_all(pool)
+                .await
+                .context("Failed to fetch team_groups")?;
+
+        for (team_id,) in team_ids {
+            sqlx::query(
+                "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'member', 'group')",
+            )
+            .bind(&team_id)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .context("Failed to insert team_member from group")?;
+        }
+    }
+
+    // Remove user from teams where they were added via group sync but no longer belong
+    // to any linked OIDC group. Only remove source='group' rows (not 'direct').
+    sqlx::query(
+        "DELETE FROM team_members WHERE user_id = ? AND source = 'group' \
+         AND team_id NOT IN ( \
+             SELECT tg.team_id FROM team_groups tg \
+             WHERE tg.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?) \
+         )",
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to clean up stale team memberships")?;
 
     Ok(())
 }

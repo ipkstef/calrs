@@ -26,6 +26,7 @@
       <div id="help-bluemind" class="provider-help-text">
         <strong>BlueMind</strong> — Use the DAV endpoint of your BlueMind server.<br>
         Typically: <code>https://mail.yourcompany.com/dav/</code><br>
+        Username is your <strong>email address</strong> (e.g. <code>alice@yourcompany.com</code>), not just the login name.<br>
         If the connection test hangs, check "Skip connection test" and try syncing directly.
       </div>
       <div id="help-nextcloud" class="provider-help-text" style="display: none;">
@@ -74,7 +75,7 @@
       <input type="url" id="url" name="url" required value="{{ form_url }}" placeholder="https://...">
     </div>
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+    <div class="form-grid-2">
       <div class="form-group">
         <label for="username">Username</label>
         <input type="text" id="username" name="username" required value="{{ form_username }}" placeholder="alice">
@@ -105,29 +106,32 @@
   var urlInput = document.getElementById('url');
   var nameInput = document.getElementById('name');
 
-  function updateProvider() {
+  var userEdited = urlInput.value !== '';
+
+  function updateProvider(autoFill) {
     var opt = select.options[select.selectedIndex];
     var id = opt.value;
     var url = opt.getAttribute('data-url');
 
-    // Update URL placeholder/value if it looks like a template or empty
-    if (url && (urlInput.value === '' || urlInput.value.match(/^https:\/\/(mail|cloud|caldav|apidata|cal)\./))) {
+    // Auto-fill URL only if user hasn't entered their own value
+    if (autoFill && url && !userEdited) {
       urlInput.value = url;
     }
 
     // Auto-fill name if empty
-    if (nameInput.value === '') {
+    if (autoFill && nameInput.value === '') {
       nameInput.value = opt.textContent.trim().replace(/ \/ .*/, '');
     }
 
-    // Show relevant help text
+    // Show relevant help text (always)
     document.querySelectorAll('.provider-help-text').forEach(function(el) { el.style.display = 'none'; });
     var help = document.getElementById('help-' + id);
     if (help) help.style.display = 'block';
   }
 
-  select.addEventListener('change', updateProvider);
-  updateProvider();
+  urlInput.addEventListener('input', function() { userEdited = true; });
+  select.addEventListener('change', function() { userEdited = false; updateProvider(true); });
+  updateProvider(false);
 })();
 </script>
 {% endblock dashboard_content %}
