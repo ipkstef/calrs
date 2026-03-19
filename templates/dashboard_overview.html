@@ -13,12 +13,38 @@
   {% endif %}
 </div>
 
-{% if source_count == 0 %}
-<div class="card" style="text-align: center; padding: 2.5rem 2rem; border: 2px dashed var(--accent); background: var(--accent-subtle, rgba(99, 102, 241, 0.05));">
-  <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">&#128197;</div>
-  <h2 style="margin-bottom: 0.5rem;">Connect your calendar</h2>
-  <p style="color: var(--text-secondary); max-width: 420px; margin: 0 auto 1.25rem; font-size: 0.925rem;">To start accepting bookings, connect a CalDAV calendar source. calrs will check your existing events to find open time slots.</p>
-  <a href="/dashboard/sources/new" class="btn" style="display: inline-block;">Add a calendar source</a>
+{% if source_count == 0 or event_type_count == 0 %}
+<div class="card" style="margin-bottom: 1.25rem; border-left: 3px solid var(--accent);">
+  <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Getting started</h2>
+  <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Follow these steps to start accepting bookings.</p>
+  <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+      {% if source_count > 0 %}
+        <span style="color: var(--success); font-size: 1.1rem;">✓</span>
+        <span style="font-size: 0.9rem;">Connect a calendar</span>
+      {% else %}
+        <span style="color: var(--text-muted); font-size: 1.1rem;">○</span>
+        <a href="/dashboard/sources/new" style="font-size: 0.9rem; color: var(--accent); font-weight: 500;">Connect a calendar</a>
+      {% endif %}
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+      {% if event_type_count > 0 %}
+        <span style="color: var(--success); font-size: 1.1rem;">✓</span>
+        <span style="font-size: 0.9rem;">Create your first event type</span>
+      {% else %}
+        <span style="color: var(--text-muted); font-size: 1.1rem;">○</span>
+        {% if source_count > 0 %}
+          <a href="/dashboard/event-types/new" style="font-size: 0.9rem; color: var(--accent); font-weight: 500;">Create your first event type</a>
+        {% else %}
+          <span style="font-size: 0.9rem; color: var(--text-muted);">Create your first event type</span>
+        {% endif %}
+      {% endif %}
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+      <span style="color: var(--text-muted); font-size: 1.1rem;">○</span>
+      <span style="font-size: 0.9rem; color: var(--text-muted);">Share your booking link</span>
+    </div>
+  </div>
 </div>
 {% endif %}
 

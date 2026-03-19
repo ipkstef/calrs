@@ -12,6 +12,33 @@
     <div class="error" style="margin-top: 1rem;">{{ error }}</div>
   {% endif %}
 
+  {% if username %}
+  <div style="margin-top: 1.25rem; margin-bottom: 1.5rem; padding: 1rem; border-radius: var(--radius); background: var(--accent-subtle, rgba(99,102,241,0.06)); border: 1px solid var(--accent-border, rgba(99,102,241,0.2));">
+    <label style="display: block; font-weight: 500; margin-bottom: 0.5rem; font-size: 0.875rem;">Your public booking page</label>
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
+      <input type="text" id="public-url" readonly value="" style="flex: 1; font-size: 0.85rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-family: monospace;">
+      <button type="button" id="copy-url-btn" class="slot-btn" style="cursor: pointer; font-weight: 600; color: var(--accent); border-color: var(--accent); white-space: nowrap;">Copy</button>
+      <a id="open-url-link" href="" target="_blank" rel="noopener noreferrer" class="slot-btn" style="text-decoration: none; font-size: 0.85rem; white-space: nowrap;">Open &#8599;</a>
+    </div>
+  </div>
+  <script>
+  (function() {
+    var url = window.location.origin + '/u/{{ username }}';
+    document.getElementById('public-url').value = url;
+    document.getElementById('open-url-link').href = url;
+    document.getElementById('copy-url-btn').addEventListener('click', function() {
+      var btn = this;
+      navigator.clipboard.writeText(url).then(function() {
+        btn.textContent = 'Copied!';
+        btn.style.color = 'var(--success)';
+        btn.style.borderColor = 'var(--success)';
+        setTimeout(function() { btn.textContent = 'Copy'; btn.style.color = 'var(--accent)'; btn.style.borderColor = 'var(--accent)'; }, 1500);
+      });
+    });
+  })();
+  </script>
+  {% endif %}
+
   <!-- Avatar -->
   <div style="margin-top: 1.25rem; margin-bottom: 1.5rem;">
     <label style="display: block; font-weight: 500; margin-bottom: 0.5rem; font-size: 0.875rem;">Avatar</label>

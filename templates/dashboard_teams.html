@@ -49,6 +49,9 @@
     <div class="empty" style="padding: 2rem 1rem;">
       <div class="empty-icon">&#128101;</div>
       <div class="empty-text">No teams yet.{% if is_admin %} <a href="/dashboard/teams/new" style="color: var(--accent); text-decoration: none;">Create one</a> to collaborate with your team.{% endif %}</div>
+      {% if not is_admin %}
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">Teams are created by administrators. Ask your admin to create one and add you as a member.</p>
+      {% endif %}
     </div>
   {% endif %}
 </div>

@@ -24,6 +24,9 @@
         {% if et.requires_confirmation %}<span class="badge badge-requires">requires confirmation</span>{% endif %}
         {% if et.visibility == "internal" %}<span class="badge badge-info">internal</span>{% endif %}
         {% if et.visibility == "private" %}<span class="badge badge-muted">private</span>{% endif %}
+        {% if et.visibility == "private" or et.visibility == "internal" %}
+          <a href="/dashboard/invites/{{ et.id }}" style="font-size: 0.75rem; color: var(--accent); text-decoration: none; margin-left: 0.25rem;">Send invites &rarr;</a>
+        {% endif %}
       </div>
       <div class="et-actions">
         <a href="/dashboard/event-types/{{ et.slug }}/edit" class="slot-btn" style="text-decoration: none; font-size: 0.8rem;">Edit</a>
@@ -73,6 +76,9 @@
       {% if not et.enabled %}<span class="badge badge-disabled">disabled</span>{% endif %}
       {% if et.visibility == "internal" %}<span class="badge badge-info">internal</span>{% endif %}
       {% if et.visibility == "private" %}<span class="badge badge-muted">private</span>{% endif %}
+      {% if et.visibility == "private" or et.visibility == "internal" %}
+        <a href="/dashboard/invites/{{ et.id }}" style="font-size: 0.75rem; color: var(--accent); text-decoration: none; margin-left: 0.25rem;">Send invites &rarr;</a>
+      {% endif %}
     </div>
     <div class="et-actions">
       {% if et.can_manage %}

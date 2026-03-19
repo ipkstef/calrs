@@ -1670,6 +1670,7 @@ fn settings_render(
             user_email => user.email,
             user_id => user.id,
             has_avatar => user.avatar_path.is_some(),
+            username => user.username.as_deref().unwrap_or(""),
             success => success.unwrap_or(""),
             error => error.unwrap_or(""),
             impersonating => impersonating,
