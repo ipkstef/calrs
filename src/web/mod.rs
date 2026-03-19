@@ -4480,8 +4480,8 @@ async fn overrides_page(
 ) -> impl IntoResponse {
     let user = &auth_user.user;
 
-    let et: Option<(String, String)> = sqlx::query_as(
-        "SELECT et.id, et.title FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.slug = ?",
+    let et: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT et.id, et.title, et.team_id FROM event_types et JOIN accounts a ON a.id = et.account_id WHERE a.user_id = ? AND et.slug = ?",
     )
     .bind(&user.id)
     .bind(&slug)
@@ -4489,10 +4489,11 @@ async fn overrides_page(
     .await
     .unwrap_or(None);
 
-    let (et_id, et_title) = match et {
+    let (et_id, et_title, team_id) = match et {
         Some(e) => e,
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
+    let is_team = team_id.is_some();
 
     let overrides: Vec<(String, String, Option<String>, Option<String>, i32)> = sqlx::query_as(
         "SELECT id, date, start_time, end_time, is_blocked FROM availability_overrides WHERE event_type_id = ? ORDER BY date, start_time",
@@ -4532,6 +4533,7 @@ async fn overrides_page(
             event_type_title => et_title,
             event_type_slug => slug,
             overrides => overrides_ctx,
+            is_team => is_team,
             impersonating => impersonating,
             impersonating_name => impersonating_name,
         })

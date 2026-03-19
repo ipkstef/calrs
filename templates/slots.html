@@ -546,18 +546,8 @@
   var format = localStorage.getItem('calrs_time_format') || '24';
   var dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  function to12h(t) {
-    var parts = t.split(':');
-    var h = parseInt(parts[0], 10);
-    var m = parts[1];
-    var suffix = h >= 12 ? 'PM' : 'AM';
-    if (h === 0) h = 12;
-    else if (h > 12) h -= 12;
-    return h + ':' + m + ' ' + suffix;
-  }
-
   function formatTime(t) {
-    return format === '12' ? to12h(t) : t;
+    return format === '12' ? calrsFormat12h(t) : t;
   }
 
   // Time format toggle

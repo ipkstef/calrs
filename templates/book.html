@@ -126,13 +126,7 @@
   var fmt = localStorage.getItem('calrs_time_format') || '24';
   if (fmt !== '12') return;
   document.querySelectorAll('.book-time').forEach(function(el) {
-    var parts = el.dataset.time.split(':');
-    var h = parseInt(parts[0], 10);
-    var m = parts[1];
-    var suffix = h >= 12 ? 'PM' : 'AM';
-    if (h === 0) h = 12;
-    else if (h > 12) h -= 12;
-    el.textContent = h + ':' + m + ' ' + suffix;
+    el.textContent = calrsFormat12h(el.dataset.time);
   });
 })();
 </script>
