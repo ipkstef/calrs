@@ -121,8 +121,8 @@
       var newForm = doc.querySelector('form');
       if (newForm) {
         // Update prev/next links
-        var links = document.querySelectorAll('form a.slot-btn');
-        var newLinks = newForm.querySelectorAll('a.slot-btn');
+        var links = document.querySelectorAll('form .slot-btn[href]');
+        var newLinks = newForm.querySelectorAll('.slot-btn[href]');
         links.forEach(function(l, i) { if (newLinks[i]) l.href = newLinks[i].href; });
         // Update date input
         var dateInput = document.querySelector('input[name="date"]');
@@ -141,8 +141,8 @@
 
   // Intercept prev/next links
   document.addEventListener('click', function(e) {
-    var link = e.target.closest('form a.slot-btn');
-    if (link) {
+    var link = e.target.closest('a.slot-btn');
+    if (link && link.closest('form')) {
       e.preventDefault();
       loadPage(link.href);
     }
