@@ -2737,6 +2737,9 @@ struct EventTypeForm {
     reminder_minutes: Option<i32>,
     // Additional guests
     max_additional_guests: Option<i32>,
+    // Member priorities for round-robin (creation flow): "uid1:3,uid2:1,uid3:2"
+    #[serde(default)]
+    member_priorities: String,
 }
 
 async fn new_event_type_form(
@@ -2763,10 +2766,31 @@ async fn new_event_type_form(
         .unwrap_or_default()
     };
 
-    let groups_ctx: Vec<minijinja::Value> = groups
-        .iter()
-        .map(|(id, name)| context! { id => id, name => name })
-        .collect();
+    // Fetch members for each team (for client-side priority card)
+    let mut groups_ctx: Vec<minijinja::Value> = Vec::new();
+    for (id, name) in &groups {
+        let team_members: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT u.id, u.name, u.avatar_path FROM users u \
+             JOIN team_members tm ON tm.user_id = u.id \
+             WHERE tm.team_id = ? AND u.enabled = 1 ORDER BY u.name",
+        )
+        .bind(id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+        let members_ctx: Vec<minijinja::Value> = team_members
+            .iter()
+            .map(|(uid, uname, ap)| {
+                context! {
+                    user_id => uid,
+                    name => uname,
+                    has_avatar => ap.is_some(),
+                    initials => compute_initials(uname),
+                }
+            })
+            .collect();
+        groups_ctx.push(context! { id => id, name => name, members => members_ctx });
+    }
 
     // Get user's calendars (is_busy=1) for calendar selection
     let calendars: Vec<(String, Option<String>, String)> = sqlx::query_as(
@@ -2989,6 +3013,27 @@ async fn create_event_type(
                 .bind(cal_id)
                 .execute(&state.pool)
                 .await;
+            }
+        }
+    }
+
+    // Save member priorities (creation flow: "uid1:3,uid2:1,uid3:2")
+    if team_id.is_some() && !form.member_priorities.is_empty() {
+        for entry in form.member_priorities.split(',') {
+            let parts: Vec<&str> = entry.split(':').collect();
+            if parts.len() == 2 {
+                let uid = parts[0].trim();
+                let weight: i64 = parts[1].trim().parse().unwrap_or(1);
+                if !uid.is_empty() {
+                    let _ = sqlx::query(
+                        "INSERT OR REPLACE INTO event_type_member_weights (event_type_id, user_id, weight) VALUES (?, ?, ?)",
+                    )
+                    .bind(&et_id)
+                    .bind(uid)
+                    .bind(weight)
+                    .execute(&state.pool)
+                    .await;
+                }
             }
         }
     }

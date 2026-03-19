@@ -76,28 +76,28 @@
   </div>
 </div>
 
+<style>
+  .priority-btn {
+    padding: 0.3rem 0.75rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+  }
+  .priority-btn:hover { background: var(--surface-hover); }
+  .priority-btn.active-high { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .priority-btn.active-medium { background: var(--text-muted); color: #fff; border-color: var(--text-muted); }
+  .priority-btn.active-low { background: var(--surface-hover); color: var(--text-secondary); border-color: var(--border); font-style: italic; }
+</style>
+
 <!-- Card 2: Member Priority (round-robin group only) -->
 {% if priority_members is defined and priority_members %}
 <div class="card" id="priority-card" style="margin-top: 1rem;">
   <h2 style="margin-bottom: 0.25rem;">Member Priority</h2>
   <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Higher priority members are assigned bookings first when available. Same priority = balanced by recent booking count.</p>
-
-  <style>
-    .priority-btn {
-      padding: 0.3rem 0.75rem;
-      font-size: 0.8rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: none;
-      cursor: pointer;
-      color: var(--text-secondary);
-      transition: all 0.15s ease;
-    }
-    .priority-btn:hover { background: var(--surface-hover); }
-    .priority-btn.active-high { background: var(--accent); color: #fff; border-color: var(--accent); }
-    .priority-btn.active-medium { background: var(--text-muted); color: #fff; border-color: var(--text-muted); }
-    .priority-btn.active-low { background: var(--surface-hover); color: var(--text-secondary); border-color: var(--border); font-style: italic; }
-  </style>
 
   {% for m in priority_members %}
   <div data-row-uid="{{ m.user_id }}" style="display: flex; align-items: center; padding: 0.5rem 0; gap: 0.75rem; {% if not loop.last %}border-bottom: 1px solid var(--border);{% endif %}">
@@ -121,6 +121,15 @@
     </div>
   </div>
   {% endfor %}
+</div>
+{% endif %}
+
+{% if not editing %}
+<!-- Dynamic priority card (creation flow — populated by JS when team + round-robin selected) -->
+<div id="dynamic-priority-card" class="card" style="margin-top: 1rem; display: none;">
+  <h2 style="margin-bottom: 0.25rem;">Member Priority</h2>
+  <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Higher priority members are assigned bookings first when available. Same priority = balanced by recent booking count.</p>
+  <div id="dynamic-priority-list"></div>
 </div>
 {% endif %}
 
@@ -337,6 +346,88 @@
     var modeGroup = document.getElementById('scheduling-mode-group');
     var modeSel = document.getElementById('scheduling_mode');
     var priorityCard = document.getElementById('priority-card');
+    var dynamicCard = document.getElementById('dynamic-priority-card');
+    var dynamicList = document.getElementById('dynamic-priority-list');
+
+    // Team members data for dynamic priority card (creation flow)
+    var teamMembers = {};
+    {% if teams is defined and teams %}
+    {% for t in teams %}
+    teamMembers["{{ t.id }}"] = [
+      {% if t.members is defined %}{% for m in t.members %}
+      { userId: "{{ m.user_id }}", name: "{{ m.name }}", hasAvatar: {{ m.has_avatar | lower }}, initials: "{{ m.initials }}" },
+      {% endfor %}{% endif %}
+    ];
+    {% endfor %}
+    {% endif %}
+
+    // Track priority state for creation flow
+    var memberPriorities = {};
+
+    function renderDynamicPriority(teamId) {
+      if (!dynamicCard || !dynamicList) return;
+      var members = teamMembers[teamId];
+      if (!members || members.length === 0) {
+        dynamicCard.style.display = 'none';
+        return;
+      }
+      dynamicList.innerHTML = '';
+      memberPriorities = {};
+      members.forEach(function(m, i) {
+        memberPriorities[m.userId] = 'low';
+        var row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; padding: 0.5rem 0; gap: 0.75rem;' + (i < members.length - 1 ? ' border-bottom: 1px solid var(--border);' : '');
+        // Avatar
+        var avatar = document.createElement('div');
+        avatar.className = 'avatar-circle';
+        avatar.style.cssText = 'width: 28px; height: 28px; font-size: 0.65rem;';
+        if (m.hasAvatar) {
+          avatar.innerHTML = '<img src="/avatar/' + m.userId + '" alt="">';
+        } else {
+          avatar.textContent = m.initials;
+        }
+        row.appendChild(avatar);
+        // Name
+        var name = document.createElement('div');
+        name.style.cssText = 'font-weight: 500; font-size: 0.875rem; flex: 1;';
+        name.textContent = m.name;
+        row.appendChild(name);
+        // Priority buttons
+        var btns = document.createElement('div');
+        btns.style.cssText = 'display: flex; gap: 0.25rem; flex-shrink: 0;';
+        ['high', 'medium', 'low'].forEach(function(level) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'priority-btn' + (level === 'low' ? ' active-low' : '');
+          btn.textContent = level.charAt(0).toUpperCase() + level.slice(1);
+          btn.onclick = function() {
+            memberPriorities[m.userId] = level;
+            btns.querySelectorAll('.priority-btn').forEach(function(b) { b.className = 'priority-btn'; });
+            btn.classList.add(level === 'high' ? 'active-high' : level === 'medium' ? 'active-medium' : 'active-low');
+            syncPriorityInputs();
+          };
+          btns.appendChild(btn);
+        });
+        row.appendChild(btns);
+        dynamicList.appendChild(row);
+      });
+      syncPriorityInputs();
+    }
+
+    function syncPriorityInputs() {
+      // Encode priorities as hidden input for form submission
+      var existing = document.getElementById('member_priorities_input');
+      if (existing) existing.remove();
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'member_priorities'; inp.id = 'member_priorities_input';
+      var parts = [];
+      for (var uid in memberPriorities) {
+        var w = memberPriorities[uid] === 'high' ? 3 : memberPriorities[uid] === 'medium' ? 2 : 1;
+        parts.push(uid + ':' + w);
+      }
+      inp.value = parts.join(',');
+      if (dynamicList) dynamicList.appendChild(inp);
+    }
 
     function toggleMode() {
       var isTeam = teamSel ? !!teamSel.value : {{ is_group is defined and is_group and "true" or "false" }};
@@ -346,7 +437,6 @@
       var visSel = document.getElementById('visibility');
       if (internalOpt) {
         internalOpt.style.display = isTeam ? '' : 'none';
-        // If switching away from team and internal was selected, fall back to public
         if (!isTeam && visSel && visSel.value === 'internal') {
           visSel.value = 'public';
         }
@@ -355,10 +445,21 @@
     }
 
     function togglePriority() {
-      if (!priorityCard) return;
       var isTeam = teamSel ? !!teamSel.value : {{ is_group is defined and is_group and "true" or "false" }};
       var isRR = modeSel && modeSel.value === 'round_robin';
-      priorityCard.style.display = (isTeam && isRR) ? '' : 'none';
+      // Server-rendered card (editing)
+      if (priorityCard) {
+        priorityCard.style.display = (isTeam && isRR) ? '' : 'none';
+      }
+      // Dynamic card (creation)
+      if (dynamicCard) {
+        if (isTeam && isRR && teamSel) {
+          renderDynamicPriority(teamSel.value);
+          dynamicCard.style.display = '';
+        } else {
+          dynamicCard.style.display = 'none';
+        }
+      }
     }
 
     if (teamSel) teamSel.addEventListener('change', toggleMode);
