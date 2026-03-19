@@ -514,6 +514,24 @@
     {% endif %}
   </div>
 
+  <!-- Calendar data (extractable by AJAX) -->
+  <script type="application/json" id="calendar-data">
+  {
+    "slotData": {
+      {% for day in days %}"{{ day.date }}": [{% for slot in day.slots %}{"start":"{{ slot.start }}","hostDate":"{{ slot.host_date }}","hostTime":"{{ slot.host_time }}"}{% if not loop.last %},{% endif %}{% endfor %}]{% if not loop.last %},{% endif %}{% endfor %}
+    },
+    "availableDates": { {% for d in available_dates %}"{{ d }}":true{% if not loop.last %},{% endif %}{% endfor %} },
+    "firstWeekday": {{ first_weekday }},
+    "daysInMonth": {{ days_in_month }},
+    "todayDate": "{{ today_date }}",
+    "monthYear": "{{ month_year }}",
+    "monthLabel": "{{ month_label }}",
+    "hasPrevMonth": {% if prev_month is defined and prev_month %}true{% else %}false{% endif %},
+    "prevMonth": "{{ prev_month | default(value='') }}",
+    "nextMonth": "{{ next_month }}"
+  }
+  </script>
+
   <!-- Right: calendar + slots -->
   <div class="slots-main">
     <div class="slots-layout">
@@ -562,30 +580,21 @@
 
 <script>
 (function() {
-  var slotData = {
-    {% for day in days %}
-    "{{ day.date }}": [
-      {% for slot in day.slots %}
-      { start: "{{ slot.start }}", hostDate: "{{ slot.host_date }}", hostTime: "{{ slot.host_time }}" }{% if not loop.last %},{% endif %}
-      {% endfor %}
-    ]{% if not loop.last %},{% endif %}
-    {% endfor %}
-  };
+  // Load calendar data from JSON block
+  var calData = JSON.parse(document.getElementById('calendar-data').textContent);
+  var slotData = calData.slotData;
+  var availableDates = calData.availableDates;
+  var firstWeekday = calData.firstWeekday;
+  var daysInMonth = calData.daysInMonth;
+  var todayDate = calData.todayDate;
+  var monthYear = calData.monthYear;
+  var hasPrevMonth = calData.hasPrevMonth;
 
-  var availableDates = {
-    {% for d in available_dates %}"{{ d }}": true{% if not loop.last %},{% endif %}{% endfor %}
-  };
-
-  var firstWeekday = {{ first_weekday }};
-  var daysInMonth = {{ days_in_month }};
-  var todayDate = "{{ today_date }}";
-  var monthYear = "{{ month_year }}";
   function decHtml(s) { var d = document.createElement('textarea'); d.innerHTML = s; return d.value; }
   var basePath = decHtml("{{ base }}");
   var guestTz = decHtml("{{ guest_tz }}");
   var inviteToken = decHtml("{{ invite_token | default(value='') }}");
   var rescheduleBase = decHtml("{{ reschedule_base | default('') }}");
-  var hasPrevMonth = {% if prev_month is defined and prev_month %}true{% else %}false{% endif %};
 
   var format = localStorage.getItem('calrs_time_format') || '24';
   var dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -650,54 +659,99 @@
   var grid = document.getElementById('cal-grid');
   var selectedDate = null;
 
-  // Previous month trailing days
-  var myParts = monthYear.split('-');
-  var myYear = parseInt(myParts[0], 10);
-  var myMonth = parseInt(myParts[1], 10);
-  var prevMonthLastDay = new Date(myYear, myMonth - 1, 0).getDate();
-  for (var i = 0; i < firstWeekday; i++) {
-    var pd = prevMonthLastDay - firstWeekday + 1 + i;
-    var cell = document.createElement('div');
-    cell.className = 'cal-cell other-month';
-    cell.textContent = pd;
-    grid.appendChild(cell);
+  function buildCalendar() {
+    grid.innerHTML = '';
+    selectedDate = null;
+
+    var myParts = monthYear.split('-');
+    var myYear = parseInt(myParts[0], 10);
+    var myMonth = parseInt(myParts[1], 10);
+
+    // Previous month trailing days
+    var prevMonthLastDay = new Date(myYear, myMonth - 1, 0).getDate();
+    for (var i = 0; i < firstWeekday; i++) {
+      var pd = prevMonthLastDay - firstWeekday + 1 + i;
+      var cell = document.createElement('div');
+      cell.className = 'cal-cell other-month';
+      cell.textContent = pd;
+      grid.appendChild(cell);
+    }
+
+    // Current month days
+    for (var d = 1; d <= daysInMonth; d++) {
+      var dateStr = monthYear + '-' + (d < 10 ? '0' : '') + d;
+      var cell = document.createElement('div');
+      cell.className = 'cal-cell';
+      cell.textContent = d;
+      cell.dataset.date = dateStr;
+
+      if (dateStr < todayDate) {
+        cell.classList.add('past');
+      } else if (availableDates[dateStr]) {
+        cell.classList.add('has-slots');
+      }
+
+      if (dateStr === todayDate) {
+        cell.classList.add('today');
+      }
+
+      if (cell.classList.contains('has-slots')) {
+        cell.addEventListener('click', (function(ds) {
+          return function() { selectDay(ds); };
+        })(dateStr));
+      }
+
+      grid.appendChild(cell);
+    }
+
+    // Next month leading days to fill the grid
+    var totalCells = firstWeekday + daysInMonth;
+    var remaining = (7 - (totalCells % 7)) % 7;
+    for (var i = 1; i <= remaining; i++) {
+      var cell = document.createElement('div');
+      cell.className = 'cal-cell other-month';
+      cell.textContent = i;
+      grid.appendChild(cell);
+    }
+
+    // Other-month day click handlers
+    grid.querySelectorAll('.cal-cell.other-month').forEach(function(cell) {
+      cell.style.cursor = 'pointer';
+      var dayNum = parseInt(cell.textContent, 10);
+      var isPrev = dayNum > 15;
+      if (isPrev && !hasPrevMonth) {
+        cell.style.cursor = 'default';
+        return;
+      }
+      cell.addEventListener('click', function() {
+        if (isPrev) {
+          var pm = myMonth - 1, py = myYear;
+          if (pm < 1) { pm = 12; py--; }
+          navigateMonth(py, pm);
+        } else {
+          var nm = myMonth + 1, ny = myYear;
+          if (nm > 12) { nm = 1; ny++; }
+          navigateMonth(ny, nm);
+        }
+      });
+    });
+
+    // Auto-select first available date
+    var firstAvail = null;
+    for (var key in availableDates) {
+      if (!firstAvail || key < firstAvail) firstAvail = key;
+    }
+    if (firstAvail) selectDay(firstAvail);
+    else clearSlotPanel();
   }
 
-  // Current month days
-  for (var d = 1; d <= daysInMonth; d++) {
-    var dateStr = monthYear + '-' + (d < 10 ? '0' : '') + d;
-    var cell = document.createElement('div');
-    cell.className = 'cal-cell';
-    cell.textContent = d;
-    cell.dataset.date = dateStr;
-
-    if (dateStr < todayDate) {
-      cell.classList.add('past');
-    } else if (availableDates[dateStr]) {
-      cell.classList.add('has-slots');
+  function clearSlotPanel() {
+    var panel = document.querySelector('.slot-panel');
+    if (panel) {
+      panel.querySelector('.slot-panel-header').textContent = '';
+      var body = panel.querySelector('.slot-panel-body');
+      if (body) body.innerHTML = '<div class="slot-empty"><div>No available times this month</div></div>';
     }
-
-    if (dateStr === todayDate) {
-      cell.classList.add('today');
-    }
-
-    if (cell.classList.contains('has-slots')) {
-      cell.addEventListener('click', (function(ds) {
-        return function() { selectDay(ds); };
-      })(dateStr));
-    }
-
-    grid.appendChild(cell);
-  }
-
-  // Next month leading days to fill the grid
-  var totalCells = firstWeekday + daysInMonth;
-  var remaining = (7 - (totalCells % 7)) % 7;
-  for (var i = 1; i <= remaining; i++) {
-    var cell = document.createElement('div');
-    cell.className = 'cal-cell other-month';
-    cell.textContent = i;
-    grid.appendChild(cell);
   }
 
   // Select day and show slots
@@ -739,73 +793,109 @@
     listEl.innerHTML = html;
   }
 
-  // Auto-select first available date
-  var firstAvail = null;
-  for (var key in availableDates) {
-    if (!firstAvail || key < firstAvail) firstAvail = key;
-  }
-  if (firstAvail) selectDay(firstAvail);
-
-  // Navigate to month when clicking on prev/next month day cells
-  function fadeAndNavigate(url) {
-    var outer = document.querySelector('.slots-outer');
-    if (outer) {
-      outer.style.transition = 'opacity 0.15s ease';
-      outer.style.opacity = '0';
-      setTimeout(function() { window.location.href = url; }, 150);
-    } else {
-      window.location.href = url;
-    }
-  }
-
+  // AJAX month navigation — only rebuilds calendar + slots, not the full page
   function navigateMonth(targetYear, targetMonth) {
     var monthStr = targetYear + '-' + (targetMonth < 10 ? '0' : '') + targetMonth;
     var url = basePath + '?month=' + monthStr;
     if (guestTz) url += '&tz=' + encodeURIComponent(guestTz);
     if (inviteToken) url += '&invite=' + encodeURIComponent(inviteToken);
-    fadeAndNavigate(url);
+
+    var layout = document.querySelector('.slots-layout');
+    if (layout) {
+      layout.style.transition = 'opacity 0.15s ease';
+      layout.style.opacity = '0.4';
+    }
+
+    fetch(url).then(function(r) { return r.text(); }).then(function(html) {
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(html, 'text/html');
+      var newDataEl = doc.getElementById('calendar-data');
+      if (!newDataEl) { window.location.href = url; return; }
+
+      var newData = JSON.parse(newDataEl.textContent);
+      slotData = newData.slotData;
+      availableDates = newData.availableDates;
+      firstWeekday = newData.firstWeekday;
+      daysInMonth = newData.daysInMonth;
+      monthYear = newData.monthYear;
+      hasPrevMonth = newData.hasPrevMonth;
+
+      // Update month title
+      var titleEl = document.querySelector('.cal-header-title');
+      if (titleEl) titleEl.textContent = newData.monthLabel;
+
+      // Update prev/next nav arrows
+      updateNavArrows(newData);
+
+      // Rebuild calendar grid
+      buildCalendar();
+
+      if (layout) {
+        layout.style.opacity = '1';
+      }
+      history.pushState(null, '', url);
+    }).catch(function() {
+      window.location.href = url;
+    });
   }
 
-  grid.querySelectorAll('.cal-cell.other-month').forEach(function(cell) {
-    cell.style.cursor = 'pointer';
-    var dayNum = parseInt(cell.textContent, 10);
-    var isPrev = dayNum > 15;
-    if (isPrev && !hasPrevMonth) {
-      cell.style.cursor = 'default';
-      return; // Can't go before current month
+  function updateNavArrows(data) {
+    var nav = document.querySelector('.cal-nav');
+    if (!nav) return;
+    nav.innerHTML = '';
+    if (data.prevMonth) {
+      var prevUrl = basePath + '?month=' + data.prevMonth;
+      if (guestTz) prevUrl += '&tz=' + encodeURIComponent(guestTz);
+      if (inviteToken) prevUrl += '&invite=' + encodeURIComponent(inviteToken);
+      var prev = document.createElement('a');
+      prev.href = prevUrl;
+      prev.innerHTML = '&larr;';
+      prev.addEventListener('click', function(e) {
+        e.preventDefault();
+        var parts = data.prevMonth.split('-');
+        navigateMonth(parseInt(parts[0]), parseInt(parts[1]));
+      });
+      nav.appendChild(prev);
+    } else {
+      var span = document.createElement('span');
+      span.className = 'disabled';
+      span.innerHTML = '&larr;';
+      nav.appendChild(span);
     }
-    cell.addEventListener('click', function() {
-      if (isPrev) {
-        var pm = myMonth - 1;
-        var py = myYear;
-        if (pm < 1) { pm = 12; py--; }
-        navigateMonth(py, pm);
-      } else {
-        var nm = myMonth + 1;
-        var ny = myYear;
-        if (nm > 12) { nm = 1; ny++; }
-        navigateMonth(ny, nm);
-      }
+    var nextUrl = basePath + '?month=' + data.nextMonth;
+    if (guestTz) nextUrl += '&tz=' + encodeURIComponent(guestTz);
+    if (inviteToken) nextUrl += '&invite=' + encodeURIComponent(inviteToken);
+    var next = document.createElement('a');
+    next.href = nextUrl;
+    next.innerHTML = '&rarr;';
+    next.addEventListener('click', function(e) {
+      e.preventDefault();
+      var parts = data.nextMonth.split('-');
+      navigateMonth(parseInt(parts[0]), parseInt(parts[1]));
     });
+    nav.appendChild(next);
+  }
+
+  // Handle browser back/forward
+  window.addEventListener('popstate', function() {
+    window.location.reload();
   });
 
-  // Intercept prev/next month arrow links for fade transition
+  // Initial build
+  buildCalendar();
+
+  // Intercept initial server-rendered prev/next arrow links
   document.querySelectorAll('.cal-nav a[data-calrs-sync]').forEach(function(link) {
     link.addEventListener('click', function(e) {
       e.preventDefault();
-      fadeAndNavigate(link.href);
+      var params = new URLSearchParams(new URL(link.href).search);
+      var m = params.get('month');
+      if (m) {
+        var parts = m.split('-');
+        navigateMonth(parseInt(parts[0]), parseInt(parts[1]));
+      }
     });
   });
-
-  // Fade in on page load for smooth month transitions
-  var outerEl = document.querySelector('.slots-outer');
-  if (outerEl) {
-    outerEl.style.opacity = '0';
-    outerEl.style.transition = 'opacity 0.2s ease';
-    requestAnimationFrame(function() {
-      requestAnimationFrame(function() { outerEl.style.opacity = '1'; });
-    });
-  }
 
 })();
 </script>
