@@ -127,6 +127,18 @@ calrs supports five distinct booking scenarios. Each serves a different use case
 - **Public team pages** — bookable at `/team/{slug}/{event-slug}`
 - **Private teams** — require an invite token link, preventing unsolicited external bookings of your colleagues
 
+#### Setting up team scheduling
+
+1. **Create a team** — go to **Teams** in the sidebar, click **New team**. Name it, pick public or private visibility, and add members (individual users and/or OIDC groups) from the unified search bar.
+
+2. **Create a team event type** — go to **Event Types**, click **New event type**, and select your team as the owner. Choose a scheduling mode:
+   - **Round-robin** — picks the least-busy available member (with optional per-member weight priority)
+   - **Collective** — requires *all* members to be free at the same time
+
+3. **Share the booking link** — public teams are bookable at `/team/{slug}/{event-slug}`. Private teams use an invite token link from the team settings page.
+
+Each team member's CalDAV calendars are checked for conflicts. The availability rules and overrides on the event type apply to all members.
+
 ### Visibility & invites
 
 - **Public** — listed on your profile or team page, bookable by anyone with the URL
