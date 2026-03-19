@@ -2925,6 +2925,8 @@ struct EventTypeForm {
     avail_end: Option<String>,      // legacy: "17:00"
     avail_windows: Option<String>,  // "09:00-12:00,13:00-17:00"
     avail_schedule: Option<String>, // "1:09:00-17:00;2:09:00-12:00,13:00-17:00"
+    // Scheduling mode (round_robin / collective)
+    scheduling_mode: Option<String>,
     // Team (optional)
     team_id: Option<String>,
     // Calendar selection (comma-separated IDs)
@@ -3537,7 +3539,7 @@ async fn update_event_type(
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
     let _ = sqlx::query(
-        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ? WHERE id = ?",
+        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ?, scheduling_mode = ? WHERE id = ?",
     )
     .bind(&new_slug)
     .bind(form.title.trim())
@@ -3552,6 +3554,7 @@ async fn update_event_type(
     .bind(reminder_minutes)
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
+    .bind(form.scheduling_mode.as_deref().unwrap_or("round_robin"))
     .bind(&et_id)
     .execute(&state.pool)
     .await;
@@ -5394,7 +5397,7 @@ async fn update_group_event_type(
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
     let _ = sqlx::query(
-        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ? WHERE id = ?",
+        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ?, scheduling_mode = ? WHERE id = ?",
     )
     .bind(&new_slug)
     .bind(form.title.trim())
@@ -5409,6 +5412,7 @@ async fn update_group_event_type(
     .bind(reminder_minutes)
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
+    .bind(form.scheduling_mode.as_deref().unwrap_or("round_robin"))
     .bind(&et_id)
     .execute(&state.pool)
     .await;
