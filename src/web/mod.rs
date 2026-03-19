@@ -2221,7 +2221,10 @@ async fn team_settings_save(
         .execute(&state.pool)
         .await;
 
-    // Sync direct members (preserve group-synced members)
+    // Sync direct members (preserve group-synced members).
+    // The hidden input is always present (populated by JS). An empty value means
+    // either "remove all direct members" (valid for global admins) or JS failure.
+    // We proceed either way — the safety net below re-adds non-admin users.
     let member_ids = split_csv_ids(&form.members);
     // 1. Remove direct members not in the submitted list
     let _ = sqlx::query(
@@ -3035,21 +3038,33 @@ async fn create_event_type(
     }
 
     // Save member priorities (creation flow: "uid1:3,uid2:1,uid3:2")
-    if team_id.is_some() && !form.member_priorities.is_empty() {
-        for entry in form.member_priorities.split(',') {
-            let parts: Vec<&str> = entry.split(':').collect();
-            if parts.len() == 2 {
-                let uid = parts[0].trim();
-                let weight: i64 = parts[1].trim().parse().unwrap_or(1);
-                if !uid.is_empty() {
-                    let _ = sqlx::query(
-                        "INSERT OR REPLACE INTO event_type_member_weights (event_type_id, user_id, weight) VALUES (?, ?, ?)",
-                    )
-                    .bind(&et_id)
-                    .bind(uid)
-                    .bind(weight)
-                    .execute(&state.pool)
-                    .await;
+    // Only insert weights for users who are actually team members.
+    if let Some(tid) = team_id {
+        if !form.member_priorities.is_empty() {
+            let valid_members: Vec<(String,)> =
+                sqlx::query_as("SELECT user_id FROM team_members WHERE team_id = ?")
+                    .bind(tid)
+                    .fetch_all(&state.pool)
+                    .await
+                    .unwrap_or_default();
+            let valid_set: std::collections::HashSet<&str> =
+                valid_members.iter().map(|(id,)| id.as_str()).collect();
+
+            for entry in form.member_priorities.split(',') {
+                let parts: Vec<&str> = entry.split(':').collect();
+                if parts.len() == 2 {
+                    let uid = parts[0].trim();
+                    let weight: i64 = parts[1].trim().parse().unwrap_or(1);
+                    if !uid.is_empty() && valid_set.contains(uid) {
+                        let _ = sqlx::query(
+                            "INSERT OR REPLACE INTO event_type_member_weights (event_type_id, user_id, weight) VALUES (?, ?, ?)",
+                        )
+                        .bind(&et_id)
+                        .bind(uid)
+                        .bind(weight)
+                        .execute(&state.pool)
+                        .await;
+                    }
                 }
             }
         }

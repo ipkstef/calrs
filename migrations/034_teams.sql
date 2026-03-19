@@ -53,10 +53,16 @@ WHERE EXISTS (SELECT 1 FROM teams t WHERE t.id = ug.group_id);
 UPDATE event_types SET team_id = group_id WHERE group_id IS NOT NULL;
 
 -- Step 4: Migrate team links → private teams
--- Each team link becomes a private team with an invite token
+-- Each team link becomes a private team with an invite token.
+-- Append '-tl' suffix to slug to avoid collisions with group-migrated teams,
+-- and use tl.id as a fallback slug suffix if the title-based slug already exists.
 INSERT INTO teams (id, name, slug, description, avatar_path, visibility, invite_token, created_by, created_at)
 SELECT tl.id, tl.title,
-       LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(tl.title), ' ', '-'), '''', ''), '"', ''), '.', '')),
+       CASE
+         WHEN NOT EXISTS (SELECT 1 FROM teams WHERE slug = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(tl.title), ' ', '-'), '''', ''), '"', ''), '.', '')))
+         THEN LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(tl.title), ' ', '-'), '''', ''), '"', ''), '.', ''))
+         ELSE LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(tl.title), ' ', '-'), '''', ''), '"', ''), '.', '')) || '-' || SUBSTR(tl.id, 1, 8)
+       END,
        tl.description, NULL, 'private', tl.token, tl.created_by_user_id, tl.created_at
 FROM team_links tl;
 
@@ -67,7 +73,9 @@ SELECT tlm.team_link_id, tlm.user_id,
        'direct'
 FROM team_link_members tlm;
 
--- Ensure creator is always a team member (may not be in team_link_members)
+-- Ensure creator is always a team member (may not be in team_link_members).
+-- Skip if created_by_user_id is NULL (creator was deleted).
 INSERT OR IGNORE INTO team_members (team_id, user_id, role, source)
 SELECT tl.id, tl.created_by_user_id, 'admin', 'direct'
-FROM team_links tl;
+FROM team_links tl
+WHERE tl.created_by_user_id IS NOT NULL;
