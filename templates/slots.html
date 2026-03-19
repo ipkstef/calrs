@@ -581,7 +581,10 @@
 <script>
 (function() {
   // Load calendar data from JSON block
-  var calData = JSON.parse(document.getElementById('calendar-data').textContent);
+  var calDataEl = document.getElementById('calendar-data');
+  if (!calDataEl) return;
+  var calData;
+  try { calData = JSON.parse(calDataEl.textContent); } catch(e) { console.error('calrs: failed to parse calendar data', e); return; }
   var slotData = calData.slotData;
   var availableDates = calData.availableDates;
   var firstWeekday = calData.firstWeekday;
