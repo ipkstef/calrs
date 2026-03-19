@@ -149,6 +149,9 @@
         <span style="font-size: 0.9rem; flex: 1;">{{ m.name }}</span>
         {% if m.role == "admin" %}<span class="badge badge-info">admin</span>{% endif %}
         {% if m.source == "group" %}<span class="badge badge-muted">OIDC</span>{% endif %}
+        {% if m.source != "group" %}
+        <button type="button" class="slot-btn remove-member-btn" data-user-id="{{ m.id }}" style="font-size: 0.75rem; color: var(--error-text); cursor: pointer;">Remove</button>
+        {% endif %}
       </div>
       {% endfor %}
       {% for g in linked_groups %}
@@ -350,6 +353,11 @@
     if (row) row.remove();
     syncHidden();
   }
+
+  // Wire up remove buttons on server-rendered member rows
+  document.querySelectorAll('.remove-member-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { removeMember(this.dataset.userId); });
+  });
 
   // Wire up remove buttons on server-rendered group rows
   document.querySelectorAll('.remove-group-btn').forEach(function(btn) {
