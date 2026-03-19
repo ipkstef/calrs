@@ -2851,7 +2851,7 @@ async fn new_event_type_form(
             form_buffer_before => 0,
             form_buffer_after => 0,
             form_min_notice => 60,
-            form_requires_confirmation => match preset { "private" => true, _ => false },
+            form_requires_confirmation => matches!(preset, "private"),
             form_visibility => match preset { "private" => "private", "internal" => "internal", _ => "public" },
             form_location_type => "link",
             form_location_value => "",
