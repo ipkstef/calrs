@@ -6281,6 +6281,7 @@ async fn user_profile(
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          WHERE a.user_id = ? AND et.enabled = 1 AND et.visibility = 'public'
+         AND et.team_id IS NULL
          ORDER BY et.created_at",
     )
     .bind(&user_id)
