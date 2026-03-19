@@ -747,13 +747,23 @@
   if (firstAvail) selectDay(firstAvail);
 
   // Navigate to month when clicking on prev/next month day cells
+  function fadeAndNavigate(url) {
+    var outer = document.querySelector('.slots-outer');
+    if (outer) {
+      outer.style.transition = 'opacity 0.15s ease';
+      outer.style.opacity = '0';
+      setTimeout(function() { window.location.href = url; }, 150);
+    } else {
+      window.location.href = url;
+    }
+  }
+
   function navigateMonth(targetYear, targetMonth) {
     var monthStr = targetYear + '-' + (targetMonth < 10 ? '0' : '') + targetMonth;
     var url = basePath + '?month=' + monthStr;
     if (guestTz) url += '&tz=' + encodeURIComponent(guestTz);
     if (inviteToken) url += '&invite=' + encodeURIComponent(inviteToken);
-    calrsLoader.show();
-    window.location.href = url;
+    fadeAndNavigate(url);
   }
 
   grid.querySelectorAll('.cal-cell.other-month').forEach(function(cell) {
@@ -778,6 +788,24 @@
       }
     });
   });
+
+  // Intercept prev/next month arrow links for fade transition
+  document.querySelectorAll('.cal-nav a[data-calrs-sync]').forEach(function(link) {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      fadeAndNavigate(link.href);
+    });
+  });
+
+  // Fade in on page load for smooth month transitions
+  var outerEl = document.querySelector('.slots-outer');
+  if (outerEl) {
+    outerEl.style.opacity = '0';
+    outerEl.style.transition = 'opacity 0.2s ease';
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() { outerEl.style.opacity = '1'; });
+    });
+  }
 
 })();
 </script>
