@@ -326,10 +326,8 @@
   (function() {
     var titleEl = document.getElementById('title');
     var slugEl = document.getElementById('slug');
-    var slugEdited = slugEl.value !== '';
-    slugEl.addEventListener('input', function() { slugEdited = true; });
     titleEl.addEventListener('input', function() {
-      if (!slugEdited) {
+      if (!slugEl.value) {
         slugEl.value = titleEl.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       }
     });
