@@ -145,7 +145,19 @@
       <div class="member-row" data-id="{{ g.id }}" data-type="group" style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; {% if not loop.last %}border-bottom: 1px solid var(--border);{% endif %}">
         <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--surface-hover); color: var(--text-muted); display: flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0;">&#8862;</div>
         <span style="font-size: 0.9rem; flex: 1;">{{ g.name }}</span>
-        <span style="font-size: 0.8rem; color: var(--text-muted);">{{ g.member_count }} member{% if g.member_count != 1 %}s{% endif %}</span>
+        <!-- Stacked member avatars -->
+        <span style="display: inline-flex; align-items: center;">
+          {% for m in g.members %}
+          {% if loop.index0 < 6 %}
+          <span title="{{ m.name }}" style="width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 0.55rem; font-weight: 600; flex-shrink: 0; overflow: hidden; border: 2px solid var(--surface);{% if loop.index0 > 0 %} margin-left: -8px;{% endif %}">
+            {% if m.has_avatar %}<img src="/avatar/{{ m.id }}" style="width:100%;height:100%;object-fit:cover;">{% else %}{{ m.initials }}{% endif %}
+          </span>
+          {% endif %}
+          {% endfor %}
+          {% if g.member_count > 6 %}
+          <span style="width: 22px; height: 22px; border-radius: 50%; background: var(--surface-hover); color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; font-size: 0.55rem; font-weight: 600; flex-shrink: 0; border: 2px solid var(--surface); margin-left: -8px;">+{{ g.member_count - 6 }}</span>
+          {% endif %}
+        </span>
         <span class="badge" style="background: var(--surface-hover); color: var(--text-muted); font-size: 0.7rem;">OIDC group</span>
         <button type="button" class="slot-btn remove-group-btn" data-group-id="{{ g.id }}" style="font-size: 0.75rem; color: var(--error-text); cursor: pointer;">Remove</button>
       </div>
@@ -187,7 +199,9 @@
   var allGroups = [
     {% if oidc_groups %}
     {% for g in oidc_groups %}
-    { id: "{{ g.id }}", name: "{{ g.name }}", count: {{ g.member_count }}, linked: {{ g.linked | lower }} },
+    { id: "{{ g.id }}", name: "{{ g.name }}", count: {{ g.member_count }}, linked: {{ g.linked | lower }}, members: [
+      {% for m in g.members %}{ id: "{{ m.id }}", name: "{{ m.name }}", hasAvatar: {{ m.has_avatar | lower }}, initials: "{{ m.initials }}" },{% endfor %}
+    ] },
     {% endfor %}
     {% endif %}
   ];
@@ -202,9 +216,7 @@
 
   // Track linked groups
   var linkedGroups = {};
-  {% if oidc_groups %}
   allGroups.forEach(function(g) { if (g.linked) linkedGroups[g.id] = g; });
-  {% endif %}
 
   var searchEl = document.getElementById('add-member-search');
   var resultsEl = document.getElementById('add-member-results');
@@ -222,6 +234,30 @@
     var ginp = document.createElement('input');
     ginp.type = 'hidden'; ginp.name = 'group_ids'; ginp.value = Object.keys(linkedGroups).join(',');
     groupHiddenEl.appendChild(ginp);
+  }
+
+  function stackedAvatars(members, total) {
+    var wrap = document.createElement('span');
+    wrap.style.cssText = 'display: inline-flex; align-items: center;';
+    var shown = members.slice(0, 6);
+    shown.forEach(function(m, i) {
+      var av = document.createElement('span');
+      av.title = m.name;
+      av.style.cssText = 'width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 0.55rem; font-weight: 600; flex-shrink: 0; overflow: hidden; border: 2px solid var(--surface);' + (i > 0 ? ' margin-left: -8px;' : '');
+      if (m.hasAvatar) {
+        av.innerHTML = '<img src="/avatar/' + m.id + '" style="width:100%;height:100%;object-fit:cover;">';
+      } else {
+        av.textContent = m.initials;
+      }
+      wrap.appendChild(av);
+    });
+    if (total > 6) {
+      var more = document.createElement('span');
+      more.style.cssText = 'width: 22px; height: 22px; border-radius: 50%; background: var(--surface-hover); color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; font-size: 0.55rem; font-weight: 600; flex-shrink: 0; border: 2px solid var(--surface); margin-left: -8px;';
+      more.textContent = '+' + (total - 6);
+      wrap.appendChild(more);
+    }
+    return wrap;
   }
 
   function addMember(user) {
@@ -278,10 +314,9 @@
     name.style.cssText = 'font-size: 0.9rem; flex: 1;';
     name.textContent = group.name;
     row.appendChild(name);
-    var count = document.createElement('span');
-    count.style.cssText = 'font-size: 0.8rem; color: var(--text-muted);';
-    count.textContent = group.count + ' member' + (group.count !== 1 ? 's' : '');
-    row.appendChild(count);
+    if (group.members && group.members.length > 0) {
+      row.appendChild(stackedAvatars(group.members, group.count));
+    }
     var badge = document.createElement('span');
     badge.className = 'badge';
     badge.style.cssText = 'background: var(--surface-hover); color: var(--text-muted); font-size: 0.7rem;';
@@ -313,16 +348,17 @@
   });
 
   function renderResults(query) {
-    var q = query.toLowerCase();
-    if (q === '') { resultsEl.style.display = 'none'; return; }
+    var q = (query || '').toLowerCase();
 
     var userMatches = allUsers.filter(function(u) {
       if (currentMembers[u.id] || u.isMember) return false;
+      if (q === '') return true;
       return u.name.toLowerCase().indexOf(q) !== -1 || u.email.toLowerCase().indexOf(q) !== -1;
     }).slice(0, 8);
 
     var groupMatches = allGroups.filter(function(g) {
       if (linkedGroups[g.id]) return false;
+      if (q === '') return true;
       return g.name.toLowerCase().indexOf(q) !== -1;
     }).slice(0, 5);
 
@@ -375,12 +411,14 @@
         row.onmouseenter = function() { this.style.background = 'var(--surface-hover)'; };
         row.onmouseleave = function() { this.style.background = 'none'; };
         row.onclick = function() { addGroup(g); };
-        var icon = document.createElement('div');
-        icon.innerHTML = '&#8862;';
-        icon.style.cssText = 'width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: var(--text-muted); flex-shrink: 0;';
-        row.appendChild(icon);
         var info = document.createElement('div');
-        info.innerHTML = '<strong style="font-size:0.85rem;">' + g.name + '</strong> <span style="color:var(--text-muted);font-size:0.8rem;">(' + g.count + ' member' + (g.count !== 1 ? 's' : '') + ')</span>';
+        info.style.cssText = 'display: flex; align-items: center; gap: 0.5rem; flex: 1;';
+        info.innerHTML = '<strong style="font-size:0.85rem;">' + g.name + '</strong>';
+        if (g.members && g.members.length > 0) {
+          info.appendChild(stackedAvatars(g.members, g.count));
+        } else {
+          info.innerHTML += ' <span style="color:var(--text-muted);font-size:0.8rem;">(' + g.count + ' member' + (g.count !== 1 ? 's' : '') + ')</span>';
+        }
         row.appendChild(info);
         resultsEl.appendChild(row);
       });
@@ -390,7 +428,7 @@
   }
 
   searchEl.addEventListener('input', function() { renderResults(this.value); });
-  searchEl.addEventListener('focus', function() { if (this.value) renderResults(this.value); });
+  searchEl.addEventListener('focus', function() { renderResults(this.value); });
   document.addEventListener('click', function(e) {
     if (!searchEl.contains(e.target) && !resultsEl.contains(e.target)) {
       resultsEl.style.display = 'none';
