@@ -541,11 +541,11 @@
           <div class="cal-header-title">{{ month_label }}</div>
           <div class="cal-nav">
             {% if prev_month is defined and prev_month %}
-              <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" data-calrs-sync>&larr;</a>
+              <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&larr;</a>
             {% else %}
               <span class="disabled">&larr;</span>
             {% endif %}
-            <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" data-calrs-sync>&rarr;</a>
+            <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&rarr;</a>
           </div>
         </div>
 
@@ -833,6 +833,7 @@
       if (layout) {
         layout.style.opacity = '1';
       }
+      if (typeof calrsLoader !== 'undefined') calrsLoader.hide();
       history.pushState(null, '', url);
     }).catch(function() {
       window.location.href = url;
@@ -885,7 +886,7 @@
   buildCalendar();
 
   // Intercept initial server-rendered prev/next arrow links
-  document.querySelectorAll('.cal-nav a[data-calrs-sync]').forEach(function(link) {
+  document.querySelectorAll('.cal-nav a.cal-nav-link').forEach(function(link) {
     link.addEventListener('click', function(e) {
       e.preventDefault();
       var params = new URLSearchParams(new URL(link.href).search);
