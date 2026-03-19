@@ -5687,6 +5687,38 @@ async fn show_group_slots(
         .map(|(iana, label)| context! { value => iana, label => label, selected => (*iana == guest_tz_name) })
         .collect();
 
+    // Fetch team ID and avatar for sidebar display
+    let team_info: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, avatar_path FROM teams WHERE slug = ?")
+            .bind(&team_slug)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+    let (team_id, team_avatar_path) = team_info.unwrap_or_default();
+
+    // Fetch team members for sidebar display
+    let team_members_rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.avatar_path FROM users u \
+         JOIN team_members tm ON tm.user_id = u.id \
+         WHERE tm.team_id = ? AND u.enabled = 1 ORDER BY u.name",
+    )
+    .bind(&team_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let team_members_ctx: Vec<minijinja::Value> = team_members_rows
+        .iter()
+        .map(|(uid, uname, ap)| {
+            context! {
+                id => uid,
+                name => uname,
+                has_avatar => ap.is_some(),
+                initials => compute_initials(uname),
+            }
+        })
+        .collect();
+
     let tmpl = match state.templates.get_template("slots.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Internal error: {}", e)),
@@ -5703,6 +5735,10 @@ async fn show_group_slots(
             },
             host_name => team_name,
             team_slug => team_slug,
+            team_id => team_id,
+            team_has_avatar => team_avatar_path.is_some(),
+            team_initials => compute_initials(&team_name),
+            team_members => team_members_ctx,
             days => days_ctx,
             available_dates => available_dates,
             month_label => month_label,
