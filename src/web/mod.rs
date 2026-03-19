@@ -2946,7 +2946,7 @@ async fn new_event_type_form(
     let user = &auth_user.user;
     let preset = query.get("preset").map(|s| s.as_str()).unwrap_or("");
 
-    // Get teams where the user is a team admin (global admins see all teams)
+    // Get teams where the user is a member (global admins see all teams)
     let groups: Vec<(String, String)> = if user.role == "admin" {
         sqlx::query_as("SELECT t.id, t.name FROM teams t ORDER BY t.name")
             .fetch_all(&state.pool)
@@ -2954,7 +2954,7 @@ async fn new_event_type_form(
             .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? AND tm.role = 'admin' ORDER BY t.name",
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? ORDER BY t.name",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -3120,14 +3120,14 @@ async fn create_event_type(
         .as_deref()
         .filter(|s| !s.trim().is_empty());
 
-    // Verify team admin rights if a team_id is specified
+    // Verify team membership if a team_id is specified
     if let Some(tid) = team_id {
         let is_global_admin = user.role == "admin";
-        if !is_global_admin && !is_team_admin(&state.pool, &user.id, tid).await {
+        if !is_global_admin && !is_team_member(&state.pool, &user.id, tid).await {
             return render_event_type_form_error(
                 &state,
                 &auth_user,
-                "You are not an admin of this team.",
+                "You are not a member of this team.",
                 &form,
                 false,
             )
@@ -4917,7 +4917,7 @@ async fn new_group_event_type_form(
             .unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? AND tm.role = 'admin' ORDER BY t.name",
+            "SELECT t.id, t.name FROM teams t JOIN team_members tm ON tm.team_id = t.id WHERE tm.user_id = ? ORDER BY t.name",
         )
         .bind(&user.id)
         .fetch_all(&state.pool)
@@ -4929,7 +4929,7 @@ async fn new_group_event_type_form(
         return Html(if is_admin {
             "No teams exist yet.".to_string()
         } else {
-            "You are not an admin of any teams.".to_string()
+            "You are not a member of any teams.".to_string()
         });
     }
 
@@ -4990,9 +4990,9 @@ async fn create_group_event_type(
 
     let is_admin = user.role == "admin";
 
-    // Verify user is a team admin (global admins can manage any team)
-    if !is_admin && !is_team_admin(&state.pool, &user.id, &team_id).await {
-        return Html("You are not an admin of this team.".to_string()).into_response();
+    // Verify user is a team member (global admins can manage any team)
+    if !is_admin && !is_team_member(&state.pool, &user.id, &team_id).await {
+        return Html("You are not a member of this team.".to_string()).into_response();
     }
 
     // Find the user's account
