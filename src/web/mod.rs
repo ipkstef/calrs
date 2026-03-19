@@ -2229,14 +2229,17 @@ async fn team_settings_save(
         .await;
     }
 
-    // Ensure the current user remains a member (safety net)
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'admin', 'direct')",
-    )
-    .bind(&team_id)
-    .bind(&user.id)
-    .execute(&state.pool)
-    .await;
+    // Ensure at least one admin remains. Global admins can remove themselves
+    // (they can still manage the team via the admin panel).
+    if !is_admin {
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO team_members (team_id, user_id, role, source) VALUES (?, ?, 'admin', 'direct')",
+        )
+        .bind(&team_id)
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await;
+    }
 
     // Sync linked OIDC groups
     let group_ids = split_csv_ids(&form.group_ids);
