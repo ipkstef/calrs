@@ -56,7 +56,7 @@
 
   <div class="form-group">
     <label for="slug">Slug <span class="hint">(URL-friendly identifier)</span></label>
-    <input type="text" id="slug" name="slug" required value="{{ form_slug }}" placeholder="intro" pattern="[a-z0-9\-]+" title="Lowercase letters, numbers, and dashes only">
+    <input type="text" id="slug" name="slug" value="{{ form_slug }}" placeholder="auto-generated from title" pattern="[a-z0-9\-]*" title="Lowercase letters, numbers, and dashes only">
   </div>
 
   <div class="form-group">

@@ -3071,11 +3071,35 @@ async fn create_event_type(
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
-    // Validate slug
-    let slug = form.slug.trim().to_lowercase().replace(' ', "-");
+    // Generate slug from title if empty
+    let mut slug = form.slug.trim().to_lowercase().replace(' ', "-");
+    slug = slug
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
     if slug.is_empty() {
-        return render_event_type_form_error(&state, &auth_user, "Slug is required.", &form, false)
-            .into_response();
+        slug = form
+            .title
+            .trim()
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        // Collapse multiple dashes and trim
+        while slug.contains("--") {
+            slug = slug.replace("--", "-");
+        }
+        slug = slug.trim_matches('-').to_string();
+    }
+    if slug.is_empty() {
+        return render_event_type_form_error(
+            &state,
+            &auth_user,
+            "Title is required to generate a slug.",
+            &form,
+            false,
+        )
+        .into_response();
     }
 
     // Check if a team_id was provided and it's non-empty
@@ -5008,9 +5032,26 @@ async fn create_group_event_type(
         None => return Redirect::to("/dashboard/event-types").into_response(),
     };
 
-    let slug = form.slug.trim().to_lowercase().replace(' ', "-");
+    let mut slug = form.slug.trim().to_lowercase().replace(' ', "-");
+    slug = slug
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
     if slug.is_empty() {
-        return Html("Slug is required.".to_string()).into_response();
+        slug = form
+            .title
+            .trim()
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        while slug.contains("--") {
+            slug = slug.replace("--", "-");
+        }
+        slug = slug.trim_matches('-').to_string();
+    }
+    if slug.is_empty() {
+        return Html("Title is required to generate a slug.".to_string()).into_response();
     }
 
     // Check uniqueness within the team
