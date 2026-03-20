@@ -548,7 +548,7 @@ calrs/
 - [x] Calendar view toggle (month / week / column)
 - [x] Booking frequency limits + one slot per day
 - [ ] Webhooks (per-event-type HTTP callbacks on new/cancelled bookings)
-- [ ] Delta sync using CalDAV `sync-token` / `ctag`
+- [x] Delta sync using CalDAV `sync-token` / `ctag`
 - [ ] Multi-language support (i18n)
 - [ ] REST API for third-party integrations
 
