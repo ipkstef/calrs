@@ -795,10 +795,10 @@
 
   <!-- Right: calendar + slots -->
   <div class="slots-main">
-    <!-- Shared header: title + view toggle + month nav -->
+    <!-- Shared header: title + view toggle (left) / nav arrows (right) -->
     <div class="cal-header">
-      <div class="cal-header-title" id="cal-header-title">{{ month_label }}</div>
-      <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <div class="cal-header-title" id="cal-header-title">{{ month_label }}</div>
         <div class="view-toggle" id="view-toggle">
           <button type="button" data-view="month" class="active" title="Month view">
             <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="4" rx="0.5"/><rect x="6" y="1" width="4" height="4" rx="0.5"/><rect x="11" y="1" width="4" height="4" rx="0.5"/><rect x="1" y="6" width="4" height="4" rx="0.5"/><rect x="6" y="6" width="4" height="4" rx="0.5"/><rect x="11" y="6" width="4" height="4" rx="0.5"/><rect x="1" y="11" width="4" height="4" rx="0.5"/><rect x="6" y="11" width="4" height="4" rx="0.5"/><rect x="11" y="11" width="4" height="4" rx="0.5"/></svg>
@@ -810,14 +810,14 @@
             <svg viewBox="0 0 16 16"><rect x="0" y="1" width="16" height="2" rx="0.5"/><rect x="0" y="5" width="16" height="2" rx="0.5"/><rect x="0" y="9" width="16" height="2" rx="0.5"/><rect x="0" y="13" width="16" height="2" rx="0.5"/></svg>
           </button>
         </div>
-        <div class="cal-nav" id="main-cal-nav">
-          {% if prev_month is defined and prev_month %}
-            <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&larr;</a>
-          {% else %}
-            <span class="disabled">&larr;</span>
-          {% endif %}
-          <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&rarr;</a>
-        </div>
+      </div>
+      <div class="cal-nav" id="main-cal-nav">
+        {% if prev_month is defined and prev_month %}
+          <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&larr;</a>
+        {% else %}
+          <span class="disabled">&larr;</span>
+        {% endif %}
+        <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&rarr;</a>
       </div>
     </div>
 
