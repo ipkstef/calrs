@@ -2924,6 +2924,8 @@ struct EventTypeForm {
     // Member priorities for round-robin (creation flow): "uid1:3,uid2:1,uid3:2"
     #[serde(default)]
     member_priorities: String,
+    // Default calendar view for guests (month / week / column)
+    default_calendar_view: Option<String>,
 }
 
 async fn new_event_type_form(
@@ -3029,6 +3031,7 @@ async fn new_event_type_form(
             form_avail_end => "17:00",
             form_reminder_minutes => 1440,
             form_max_additional_guests => 0,
+            form_default_calendar_view => "month",
             error => "",
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
@@ -3154,9 +3157,14 @@ async fn create_event_type(
 
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
+    let default_calendar_view = match form.default_calendar_view.as_deref().unwrap_or("month") {
+        v @ ("month" | "week" | "column") => v.to_string(),
+        _ => "month".to_string(),
+    };
+
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id, reminder_minutes, visibility, max_additional_guests)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id, reminder_minutes, visibility, max_additional_guests, default_calendar_view)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
     .bind(&account_id)
@@ -3175,6 +3183,7 @@ async fn create_event_type(
     .bind(reminder_minutes)
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
+    .bind(&default_calendar_view)
     .execute(&state.pool)
     .await;
 
@@ -3297,6 +3306,13 @@ async fn edit_event_type_form(
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
     };
+
+    let default_calendar_view: String =
+        sqlx::query_scalar("SELECT default_calendar_view FROM event_types WHERE id = ?")
+            .bind(&et_id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or_else(|_| "month".to_string());
 
     // Get current availability rules
     let all_rules: Vec<(i32, String, String)> = sqlx::query_as(
@@ -3446,6 +3462,7 @@ async fn edit_event_type_form(
             form_reminder_minutes => reminder_min.unwrap_or(0),
             form_max_additional_guests => max_additional_guests,
             form_scheduling_mode => scheduling_mode,
+            form_default_calendar_view => default_calendar_view,
             is_group => team_id.is_some(),
             is_round_robin_group => is_round_robin_group,
             priority_members => members_ctx,
@@ -3524,8 +3541,13 @@ async fn update_event_type(
 
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
+    let default_calendar_view = match form.default_calendar_view.as_deref().unwrap_or("month") {
+        v @ ("month" | "week" | "column") => v.to_string(),
+        _ => "month".to_string(),
+    };
+
     let _ = sqlx::query(
-        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ?, scheduling_mode = ? WHERE id = ?",
+        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ?, scheduling_mode = ?, default_calendar_view = ? WHERE id = ?",
     )
     .bind(&new_slug)
     .bind(form.title.trim())
@@ -3541,6 +3563,7 @@ async fn update_event_type(
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
     .bind(form.scheduling_mode.as_deref().unwrap_or("round_robin"))
+    .bind(&default_calendar_view)
     .bind(&et_id)
     .execute(&state.pool)
     .await;
@@ -4398,6 +4421,7 @@ fn render_event_type_form_error(
             form_avail_end => form.avail_end.as_deref().unwrap_or("17:00"),
             form_avail_windows => form.avail_windows.as_deref().unwrap_or(""),
             form_avail_schedule => form.avail_schedule.as_deref().unwrap_or(""),
+            form_default_calendar_view => form.default_calendar_view.as_deref().unwrap_or("month"),
             error => error,
             sidebar => sidebar_context(auth_user, "event-types"),
             impersonating => impersonating,
@@ -4976,6 +5000,7 @@ async fn new_group_event_type_form(
             form_avail_days => "1,2,3,4,5",
             form_avail_start => "09:00",
             form_avail_end => "17:00",
+            form_default_calendar_view => "month",
             error => "",
             sidebar => sidebar_context(&auth_user, "event-types"),
             impersonating => impersonating,
@@ -5065,9 +5090,14 @@ async fn create_group_event_type(
         .as_deref()
         .filter(|s| !s.trim().is_empty());
 
+    let default_calendar_view = match form.default_calendar_view.as_deref().unwrap_or("month") {
+        v @ ("month" | "week" | "column") => v.to_string(),
+        _ => "month".to_string(),
+    };
+
     let _ = sqlx::query(
-        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO event_types (id, account_id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, requires_confirmation, location_type, location_value, team_id, created_by_user_id, default_calendar_view)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&et_id)
     .bind(&account_id)
@@ -5083,6 +5113,7 @@ async fn create_group_event_type(
     .bind(location_value)
     .bind(&team_id)
     .bind(&user.id)
+    .bind(&default_calendar_view)
     .execute(&state.pool)
     .await;
 
@@ -5185,6 +5216,13 @@ async fn edit_group_event_type_form(
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
     };
+
+    let default_calendar_view: String =
+        sqlx::query_scalar("SELECT default_calendar_view FROM event_types WHERE id = ?")
+            .bind(&et_id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or_else(|_| "month".to_string());
 
     // Get current availability rules
     let all_rules: Vec<(i32, String, String)> = sqlx::query_as(
@@ -5295,6 +5333,7 @@ async fn edit_group_event_type_form(
             form_reminder_minutes => reminder_min.unwrap_or(0),
             form_max_additional_guests => max_additional_guests,
             form_scheduling_mode => scheduling_mode,
+            form_default_calendar_view => default_calendar_view,
             is_round_robin_group => is_round_robin_group,
             priority_members => members_ctx,
             error => "",
@@ -5382,8 +5421,13 @@ async fn update_group_event_type(
         .filter(|s| !s.trim().is_empty());
     let reminder_minutes = form.reminder_minutes.filter(|&m| m > 0);
 
+    let default_calendar_view = match form.default_calendar_view.as_deref().unwrap_or("month") {
+        v @ ("month" | "week" | "column") => v.to_string(),
+        _ => "month".to_string(),
+    };
+
     let _ = sqlx::query(
-        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ?, scheduling_mode = ? WHERE id = ?",
+        "UPDATE event_types SET slug = ?, title = ?, description = ?, duration_min = ?, buffer_before = ?, buffer_after = ?, min_notice_min = ?, requires_confirmation = ?, location_type = ?, location_value = ?, reminder_minutes = ?, visibility = ?, max_additional_guests = ?, scheduling_mode = ?, default_calendar_view = ? WHERE id = ?",
     )
     .bind(&new_slug)
     .bind(form.title.trim())
@@ -5399,6 +5443,7 @@ async fn update_group_event_type(
     .bind(&visibility)
     .bind(form.max_additional_guests.unwrap_or(0))
     .bind(form.scheduling_mode.as_deref().unwrap_or("round_robin"))
+    .bind(&default_calendar_view)
     .bind(&et_id)
     .execute(&state.pool)
     .await;
@@ -5738,8 +5783,8 @@ async fn show_group_slots(
     Path((team_slug, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, t.name, et.visibility, et.scheduling_mode, t.visibility, t.invite_token
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, t.name, et.visibility, et.scheduling_mode, t.visibility, t.invite_token, et.default_calendar_view
          FROM event_types et
          JOIN teams t ON t.id = et.team_id
          WHERE t.slug = ? AND et.slug = ? AND et.enabled = 1",
@@ -5766,6 +5811,7 @@ async fn show_group_slots(
         scheduling_mode,
         team_visibility,
         team_invite_token,
+        default_calendar_view,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -5992,6 +6038,7 @@ async fn show_group_slots(
             guest_tz => guest_tz_name,
             tz_options => tz_options,
             invite_token => query.invite.as_deref().unwrap_or(""),
+            default_calendar_view => default_calendar_view,
             company_link => state.company_link.read().await.clone(),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
@@ -6556,8 +6603,8 @@ async fn show_slots_for_user(
     Path((username, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, Option<String>, Option<String>, String)> = sqlx::query_as(
-        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name, u.title, u.avatar_path, et.visibility
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, Option<String>, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name, u.title, u.avatar_path, et.visibility, et.default_calendar_view
          FROM event_types et
          JOIN accounts a ON a.id = et.account_id
          JOIN users u ON u.id = a.user_id
@@ -6585,6 +6632,7 @@ async fn show_slots_for_user(
         host_title,
         host_avatar_path,
         visibility,
+        default_calendar_view,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -6729,6 +6777,7 @@ async fn show_slots_for_user(
             invite_token => query.invite.as_deref().unwrap_or(""),
             invite_guest_name => invite_guest_name.as_deref().unwrap_or(""),
             invite_guest_email => invite_guest_email.as_deref().unwrap_or(""),
+            default_calendar_view => default_calendar_view,
             company_link => state.company_link.read().await.clone(),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
@@ -8100,8 +8149,8 @@ async fn show_slots(
     Path(slug): Path<String>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
-    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String)> = sqlx::query_as(
-        "SELECT id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, visibility
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, String)> = sqlx::query_as(
+        "SELECT id, slug, title, description, duration_min, buffer_before, buffer_after, min_notice_min, visibility, default_calendar_view
          FROM event_types WHERE slug = ? AND enabled = 1",
     )
     .bind(&slug)
@@ -8119,6 +8168,7 @@ async fn show_slots(
         buf_after,
         min_notice,
         visibility,
+        default_calendar_view,
     ) = match et {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()),
@@ -8236,6 +8286,7 @@ async fn show_slots(
             today_date => today_date,
             guest_tz => guest_tz_name,
             tz_options => tz_options,
+            default_calendar_view => default_calendar_view,
             company_link => state.company_link.read().await.clone(),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));
@@ -10558,10 +10609,11 @@ async fn guest_reschedule_slots(
         String,
         Option<String>,
         Option<String>,
+        String,
     )> = sqlx::query_as(
         "SELECT et.id, et.slug, et.duration_min, et.buffer_before, et.buffer_after,
                     et.min_notice_min, et.location_type, et.location_value,
-                    u.id, u.name, u.title, u.avatar_path
+                    u.id, u.name, u.title, u.avatar_path, et.default_calendar_view
              FROM event_types et
              JOIN accounts a ON a.id = et.account_id
              JOIN users u ON u.id = a.user_id
@@ -10585,6 +10637,7 @@ async fn guest_reschedule_slots(
         host_name,
         host_title,
         host_avatar_path,
+        default_calendar_view,
     ) = match et_info {
         Some(e) => e,
         None => return Html("Event type not found.".to_string()).into_response(),
@@ -10749,6 +10802,7 @@ async fn guest_reschedule_slots(
                 old_date => old_date,
                 old_time => old_start_time,
             },
+            default_calendar_view => default_calendar_view,
             company_link => state.company_link.read().await.clone(),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e));

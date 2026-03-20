@@ -159,6 +159,10 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             "035_drop_legacy_team_links",
             include_str!("../migrations/035_drop_legacy_team_links.sql"),
         ),
+        (
+            "036_default_calendar_view",
+            include_str!("../migrations/036_default_calendar_view.sql"),
+        ),
     ];
 
     let mut applied_count = 0u32;
@@ -700,7 +704,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 35, "All 35 migrations should be tracked");
+        assert_eq!(count.0, 36, "All 36 migrations should be tracked");
     }
 
     #[tokio::test]
@@ -714,7 +718,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 35, "Still 35 migrations after second run");
+        assert_eq!(count.0, 36, "Still 36 migrations after second run");
     }
 
     #[tokio::test]

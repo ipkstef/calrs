@@ -439,6 +439,266 @@
 
   /* Default: show full names, hide short names */
   .cal-weekday .cal-weekday-short { display: none; }
+
+  /* View toggle */
+  .view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .view-toggle button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: none;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .view-toggle button:first-child {
+    border-left: none;
+  }
+  .view-toggle button:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  .view-toggle button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .view-toggle button svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+  }
+
+  /* Week view */
+  .week-view {
+    display: none;
+    flex: 1;
+    min-width: 0;
+  }
+  .week-view.active {
+    display: block;
+  }
+  .week-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+  .week-header-title {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .week-header-title span {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+  .week-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+  }
+  .week-day-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .week-day-header {
+    text-align: center;
+    padding: 0.4rem 0;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  .week-day-header .week-day-num {
+    display: block;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0;
+    text-transform: none;
+    margin-top: 0.15rem;
+  }
+  .week-day-header.today .week-day-num {
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0.15rem auto 0;
+  }
+  .week-day-header.no-slots {
+    opacity: 0.4;
+  }
+  .week-slot-pill {
+    display: block;
+    padding: 0.35rem 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-align: center;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .week-slot-pill:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-subtle);
+  }
+  .week-more {
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    padding: 0.2rem 0;
+    cursor: pointer;
+  }
+  .week-more:hover {
+    color: var(--accent);
+  }
+
+  /* Column view */
+  .column-view {
+    display: none;
+    flex: 1;
+    min-width: 0;
+  }
+  .column-view.active {
+    display: block;
+  }
+  .column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+  .column-header-title {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .column-header-title span {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+  .column-days {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .column-day {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .column-day:last-child {
+    border-bottom: none;
+  }
+  .column-day-label {
+    flex: 0 0 60px;
+    text-align: right;
+    padding-top: 0.15rem;
+  }
+  .column-day-weekday {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  .column-day-date {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.2;
+  }
+  .column-day.today .column-day-date {
+    color: var(--accent);
+  }
+  .column-day-slots {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+  .column-slot-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+  .column-slot-pill:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-subtle);
+  }
+
+  /* Hide slot panel in week/column mode */
+  .slots-layout.view-week .slot-panel,
+  .slots-layout.view-column .slot-panel {
+    display: none;
+  }
+  .slots-layout.view-week .cal-panel,
+  .slots-layout.view-column .cal-panel {
+    display: none;
+  }
+
+  @media (max-width: 640px) {
+    .week-grid {
+      grid-template-columns: repeat(7, 1fr);
+      gap: 2px;
+    }
+    .week-slot-pill {
+      font-size: 0.65rem;
+      padding: 0.25rem 0.15rem;
+    }
+    .week-day-header {
+      font-size: 0.6rem;
+    }
+    .week-day-header .week-day-num {
+      font-size: 0.9rem;
+    }
+    .column-day-label {
+      flex: 0 0 45px;
+    }
+    .column-slot-pill {
+      font-size: 0.7rem;
+      padding: 0.3rem 0.5rem;
+    }
+  }
 </style>
 
 {% if reschedule_info is defined and reschedule_info %}
@@ -553,24 +813,38 @@
     "monthLabel": "{{ month_label }}",
     "hasPrevMonth": {% if prev_month is defined and prev_month %}true{% else %}false{% endif %},
     "prevMonth": "{{ prev_month | default(value='') }}",
-    "nextMonth": "{{ next_month }}"
+    "nextMonth": "{{ next_month }}",
+    "defaultCalendarView": "{{ default_calendar_view | default(value='month') }}"
   }
   </script>
 
   <!-- Right: calendar + slots -->
   <div class="slots-main">
-    <div class="slots-layout">
+    <div class="slots-layout" id="slots-layout">
       <!-- Month calendar panel -->
       <div class="cal-panel">
         <div class="cal-header">
           <div class="cal-header-title">{{ month_label }}</div>
-          <div class="cal-nav">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <div class="view-toggle" id="view-toggle">
+              <button type="button" data-view="month" class="active" title="Month view">
+                <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="4" rx="0.5"/><rect x="6" y="1" width="4" height="4" rx="0.5"/><rect x="11" y="1" width="4" height="4" rx="0.5"/><rect x="1" y="6" width="4" height="4" rx="0.5"/><rect x="6" y="6" width="4" height="4" rx="0.5"/><rect x="11" y="6" width="4" height="4" rx="0.5"/><rect x="1" y="11" width="4" height="4" rx="0.5"/><rect x="6" y="11" width="4" height="4" rx="0.5"/><rect x="11" y="11" width="4" height="4" rx="0.5"/></svg>
+              </button>
+              <button type="button" data-view="week" title="Week view">
+                <svg viewBox="0 0 16 16"><rect x="1" y="0" width="2" height="16" rx="0.5"/><rect x="4.5" y="0" width="2" height="16" rx="0.5"/><rect x="8" y="0" width="2" height="16" rx="0.5"/><rect x="11.5" y="0" width="2" height="16" rx="0.5"/></svg>
+              </button>
+              <button type="button" data-view="column" title="Column view">
+                <svg viewBox="0 0 16 16"><rect x="0" y="1" width="16" height="2" rx="0.5"/><rect x="0" y="5" width="16" height="2" rx="0.5"/><rect x="0" y="9" width="16" height="2" rx="0.5"/><rect x="0" y="13" width="16" height="2" rx="0.5"/></svg>
+              </button>
+            </div>
+            <div class="cal-nav">
             {% if prev_month is defined and prev_month %}
               <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&larr;</a>
             {% else %}
               <span class="disabled">&larr;</span>
             {% endif %}
             <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&rarr;</a>
+          </div>
           </div>
         </div>
 
@@ -599,6 +873,12 @@
           </div>
         </div>
       </div>
+
+      <!-- Week view -->
+      <div class="week-view" id="week-view"></div>
+
+      <!-- Column view -->
+      <div class="column-view" id="column-view"></div>
     </div>
   </div>
 </div>
@@ -858,6 +1138,10 @@
       // Rebuild calendar grid
       buildCalendar();
 
+      // Rebuild active alternate view
+      if (currentView === 'week') buildWeekView();
+      else if (currentView === 'column') buildColumnView();
+
       if (layout) {
         layout.style.opacity = '1';
       }
@@ -925,6 +1209,331 @@
       }
     });
   });
+
+  // --- View toggle ---
+  var serverDefaultView = calData.defaultCalendarView || 'month';
+  var currentView = localStorage.getItem('calrs_calendar_view') || serverDefaultView;
+  var viewToggle = document.getElementById('view-toggle');
+  var slotsLayout = document.getElementById('slots-layout');
+  var weekViewEl = document.getElementById('week-view');
+  var columnViewEl = document.getElementById('column-view');
+  var shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  function buildSlotHref(s) {
+    var href;
+    if (rescheduleBase) {
+      href = rescheduleBase + '?date=' + encodeURIComponent(s.hostDate) + '&time=' + encodeURIComponent(s.hostTime);
+    } else {
+      href = basePath + '/book?date=' + encodeURIComponent(s.hostDate) + '&time=' + encodeURIComponent(s.hostTime);
+    }
+    if (guestTz) href += '&tz=' + encodeURIComponent(guestTz);
+    if (inviteToken) href += '&invite=' + encodeURIComponent(inviteToken);
+    return href;
+  }
+
+  function getWeekDates() {
+    // Get the week containing today (or first available date if today is before this month)
+    var parts = monthYear.split('-');
+    var year = parseInt(parts[0], 10);
+    var month = parseInt(parts[1], 10);
+
+    // Find a good starting date: today if in this month, else first of month
+    var todayParts = todayDate.split('-');
+    var startDate;
+    if (parseInt(todayParts[0]) === year && parseInt(todayParts[1]) === month) {
+      startDate = new Date(year, month - 1, parseInt(todayParts[2]));
+    } else {
+      startDate = new Date(year, month - 1, 1);
+    }
+
+    // Go back to Monday
+    var dow = startDate.getDay();
+    var mondayOffset = dow === 0 ? -6 : 1 - dow;
+    startDate.setDate(startDate.getDate() + mondayOffset);
+
+    var dates = [];
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(startDate);
+      d.setDate(startDate.getDate() + i);
+      var ds = d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate();
+      dates.push({ date: d, dateStr: ds, day: d.getDate(), weekday: shortDays[d.getDay()] });
+    }
+    return dates;
+  }
+
+  function buildWeekView() {
+    var dates = getWeekDates();
+    var html = '<div class="week-header"><div class="week-header-title">' +
+      dates[0].weekday + ' ' + dates[0].day + ' &ndash; ' + dates[6].weekday + ' ' + dates[6].day +
+      ' <span>' + calData.monthLabel.split(' ').pop() + '</span></div>' +
+      '<div class="cal-nav" id="week-nav"></div></div>';
+    html += '<div class="week-grid">';
+
+    var maxVisible = 8;
+    for (var i = 0; i < dates.length; i++) {
+      var d = dates[i];
+      var slots = slotData[d.dateStr] || [];
+      var isToday = d.dateStr === todayDate;
+      var headerClass = 'week-day-header' + (isToday ? ' today' : '') + (slots.length === 0 ? ' no-slots' : '');
+
+      html += '<div class="week-day-col">';
+      html += '<div class="' + headerClass + '">' + d.weekday +
+        '<span class="week-day-num">' + d.day + '</span></div>';
+
+      var show = Math.min(slots.length, maxVisible);
+      for (var j = 0; j < show; j++) {
+        html += '<a href="' + buildSlotHref(slots[j]) + '" class="week-slot-pill">' + formatTime(slots[j].start) + '</a>';
+      }
+      if (slots.length > maxVisible) {
+        html += '<div class="week-more">+' + (slots.length - maxVisible) + ' more</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    weekViewEl.innerHTML = html;
+
+    // Wire week nav arrows
+    var weekNav = document.getElementById('week-nav');
+    if (weekNav) {
+      // Prev week
+      var prevDate = new Date(dates[0].date);
+      prevDate.setDate(prevDate.getDate() - 1);
+      if (prevDate >= new Date(todayDate + 'T00:00:00') || dates[0].dateStr > todayDate) {
+        // Only allow going back if the previous week has dates >= today
+        var prevWeekStart = new Date(dates[0].date);
+        prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+        var checkDate = new Date(todayDate + 'T00:00:00');
+        // At least one day in prev week should be >= today
+        var prevWeekEnd = new Date(prevWeekStart);
+        prevWeekEnd.setDate(prevWeekEnd.getDate() + 6);
+        if (prevWeekEnd >= checkDate) {
+          var prevBtn = document.createElement('a');
+          prevBtn.href = '#';
+          prevBtn.innerHTML = '&larr;';
+          prevBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            weekOffset -= 7;
+            var targetDate = new Date(dates[0].date);
+            targetDate.setDate(targetDate.getDate() - 7);
+            ensureMonthLoaded(targetDate, function() { buildWeekView(); });
+          });
+          weekNav.appendChild(prevBtn);
+        } else {
+          var s = document.createElement('span');
+          s.className = 'disabled';
+          s.innerHTML = '&larr;';
+          weekNav.appendChild(s);
+        }
+      } else {
+        var s = document.createElement('span');
+        s.className = 'disabled';
+        s.innerHTML = '&larr;';
+        weekNav.appendChild(s);
+      }
+
+      // Next week
+      var nextBtn = document.createElement('a');
+      nextBtn.href = '#';
+      nextBtn.innerHTML = '&rarr;';
+      nextBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        weekOffset += 7;
+        var targetDate = new Date(dates[6].date);
+        targetDate.setDate(targetDate.getDate() + 1);
+        ensureMonthLoaded(targetDate, function() { buildWeekView(); });
+      });
+      weekNav.appendChild(nextBtn);
+    }
+  }
+
+  var weekOffset = 0;
+
+  // Override getWeekDates to use offset
+  getWeekDates = function() {
+    var parts = monthYear.split('-');
+    var year = parseInt(parts[0], 10);
+    var month = parseInt(parts[1], 10);
+
+    var todayParts = todayDate.split('-');
+    var startDate;
+    if (parseInt(todayParts[0]) === year && parseInt(todayParts[1]) === month) {
+      startDate = new Date(year, month - 1, parseInt(todayParts[2]));
+    } else {
+      startDate = new Date(year, month - 1, 1);
+    }
+
+    // Go to Monday of that week
+    var dow = startDate.getDay();
+    var mondayOffset = dow === 0 ? -6 : 1 - dow;
+    startDate.setDate(startDate.getDate() + mondayOffset + weekOffset);
+
+    var dates = [];
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(startDate);
+      d.setDate(startDate.getDate() + i);
+      var ds = d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate();
+      dates.push({ date: d, dateStr: ds, day: d.getDate(), weekday: shortDays[d.getDay()] });
+    }
+    return dates;
+  };
+
+  // Ensure data is loaded for the month containing targetDate
+  function ensureMonthLoaded(targetDate, cb) {
+    var targetMonth = targetDate.getFullYear() + '-' + (targetDate.getMonth() < 9 ? '0' : '') + (targetDate.getMonth() + 1);
+    if (targetMonth === monthYear) {
+      cb();
+      return;
+    }
+    // Fetch the new month data
+    var url = basePath + '?month=' + targetMonth;
+    if (guestTz) url += '&tz=' + encodeURIComponent(guestTz);
+    if (inviteToken) url += '&invite=' + encodeURIComponent(inviteToken);
+
+    fetch(url).then(function(r) { return r.text(); }).then(function(html) {
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(html, 'text/html');
+      var newDataEl = doc.getElementById('calendar-data');
+      if (!newDataEl) { cb(); return; }
+
+      var newData = JSON.parse(newDataEl.textContent);
+      // Merge slot data (keep existing months, add new)
+      for (var key in newData.slotData) {
+        slotData[key] = newData.slotData[key];
+      }
+      for (var key in newData.availableDates) {
+        availableDates[key] = newData.availableDates[key];
+      }
+      // Update month-specific state
+      monthYear = newData.monthYear;
+      firstWeekday = newData.firstWeekday;
+      daysInMonth = newData.daysInMonth;
+      hasPrevMonth = newData.hasPrevMonth;
+      calData.monthLabel = newData.monthLabel;
+      calData.prevMonth = newData.prevMonth;
+      calData.nextMonth = newData.nextMonth;
+      calData.hasPrevMonth = newData.hasPrevMonth;
+
+      // Update month title
+      var titleEl = document.querySelector('.cal-header-title');
+      if (titleEl) titleEl.textContent = newData.monthLabel;
+      updateNavArrows(newData);
+      buildCalendar();
+
+      cb();
+    }).catch(function() { cb(); });
+  }
+
+  function buildColumnView() {
+    // Show all available dates in the current month as rows
+    var dates = [];
+    var parts = monthYear.split('-');
+    var year = parseInt(parts[0], 10);
+    var month = parseInt(parts[1], 10);
+
+    for (var d = 1; d <= daysInMonth; d++) {
+      var ds = monthYear + '-' + (d < 10 ? '0' : '') + d;
+      if (ds < todayDate) continue;
+      var slots = slotData[ds];
+      if (!slots || slots.length === 0) continue;
+      var dt = new Date(year, month - 1, d);
+      dates.push({ dateStr: ds, day: d, weekday: shortDays[dt.getDay()], slots: slots, isToday: ds === todayDate });
+    }
+
+    var html = '<div class="column-header"><div class="column-header-title">' + calData.monthLabel + '</div>' +
+      '<div class="cal-nav" id="column-nav"></div></div>';
+
+    if (dates.length === 0) {
+      html += '<div class="slot-empty"><div class="slot-empty-icon">&#128197;</div><div>No available times this month</div></div>';
+    } else {
+      html += '<div class="column-days">';
+      for (var i = 0; i < dates.length; i++) {
+        var d = dates[i];
+        html += '<div class="column-day' + (d.isToday ? ' today' : '') + '">';
+        html += '<div class="column-day-label"><div class="column-day-weekday">' + d.weekday + '</div><div class="column-day-date">' + d.day + '</div></div>';
+        html += '<div class="column-day-slots">';
+        for (var j = 0; j < d.slots.length; j++) {
+          html += '<a href="' + buildSlotHref(d.slots[j]) + '" class="column-slot-pill">' + formatTime(d.slots[j].start) + '</a>';
+        }
+        html += '</div></div>';
+      }
+      html += '</div>';
+    }
+    columnViewEl.innerHTML = html;
+
+    // Wire column nav arrows
+    var colNav = document.getElementById('column-nav');
+    if (colNav) {
+      if (hasPrevMonth && calData.prevMonth) {
+        var prev = document.createElement('a');
+        prev.href = '#';
+        prev.innerHTML = '&larr;';
+        prev.addEventListener('click', function(e) {
+          e.preventDefault();
+          var p = calData.prevMonth.split('-');
+          navigateMonth(parseInt(p[0]), parseInt(p[1]));
+        });
+        colNav.appendChild(prev);
+      } else {
+        var s = document.createElement('span');
+        s.className = 'disabled';
+        s.innerHTML = '&larr;';
+        colNav.appendChild(s);
+      }
+      var next = document.createElement('a');
+      next.href = '#';
+      next.innerHTML = '&rarr;';
+      next.addEventListener('click', function(e) {
+        e.preventDefault();
+        var n = calData.nextMonth.split('-');
+        navigateMonth(parseInt(n[0]), parseInt(n[1]));
+      });
+      colNav.appendChild(next);
+    }
+  }
+
+  function switchView(view) {
+    currentView = view;
+    localStorage.setItem('calrs_calendar_view', view);
+
+    // Update toggle buttons
+    viewToggle.querySelectorAll('button').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.view === view);
+    });
+
+    // Update layout classes
+    slotsLayout.className = 'slots-layout';
+    if (view !== 'month') {
+      slotsLayout.classList.add('view-' + view);
+    }
+
+    // Build the active view
+    if (view === 'week') {
+      weekViewEl.classList.add('active');
+      columnViewEl.classList.remove('active');
+      buildWeekView();
+    } else if (view === 'column') {
+      columnViewEl.classList.add('active');
+      weekViewEl.classList.remove('active');
+      buildColumnView();
+    } else {
+      weekViewEl.classList.remove('active');
+      columnViewEl.classList.remove('active');
+    }
+  }
+
+  // Wire up view toggle buttons
+  if (viewToggle) {
+    viewToggle.querySelectorAll('button').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        switchView(btn.dataset.view);
+      });
+    });
+  }
+
+  // Apply saved view preference
+  if (currentView !== 'month') {
+    switchView(currentView);
+  }
 
 })();
 </script>
