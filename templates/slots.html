@@ -487,20 +487,6 @@
   .week-view.active {
     display: block;
   }
-  .week-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.75rem;
-  }
-  .week-header-title {
-    font-size: 1rem;
-    font-weight: 700;
-  }
-  .week-header-title span {
-    font-weight: 400;
-    color: var(--text-muted);
-  }
   .week-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
@@ -531,15 +517,18 @@
     margin-top: 0.15rem;
   }
   .week-day-header.today .week-day-num {
-    background: var(--accent);
-    color: #fff;
+    color: var(--accent);
+    font-weight: 800;
+    position: relative;
+  }
+  .week-day-header.today .week-day-num::after {
+    content: '';
+    display: block;
+    width: 4px;
+    height: 4px;
     border-radius: 50%;
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0.15rem auto 0;
+    background: var(--accent);
+    margin: 2px auto 0;
   }
   .week-day-header.no-slots {
     opacity: 0.4;
@@ -585,20 +574,6 @@
   }
   .column-view.active {
     display: block;
-  }
-  .column-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.75rem;
-  }
-  .column-header-title {
-    font-size: 1rem;
-    font-weight: 700;
-  }
-  .column-header-title span {
-    font-weight: 400;
-    color: var(--text-muted);
   }
   .column-days {
     display: flex;
@@ -820,34 +795,35 @@
 
   <!-- Right: calendar + slots -->
   <div class="slots-main">
+    <!-- Shared header: title + view toggle + month nav -->
+    <div class="cal-header">
+      <div class="cal-header-title" id="cal-header-title">{{ month_label }}</div>
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div class="view-toggle" id="view-toggle">
+          <button type="button" data-view="month" class="active" title="Month view">
+            <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="4" rx="0.5"/><rect x="6" y="1" width="4" height="4" rx="0.5"/><rect x="11" y="1" width="4" height="4" rx="0.5"/><rect x="1" y="6" width="4" height="4" rx="0.5"/><rect x="6" y="6" width="4" height="4" rx="0.5"/><rect x="11" y="6" width="4" height="4" rx="0.5"/><rect x="1" y="11" width="4" height="4" rx="0.5"/><rect x="6" y="11" width="4" height="4" rx="0.5"/><rect x="11" y="11" width="4" height="4" rx="0.5"/></svg>
+          </button>
+          <button type="button" data-view="week" title="Week view">
+            <svg viewBox="0 0 16 16"><rect x="1" y="0" width="2" height="16" rx="0.5"/><rect x="4.5" y="0" width="2" height="16" rx="0.5"/><rect x="8" y="0" width="2" height="16" rx="0.5"/><rect x="11.5" y="0" width="2" height="16" rx="0.5"/></svg>
+          </button>
+          <button type="button" data-view="column" title="Column view">
+            <svg viewBox="0 0 16 16"><rect x="0" y="1" width="16" height="2" rx="0.5"/><rect x="0" y="5" width="16" height="2" rx="0.5"/><rect x="0" y="9" width="16" height="2" rx="0.5"/><rect x="0" y="13" width="16" height="2" rx="0.5"/></svg>
+          </button>
+        </div>
+        <div class="cal-nav" id="main-cal-nav">
+          {% if prev_month is defined and prev_month %}
+            <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&larr;</a>
+          {% else %}
+            <span class="disabled">&larr;</span>
+          {% endif %}
+          <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&rarr;</a>
+        </div>
+      </div>
+    </div>
+
     <div class="slots-layout" id="slots-layout">
       <!-- Month calendar panel -->
       <div class="cal-panel">
-        <div class="cal-header">
-          <div class="cal-header-title">{{ month_label }}</div>
-          <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <div class="view-toggle" id="view-toggle">
-              <button type="button" data-view="month" class="active" title="Month view">
-                <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="4" rx="0.5"/><rect x="6" y="1" width="4" height="4" rx="0.5"/><rect x="11" y="1" width="4" height="4" rx="0.5"/><rect x="1" y="6" width="4" height="4" rx="0.5"/><rect x="6" y="6" width="4" height="4" rx="0.5"/><rect x="11" y="6" width="4" height="4" rx="0.5"/><rect x="1" y="11" width="4" height="4" rx="0.5"/><rect x="6" y="11" width="4" height="4" rx="0.5"/><rect x="11" y="11" width="4" height="4" rx="0.5"/></svg>
-              </button>
-              <button type="button" data-view="week" title="Week view">
-                <svg viewBox="0 0 16 16"><rect x="1" y="0" width="2" height="16" rx="0.5"/><rect x="4.5" y="0" width="2" height="16" rx="0.5"/><rect x="8" y="0" width="2" height="16" rx="0.5"/><rect x="11.5" y="0" width="2" height="16" rx="0.5"/></svg>
-              </button>
-              <button type="button" data-view="column" title="Column view">
-                <svg viewBox="0 0 16 16"><rect x="0" y="1" width="16" height="2" rx="0.5"/><rect x="0" y="5" width="16" height="2" rx="0.5"/><rect x="0" y="9" width="16" height="2" rx="0.5"/><rect x="0" y="13" width="16" height="2" rx="0.5"/></svg>
-              </button>
-            </div>
-            <div class="cal-nav">
-            {% if prev_month is defined and prev_month %}
-              <a href="{{ base }}?month={{ prev_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&larr;</a>
-            {% else %}
-              <span class="disabled">&larr;</span>
-            {% endif %}
-            <a href="{{ base }}?month={{ next_month }}{% if guest_tz is defined and guest_tz %}&tz={{ guest_tz }}{% endif %}{% if invite_token is defined and invite_token %}&invite={{ invite_token }}{% endif %}" class="cal-nav-link">&rarr;</a>
-          </div>
-          </div>
-        </div>
-
         <div class="cal-weekdays">
           <div class="cal-weekday"><span class="cal-weekday-full">Mon</span><span class="cal-weekday-short">M</span></div>
           <div class="cal-weekday"><span class="cal-weekday-full">Tue</span><span class="cal-weekday-short">T</span></div>
@@ -1153,7 +1129,7 @@
   }
 
   function updateNavArrows(data) {
-    var nav = document.querySelector('.cal-nav');
+    var nav = document.getElementById('main-cal-nav');
     if (!nav) return;
     nav.innerHTML = '';
     if (data.prevMonth) {
@@ -1263,11 +1239,16 @@
 
   function buildWeekView() {
     var dates = getWeekDates();
-    var html = '<div class="week-header"><div class="week-header-title">' +
-      dates[0].weekday + ' ' + dates[0].day + ' &ndash; ' + dates[6].weekday + ' ' + dates[6].day +
-      ' <span>' + calData.monthLabel.split(' ').pop() + '</span></div>' +
-      '<div class="cal-nav" id="week-nav"></div></div>';
-    html += '<div class="week-grid">';
+
+    // Update shared header title and nav for week view
+    var titleEl = document.getElementById('cal-header-title');
+    if (titleEl) {
+      titleEl.innerHTML = dates[0].weekday + ' ' + dates[0].day + ' &ndash; ' + dates[6].weekday + ' ' + dates[6].day +
+        ' <span>' + calData.monthLabel.split(' ').pop() + '</span>';
+    }
+    updateSharedNavForWeek(dates);
+
+    var html = '<div class="week-grid">';
 
     var maxVisible = 8;
     for (var i = 0; i < dates.length; i++) {
@@ -1291,59 +1272,51 @@
     }
     html += '</div>';
     weekViewEl.innerHTML = html;
+  }
 
-    // Wire week nav arrows
-    var weekNav = document.getElementById('week-nav');
-    if (weekNav) {
-      // Prev week
-      var prevDate = new Date(dates[0].date);
-      prevDate.setDate(prevDate.getDate() - 1);
-      if (prevDate >= new Date(todayDate + 'T00:00:00') || dates[0].dateStr > todayDate) {
-        // Only allow going back if the previous week has dates >= today
-        var prevWeekStart = new Date(dates[0].date);
-        prevWeekStart.setDate(prevWeekStart.getDate() - 7);
-        var checkDate = new Date(todayDate + 'T00:00:00');
-        // At least one day in prev week should be >= today
-        var prevWeekEnd = new Date(prevWeekStart);
-        prevWeekEnd.setDate(prevWeekEnd.getDate() + 6);
-        if (prevWeekEnd >= checkDate) {
-          var prevBtn = document.createElement('a');
-          prevBtn.href = '#';
-          prevBtn.innerHTML = '&larr;';
-          prevBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            weekOffset -= 7;
-            var targetDate = new Date(dates[0].date);
-            targetDate.setDate(targetDate.getDate() - 7);
-            ensureMonthLoaded(targetDate, function() { buildWeekView(); });
-          });
-          weekNav.appendChild(prevBtn);
-        } else {
-          var s = document.createElement('span');
-          s.className = 'disabled';
-          s.innerHTML = '&larr;';
-          weekNav.appendChild(s);
-        }
-      } else {
-        var s = document.createElement('span');
-        s.className = 'disabled';
-        s.innerHTML = '&larr;';
-        weekNav.appendChild(s);
-      }
+  function updateSharedNavForWeek(dates) {
+    var nav = document.getElementById('main-cal-nav');
+    if (!nav) return;
+    nav.innerHTML = '';
 
-      // Next week
-      var nextBtn = document.createElement('a');
-      nextBtn.href = '#';
-      nextBtn.innerHTML = '&rarr;';
-      nextBtn.addEventListener('click', function(e) {
+    // Prev week
+    var prevWeekStart = new Date(dates[0].date);
+    prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+    var prevWeekEnd = new Date(prevWeekStart);
+    prevWeekEnd.setDate(prevWeekEnd.getDate() + 6);
+    var checkDate = new Date(todayDate + 'T00:00:00');
+
+    if (prevWeekEnd >= checkDate) {
+      var prevBtn = document.createElement('a');
+      prevBtn.href = '#';
+      prevBtn.innerHTML = '&larr;';
+      prevBtn.addEventListener('click', function(e) {
         e.preventDefault();
-        weekOffset += 7;
-        var targetDate = new Date(dates[6].date);
-        targetDate.setDate(targetDate.getDate() + 1);
+        weekOffset -= 7;
+        var targetDate = new Date(dates[0].date);
+        targetDate.setDate(targetDate.getDate() - 7);
         ensureMonthLoaded(targetDate, function() { buildWeekView(); });
       });
-      weekNav.appendChild(nextBtn);
+      nav.appendChild(prevBtn);
+    } else {
+      var s = document.createElement('span');
+      s.className = 'disabled';
+      s.innerHTML = '&larr;';
+      nav.appendChild(s);
     }
+
+    // Next week
+    var nextBtn = document.createElement('a');
+    nextBtn.href = '#';
+    nextBtn.innerHTML = '&rarr;';
+    nextBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      weekOffset += 7;
+      var targetDate = new Date(dates[6].date);
+      targetDate.setDate(targetDate.getDate() + 1);
+      ensureMonthLoaded(targetDate, function() { buildWeekView(); });
+    });
+    nav.appendChild(nextBtn);
   }
 
   var weekOffset = 0;
@@ -1424,6 +1397,11 @@
   }
 
   function buildColumnView() {
+    // Update shared header title
+    var titleEl = document.getElementById('cal-header-title');
+    if (titleEl) titleEl.textContent = calData.monthLabel;
+    updateSharedNavForMonth();
+
     // Show all available dates in the current month as rows
     var dates = [];
     var parts = monthYear.split('-');
@@ -1439,9 +1417,7 @@
       dates.push({ dateStr: ds, day: d, weekday: shortDays[dt.getDay()], slots: slots, isToday: ds === todayDate });
     }
 
-    var html = '<div class="column-header"><div class="column-header-title">' + calData.monthLabel + '</div>' +
-      '<div class="cal-nav" id="column-nav"></div></div>';
-
+    var html = '';
     if (dates.length === 0) {
       html += '<div class="slot-empty"><div class="slot-empty-icon">&#128197;</div><div>No available times this month</div></div>';
     } else {
@@ -1459,36 +1435,40 @@
       html += '</div>';
     }
     columnViewEl.innerHTML = html;
+  }
 
-    // Wire column nav arrows
-    var colNav = document.getElementById('column-nav');
-    if (colNav) {
-      if (hasPrevMonth && calData.prevMonth) {
-        var prev = document.createElement('a');
-        prev.href = '#';
-        prev.innerHTML = '&larr;';
-        prev.addEventListener('click', function(e) {
-          e.preventDefault();
-          var p = calData.prevMonth.split('-');
-          navigateMonth(parseInt(p[0]), parseInt(p[1]));
-        });
-        colNav.appendChild(prev);
-      } else {
-        var s = document.createElement('span');
-        s.className = 'disabled';
-        s.innerHTML = '&larr;';
-        colNav.appendChild(s);
-      }
-      var next = document.createElement('a');
-      next.href = '#';
-      next.innerHTML = '&rarr;';
-      next.addEventListener('click', function(e) {
+  // Update shared nav for month/column views (month-level prev/next)
+  function updateSharedNavForMonth() {
+    var nav = document.getElementById('main-cal-nav');
+    if (!nav) return;
+    nav.innerHTML = '';
+
+    if (hasPrevMonth && calData.prevMonth) {
+      var prev = document.createElement('a');
+      prev.href = '#';
+      prev.innerHTML = '&larr;';
+      prev.addEventListener('click', function(e) {
         e.preventDefault();
-        var n = calData.nextMonth.split('-');
-        navigateMonth(parseInt(n[0]), parseInt(n[1]));
+        var p = calData.prevMonth.split('-');
+        navigateMonth(parseInt(p[0]), parseInt(p[1]));
       });
-      colNav.appendChild(next);
+      nav.appendChild(prev);
+    } else {
+      var s = document.createElement('span');
+      s.className = 'disabled';
+      s.innerHTML = '&larr;';
+      nav.appendChild(s);
     }
+
+    var next = document.createElement('a');
+    next.href = '#';
+    next.innerHTML = '&rarr;';
+    next.addEventListener('click', function(e) {
+      e.preventDefault();
+      var n = calData.nextMonth.split('-');
+      navigateMonth(parseInt(n[0]), parseInt(n[1]));
+    });
+    nav.appendChild(next);
   }
 
   function switchView(view) {
@@ -1518,6 +1498,10 @@
     } else {
       weekViewEl.classList.remove('active');
       columnViewEl.classList.remove('active');
+      // Restore month header title and nav
+      var titleEl = document.getElementById('cal-header-title');
+      if (titleEl) titleEl.textContent = calData.monthLabel;
+      updateSharedNavForMonth();
     }
   }
 

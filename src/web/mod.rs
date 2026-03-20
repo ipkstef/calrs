@@ -2926,6 +2926,9 @@ struct EventTypeForm {
     member_priorities: String,
     // Default calendar view for guests (month / week / column)
     default_calendar_view: Option<String>,
+    // Booking frequency limits: "1:day,5:week,10:month"
+    #[serde(default)]
+    frequency_limits: String,
 }
 
 async fn new_event_type_form(
@@ -3263,6 +3266,9 @@ async fn create_event_type(
         }
     }
 
+    // Save booking frequency limits
+    save_frequency_limits(&state.pool, &et_id, &form.frequency_limits).await;
+
     Redirect::to("/dashboard/event-types").into_response()
 }
 
@@ -3431,6 +3437,21 @@ async fn edit_event_type_form(
         Vec::new()
     };
 
+    // Fetch booking frequency limits
+    let freq_limits: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT max_bookings, period FROM booking_frequency_limits WHERE event_type_id = ?",
+    )
+    .bind(&et_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let form_frequency_limits = freq_limits
+        .iter()
+        .map(|(c, p)| format!("{}:{}", c, p))
+        .collect::<Vec<_>>()
+        .join(",");
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -3463,6 +3484,7 @@ async fn edit_event_type_form(
             form_max_additional_guests => max_additional_guests,
             form_scheduling_mode => scheduling_mode,
             form_default_calendar_view => default_calendar_view,
+            form_frequency_limits => form_frequency_limits,
             is_group => team_id.is_some(),
             is_round_robin_group => is_round_robin_group,
             priority_members => members_ctx,
@@ -3618,6 +3640,13 @@ async fn update_event_type(
             }
         }
     }
+
+    // Update booking frequency limits: delete old, insert new
+    let _ = sqlx::query("DELETE FROM booking_frequency_limits WHERE event_type_id = ?")
+        .bind(&et_id)
+        .execute(&state.pool)
+        .await;
+    save_frequency_limits(&state.pool, &et_id, &form.frequency_limits).await;
 
     Redirect::to("/dashboard/event-types").into_response()
 }
@@ -6358,6 +6387,13 @@ async fn handle_group_booking(
         }
     };
 
+    // Check booking frequency limits
+    if would_exceed_frequency_limit(&state.pool, &et_id, slot_start).await {
+        let _ = tx.rollback().await;
+        return Html("This event type has reached its booking limit for this period.".to_string())
+            .into_response();
+    }
+
     let insert_result = sqlx::query(
         "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, assigned_user_id, confirm_token)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -7083,6 +7119,13 @@ async fn handle_booking_for_user(
         return Html("This slot is no longer available.".to_string()).into_response();
     }
 
+    // Check booking frequency limits
+    if would_exceed_frequency_limit(&state.pool, &et_id, slot_start).await {
+        let _ = tx.rollback().await;
+        return Html("This event type has reached its booking limit for this period.".to_string())
+            .into_response();
+    }
+
     let insert_result = sqlx::query(
         "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, confirm_token)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -7612,6 +7655,120 @@ async fn compute_slots(
         busy,
         &overrides,
     )
+}
+
+/// Save booking frequency limits from the serialized form field ("1:day,5:week").
+async fn save_frequency_limits(pool: &SqlitePool, event_type_id: &str, limits_str: &str) {
+    if limits_str.is_empty() {
+        return;
+    }
+    for part in limits_str.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((count_str, period)) = part.split_once(':') {
+            let count: i32 = count_str.parse().unwrap_or(0);
+            if count > 0 && ["day", "week", "month", "year"].contains(&period) {
+                let limit_id = uuid::Uuid::new_v4().to_string();
+                let _ = sqlx::query(
+                    "INSERT INTO booking_frequency_limits (id, event_type_id, max_bookings, period) VALUES (?, ?, ?, ?)",
+                )
+                .bind(&limit_id)
+                .bind(event_type_id)
+                .bind(count)
+                .bind(period)
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+}
+
+/// Compute the start/end of a calendar period containing the given datetime.
+fn frequency_period_range(dt: NaiveDateTime, period: &str) -> (NaiveDateTime, NaiveDateTime) {
+    let date = dt.date();
+    match period {
+        "day" => {
+            let start = date.and_hms_opt(0, 0, 0).unwrap();
+            let end = (date + Duration::days(1)).and_hms_opt(0, 0, 0).unwrap();
+            (start, end)
+        }
+        "week" => {
+            let weekday = date.weekday().num_days_from_monday();
+            let week_start = date - Duration::days(weekday as i64);
+            let start = week_start.and_hms_opt(0, 0, 0).unwrap();
+            let end = (week_start + Duration::days(7))
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            (start, end)
+        }
+        "month" => {
+            let start = NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            let end = if date.month() == 12 {
+                NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
+            } else {
+                NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1).unwrap()
+            }
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+            (start, end)
+        }
+        "year" => {
+            let start = NaiveDate::from_ymd_opt(date.year(), 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            let end = NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            (start, end)
+        }
+        _ => (dt, dt),
+    }
+}
+
+/// Check if booking at the given datetime would exceed any frequency limit for the event type.
+async fn would_exceed_frequency_limit(
+    pool: &SqlitePool,
+    event_type_id: &str,
+    proposed_start: NaiveDateTime,
+) -> bool {
+    let limits: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT max_bookings, period FROM booking_frequency_limits WHERE event_type_id = ?",
+    )
+    .bind(event_type_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if limits.is_empty() {
+        return false;
+    }
+
+    for (max_bookings, period) in &limits {
+        let (range_start, range_end) = frequency_period_range(proposed_start, period);
+        let range_start_str = range_start.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let range_end_str = range_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM bookings WHERE event_type_id = ? AND status IN ('confirmed', 'pending') AND start_at >= ? AND start_at < ?",
+        )
+        .bind(event_type_id)
+        .bind(&range_start_str)
+        .bind(&range_end_str)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+
+        if count.0 >= *max_bookings as i64 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Core slot computation from pre-fetched rules.
@@ -8625,6 +8782,13 @@ async fn handle_booking(
     if has_conflict(&busy, buf_start, buf_end) {
         let _ = tx.rollback().await;
         return Html("This slot is no longer available.".to_string()).into_response();
+    }
+
+    // Check booking frequency limits
+    if would_exceed_frequency_limit(&state.pool, &et_id, slot_start).await {
+        let _ = tx.rollback().await;
+        return Html("This event type has reached its booking limit for this period.".to_string())
+            .into_response();
     }
 
     let insert_result = sqlx::query(
