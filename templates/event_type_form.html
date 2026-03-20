@@ -187,7 +187,7 @@
     </div>
     <label class="toggle-switch" style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;">
       <input type="checkbox" id="freq-limit-toggle" style="opacity: 0; width: 0; height: 0;">
-      <span style="position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 24px; transition: 0.2s;" id="freq-toggle-track">
+      <span style="position: absolute; cursor: pointer; inset: 0; background: #71717a; border-radius: 24px; transition: 0.2s;" id="freq-toggle-track">
         <span style="position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s;" id="freq-toggle-knob"></span>
       </span>
     </label>
@@ -727,7 +727,7 @@
         track.style.background = 'var(--accent)';
         knob.style.transform = 'translateX(20px)';
       } else {
-        track.style.background = 'var(--border)';
+        track.style.background = '#71717a';
         knob.style.transform = 'translateX(0)';
       }
     }
@@ -794,13 +794,13 @@
     if (saved && saved.trim()) {
       toggle.checked = true;
       container.style.display = 'block';
-      updateToggleStyle();
       saved.split(',').forEach(function(part) {
         const s = part.split(':');
         if (s.length === 2) createRow(parseInt(s[0], 10), s[1]);
       });
       updateAddBtn();
     }
+    updateToggleStyle();
 
     toggle.addEventListener('change', function() {
       updateToggleStyle();
