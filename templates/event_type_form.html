@@ -252,21 +252,9 @@
 </div>
 {% endif %}
 
-<!-- Card 6: Notifications & Access -->
+<!-- Card: Booking options -->
 <div class="card" style="margin-top: 1rem;">
-  <h2>Notifications & Access</h2>
-
-  <div class="form-group">
-    <label for="reminder_minutes">Booking reminder</label>
-    <select id="reminder_minutes" name="reminder_minutes" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="0" {% if form_reminder_minutes == 0 %}selected{% endif %}>No reminder</option>
-      <option value="60" {% if form_reminder_minutes == 60 %}selected{% endif %}>1 hour before</option>
-      <option value="240" {% if form_reminder_minutes == 240 %}selected{% endif %}>4 hours before</option>
-      <option value="1440" {% if form_reminder_minutes == 1440 %}selected{% endif %}>1 day before</option>
-      <option value="2880" {% if form_reminder_minutes == 2880 %}selected{% endif %}>2 days before</option>
-    </select>
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Send a reminder email to both you and your guest before the meeting.</span>
-  </div>
+  <h2>Booking options</h2>
 
   <label style="display: flex; align-items: center; gap: 0.625rem; cursor: pointer; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); transition: all 0.15s ease;">
     <input type="checkbox" name="requires_confirmation" {% if form_requires_confirmation %}checked{% endif %} style="accent-color: var(--accent); width: 1.125rem; height: 1.125rem;">
@@ -275,26 +263,6 @@
       <div style="color: var(--text-muted); font-size: 0.825rem;">Bookings will be pending until you approve them from the dashboard.</div>
     </div>
   </label>
-
-  <div class="form-group" style="margin-top: 0.75rem;">
-    <label for="visibility">Visibility</label>
-    <select id="visibility" name="visibility" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="public" {% if form_visibility is not defined or form_visibility == "public" %}selected{% endif %}>Public — visible on your profile</option>
-      <option value="internal" {% if form_visibility == "internal" %}selected{% endif %}>Internal — any colleague can generate invite links</option>
-      <option value="private" {% if form_visibility == "private" %}selected{% endif %}>Private — invite link only</option>
-    </select>
-    <span class="hint" style="display: block; margin-top: 0.25rem;">Controls who can see and book this event type.</span>
-  </div>
-
-  <div class="form-group" style="margin-top: 0.75rem;">
-    <label for="default_calendar_view">Default calendar view</label>
-    <select id="default_calendar_view" name="default_calendar_view" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="month" {% if form_default_calendar_view is not defined or form_default_calendar_view == "month" %}selected{% endif %}>Month — calendar grid with slot list</option>
-      <option value="week" {% if form_default_calendar_view == "week" %}selected{% endif %}>Week — 7-day columns with time slots</option>
-      <option value="column" {% if form_default_calendar_view == "column" %}selected{% endif %}>Column — days listed with inline slots</option>
-    </select>
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">The view guests see by default. They can switch views anytime.</span>
-  </div>
 
   <div class="form-group" style="margin-top: 0.75rem;">
     <label for="max_additional_guests">Additional guests</label>
@@ -306,6 +274,46 @@
       <option value="10" {% if form_max_additional_guests == 10 %}selected{% endif %}>Up to 10 additional guests</option>
     </select>
     <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Allow the person booking to invite additional attendees who will receive the calendar invite.</span>
+  </div>
+
+  <div class="form-group" style="margin-top: 0.75rem;">
+    <label for="default_calendar_view">Default calendar view</label>
+    <select id="default_calendar_view" name="default_calendar_view" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+      <option value="month" {% if form_default_calendar_view is not defined or form_default_calendar_view == "month" %}selected{% endif %}>Month — calendar grid with slot list</option>
+      <option value="week" {% if form_default_calendar_view == "week" %}selected{% endif %}>Week — 7-day columns with time slots</option>
+      <option value="column" {% if form_default_calendar_view == "column" %}selected{% endif %}>Column — days listed with inline slots</option>
+    </select>
+    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">The view guests see by default. They can switch views anytime.</span>
+  </div>
+</div>
+
+<!-- Card: Access -->
+<div class="card" style="margin-top: 1rem;">
+  <h2>Access</h2>
+  <div class="form-group">
+    <label for="visibility">Visibility</label>
+    <select id="visibility" name="visibility" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+      <option value="public" {% if form_visibility is not defined or form_visibility == "public" %}selected{% endif %}>Public — visible on your profile</option>
+      <option value="internal" {% if form_visibility == "internal" %}selected{% endif %}>Internal — any colleague can generate invite links</option>
+      <option value="private" {% if form_visibility == "private" %}selected{% endif %}>Private — invite link only</option>
+    </select>
+    <span class="hint" style="display: block; margin-top: 0.25rem;">Controls who can see and book this event type.</span>
+  </div>
+</div>
+
+<!-- Card: Notifications -->
+<div class="card" style="margin-top: 1rem;">
+  <h2>Notifications</h2>
+  <div class="form-group">
+    <label for="reminder_minutes">Booking reminder</label>
+    <select id="reminder_minutes" name="reminder_minutes" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+      <option value="0" {% if form_reminder_minutes == 0 %}selected{% endif %}>No reminder</option>
+      <option value="60" {% if form_reminder_minutes == 60 %}selected{% endif %}>1 hour before</option>
+      <option value="240" {% if form_reminder_minutes == 240 %}selected{% endif %}>4 hours before</option>
+      <option value="1440" {% if form_reminder_minutes == 1440 %}selected{% endif %}>1 day before</option>
+      <option value="2880" {% if form_reminder_minutes == 2880 %}selected{% endif %}>2 days before</option>
+    </select>
+    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Send a reminder email to both you and your guest before the meeting.</span>
   </div>
 </div>
 
