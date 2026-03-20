@@ -3038,6 +3038,7 @@ async fn new_event_type_form(
             form_max_additional_guests => 0,
             form_default_calendar_view => "month",
             form_first_slot_only => false,
+            form_frequency_limits => "",
             error => "",
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
@@ -4467,6 +4468,7 @@ fn render_event_type_form_error(
             form_avail_schedule => form.avail_schedule.as_deref().unwrap_or(""),
             form_default_calendar_view => form.default_calendar_view.as_deref().unwrap_or("month"),
             form_first_slot_only => form.first_slot_only.as_deref() == Some("on"),
+            form_frequency_limits => form.frequency_limits.as_str(),
             error => error,
             sidebar => sidebar_context(auth_user, "event-types"),
             impersonating => impersonating,
@@ -5047,6 +5049,7 @@ async fn new_group_event_type_form(
             form_avail_end => "17:00",
             form_default_calendar_view => "month",
             form_first_slot_only => false,
+            form_frequency_limits => "",
             error => "",
             sidebar => sidebar_context(&auth_user, "event-types"),
             impersonating => impersonating,
