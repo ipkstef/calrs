@@ -96,16 +96,12 @@ impl CaldavClient {
             "PROPFIND principal response received"
         );
 
-        // Extract href inside <d:current-user-principal><d:href>...</d:href></d:current-user-principal>
-        // Try multiple namespace prefixes (d:, D:, unprefixed)
-        for prefix in &["d:", "D:", ""] {
-            let tag = format!("{}current-user-principal", prefix);
-            if let Some(principal_start) = text.find(&format!("<{}", tag)) {
-                let after = &text[principal_start..];
-                if let Some(href) = extract_tag(after, "d:href") {
-                    tracing::debug!(principal = %href, "discovered principal URL");
-                    return Ok(href);
-                }
+        // Extract href inside <X:current-user-principal><Y:href>...</Y:href></X:current-user-principal>
+        // Uses namespace-agnostic search to handle any prefix (d:, D:, or arbitrary like a:)
+        if let Some(inner) = extract_tag(&text, "d:current-user-principal") {
+            if let Some(href) = extract_tag(&inner, "d:href") {
+                tracing::debug!(principal = %href, "discovered principal URL");
+                return Ok(href);
             }
         }
 
@@ -123,16 +119,12 @@ impl CaldavClient {
             "PROPFIND calendar-home response received"
         );
 
-        // Extract href inside <cal:calendar-home-set><d:href>...</d:href></cal:calendar-home-set>
-        // Try multiple namespace prefixes (cal:, C:, unprefixed)
-        for prefix in &["cal:", "C:", ""] {
-            let tag = format!("{}calendar-home-set", prefix);
-            if let Some(home_start) = text.find(&format!("<{}", tag)) {
-                let after = &text[home_start..];
-                if let Some(href) = extract_tag(after, "d:href") {
-                    tracing::debug!(calendar_home = %href, "discovered calendar-home-set");
-                    return Ok(href);
-                }
+        // Extract href inside <X:calendar-home-set><Y:href>...</Y:href></X:calendar-home-set>
+        // Uses namespace-agnostic search to handle any prefix (cal:, C:, or arbitrary like a:)
+        if let Some(inner) = extract_tag(&text, "cal:calendar-home-set") {
+            if let Some(href) = extract_tag(&inner, "d:href") {
+                tracing::debug!(calendar_home = %href, "discovered calendar-home-set");
+                return Ok(href);
             }
         }
 
@@ -421,13 +413,27 @@ fn parse_event_responses(xml: &str) -> Vec<RawEvent> {
 }
 
 /// Split a multistatus XML response into individual response blocks.
-/// Handles multiple namespace prefixes: `<d:response>`, `<D:response>`, `<response>`.
+/// Handles multiple namespace prefixes: `<d:response>`, `<D:response>`, `<response>`,
+/// and any arbitrary prefix (e.g. `<a:response>`).
 fn split_responses(xml: &str) -> Vec<&str> {
-    // Try common response tag patterns
+    // Try common response tag patterns first
     for open_tag in &["<d:response>", "<D:response>", "<response>", "<response "] {
         let blocks: Vec<&str> = xml.split(open_tag).skip(1).collect();
         if !blocks.is_empty() {
             return blocks;
+        }
+    }
+    // Fallback: search for any prefix on "response>" (e.g. "<a:response>")
+    // Find the first occurrence to determine the prefix, then split on it
+    if let Some(idx) = xml.find(":response>") {
+        // Walk back to find '<'
+        let before = &xml[..idx];
+        if let Some(lt) = before.rfind('<') {
+            let open_tag = &xml[lt..idx + ":response>".len()];
+            let blocks: Vec<&str> = xml.split(open_tag).skip(1).collect();
+            if !blocks.is_empty() {
+                return blocks;
+            }
         }
     }
     Vec::new()
@@ -482,6 +488,15 @@ fn extract_tag(xml: &str, tag: &str) -> Option<String> {
             return Some(result);
         }
     }
+
+    // Final fallback: search for any prefix with this local name (handles arbitrary prefixes like SOGo's "a:")
+    if let Some(colon) = tag.find(':') {
+        let local = &tag[colon + 1..];
+        if let Some(result) = extract_tag_any_prefix(xml, local) {
+            return Some(result);
+        }
+    }
+
     None
 }
 
@@ -503,6 +518,45 @@ fn extract_tag_exact(xml: &str, tag: &str) -> Option<String> {
             if !value.is_empty() {
                 return Some(value);
             }
+        }
+    }
+    None
+}
+
+/// Search for a tag by its local name with any (or no) namespace prefix.
+/// For example, `extract_tag_any_prefix(xml, "calendar-home-set")` will match
+/// `<a:calendar-home-set>`, `<xyz:calendar-home-set>`, or `<calendar-home-set>`.
+fn extract_tag_any_prefix(xml: &str, local_name: &str) -> Option<String> {
+    // Pattern: find any occurrence of ":local_name" preceded by "<" and a short prefix,
+    // or the tag without a prefix
+    let search = format!(":{}", local_name);
+    let mut pos = 0;
+    while pos < xml.len() {
+        // Look for ":local_name" or "<local_name"
+        if let Some(colon_pos) = xml[pos..].find(&search) {
+            let abs_colon = pos + colon_pos;
+            // Walk backwards to find the "<" and extract the prefix
+            let mut lt_pos = abs_colon;
+            while lt_pos > 0 && xml.as_bytes()[lt_pos - 1] != b'<' {
+                lt_pos -= 1;
+            }
+            if lt_pos > 0 {
+                lt_pos -= 1; // point to '<'
+                let full_tag = &xml[lt_pos + 1..abs_colon + 1 + local_name.len()];
+                // Verify the prefix is a simple XML name (letters/digits, typically 1-3 chars)
+                let prefix_part = &xml[lt_pos + 1..abs_colon];
+                if !prefix_part.is_empty()
+                    && prefix_part.len() <= 10
+                    && prefix_part.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    if let Some(result) = extract_tag_exact(xml, full_tag) {
+                        return Some(result);
+                    }
+                }
+            }
+            pos = abs_colon + 1;
+        } else {
+            break;
         }
     }
     None
@@ -630,6 +684,28 @@ mod tests {
             extract_tag(xml, "d:href"),
             Some("/dav/principals/user/".to_string())
         );
+    }
+
+    // --- extract_tag arbitrary prefix (SOGo uses a: for CalDAV namespace) ---
+
+    #[test]
+    fn extract_tag_arbitrary_prefix() {
+        let xml = r#"<a:calendar-home-set><D:href xmlns:D="DAV:">/SOGo/dav/user/Calendar/</D:href></a:calendar-home-set>"#;
+        assert_eq!(
+            extract_tag(xml, "cal:calendar-home-set"),
+            Some(r#"<D:href xmlns:D="DAV:">/SOGo/dav/user/Calendar/</D:href>"#.to_string())
+        );
+    }
+
+    #[test]
+    fn extract_tag_sogo_calendar_home_full_flow() {
+        // Real SOGo response from issue #15
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:" xmlns:a="urn:ietf:params:xml:ns:caldav"><D:response><D:href>/SOGo/dav/guess.who@echirolles.fr/</D:href><D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop><a:calendar-home-set><D:href xmlns:D="DAV:">/SOGo/dav/guess.who@echirolles.fr/Calendar/</D:href></a:calendar-home-set></D:prop></D:propstat></D:response></D:multistatus>"#;
+        // extract_tag should find calendar-home-set even with a: prefix
+        let inner = extract_tag(xml, "cal:calendar-home-set").unwrap();
+        let href = extract_tag(&inner, "d:href").unwrap();
+        assert_eq!(href, "/SOGo/dav/guess.who@echirolles.fr/Calendar/");
     }
 
     // --- split_responses ---
