@@ -1809,11 +1809,15 @@ async fn settings_page(
 /// Convert a user's default availability rules into "busy" times for hours OUTSIDE
 /// their available windows. This lets us constrain dynamic group link participants
 /// by their working hours without changing the slot computation engine.
+/// Convert a user's default availability rules into "busy" times for hours OUTSIDE
+/// their available windows. Times are converted from the participant's timezone to
+/// the host's timezone so they integrate correctly with the slot computation.
 async fn user_avail_as_busy(
     pool: &SqlitePool,
     user_id: &str,
     window_start: NaiveDateTime,
     window_end: NaiveDateTime,
+    host_tz: chrono_tz::Tz,
 ) -> Vec<(NaiveDateTime, NaiveDateTime)> {
     let rules: Vec<(i32, String, String)> = sqlx::query_as(
         "SELECT day_of_week, start_time, end_time FROM user_availability_rules WHERE user_id = ? ORDER BY day_of_week, start_time",
@@ -1828,9 +1832,29 @@ async fn user_avail_as_busy(
         return vec![];
     }
 
+    // Get the participant's timezone
+    let user_tz_str: String = sqlx::query_scalar("SELECT timezone FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|_| "UTC".to_string());
+    let user_tz: chrono_tz::Tz = user_tz_str.parse().unwrap_or(chrono_tz::Tz::UTC);
+
+    // Work in the participant's timezone: convert window bounds from host TZ to user TZ
+    let window_start_user = host_tz
+        .from_local_datetime(&window_start)
+        .earliest()
+        .map(|dt| dt.with_timezone(&user_tz).naive_local())
+        .unwrap_or(window_start);
+    let window_end_user = host_tz
+        .from_local_datetime(&window_end)
+        .earliest()
+        .map(|dt| dt.with_timezone(&user_tz).naive_local())
+        .unwrap_or(window_end);
+
     let mut busy = Vec::new();
-    let mut date = window_start.date();
-    let end_date = window_end.date();
+    let mut date = window_start_user.date();
+    let end_date = window_end_user.date();
     while date <= end_date {
         let weekday = date.weekday().num_days_from_sunday() as i32;
         let mut windows: Vec<(NaiveTime, NaiveTime)> = rules
@@ -1871,7 +1895,21 @@ async fn user_avail_as_busy(
         }
         date = date.succ_opt().unwrap_or(date);
     }
-    busy
+
+    // Convert busy times from participant's TZ back to host's TZ
+    busy.into_iter()
+        .filter_map(|(start, end)| {
+            let start_host = user_tz
+                .from_local_datetime(&start)
+                .earliest()
+                .map(|dt| dt.with_timezone(&host_tz).naive_local())?;
+            let end_host = user_tz
+                .from_local_datetime(&end)
+                .earliest()
+                .map(|dt| dt.with_timezone(&host_tz).naive_local())?;
+            Some((start_host, end_host))
+        })
+        .collect()
 }
 
 /// Load a user's default availability rules as a serialized schedule string.
@@ -7098,7 +7136,8 @@ async fn show_dynamic_group_slots(
             // For non-owner participants, apply their default availability as constraints
             if i > 0 {
                 ensure_user_avail_seeded(&state.pool, uid).await;
-                let avail_busy = user_avail_as_busy(&state.pool, uid, now_host, window_end).await;
+                let avail_busy =
+                    user_avail_as_busy(&state.pool, uid, now_host, window_end, host_tz).await;
                 busy_times.extend(avail_busy);
             }
             member_busy.insert(uid.clone(), busy_times);
@@ -7414,7 +7453,7 @@ async fn handle_dynamic_group_booking(
                 .await;
         if i > 0 {
             ensure_user_avail_seeded(&state.pool, uid).await;
-            busy.extend(user_avail_as_busy(&state.pool, uid, buf_start, buf_end).await);
+            busy.extend(user_avail_as_busy(&state.pool, uid, buf_start, buf_end, host_tz).await);
         }
         if has_conflict(&busy, buf_start, buf_end) {
             return Html(format!(
