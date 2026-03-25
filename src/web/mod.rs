@@ -1792,6 +1792,7 @@ async fn settings_page(
 ) -> impl IntoResponse {
     let sidebar = sidebar_context(&auth_user, "settings");
     let (impersonating, impersonating_name, _) = impersonation_ctx(&auth_user);
+    ensure_user_avail_seeded(&state.pool, &auth_user.user.id).await;
     let avail = load_user_avail_schedule(&state.pool, &auth_user.user.id).await;
     settings_render(
         &state,
@@ -1942,6 +1943,31 @@ async fn save_user_avail_schedule(pool: &SqlitePool, user_id: &str, schedule: &s
             .execute(pool)
             .await;
         }
+    }
+}
+
+/// Ensure a user has default availability rules. If none exist, insert Mon-Fri 9:00-17:00.
+async fn ensure_user_avail_seeded(pool: &SqlitePool, user_id: &str) {
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM user_availability_rules WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+    if count.0 > 0 {
+        return;
+    }
+    // Seed Mon(1)-Fri(5) 09:00-17:00
+    for day in 1..=5 {
+        let id = uuid::Uuid::new_v4().to_string();
+        let _ = sqlx::query(
+            "INSERT INTO user_availability_rules (id, user_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, '09:00', '17:00')",
+        )
+        .bind(&id)
+        .bind(user_id)
+        .bind(day)
+        .execute(pool)
+        .await;
     }
 }
 
@@ -7071,6 +7097,7 @@ async fn show_dynamic_group_slots(
             .await;
             // For non-owner participants, apply their default availability as constraints
             if i > 0 {
+                ensure_user_avail_seeded(&state.pool, uid).await;
                 let avail_busy = user_avail_as_busy(&state.pool, uid, now_host, window_end).await;
                 busy_times.extend(avail_busy);
             }
@@ -7386,6 +7413,7 @@ async fn handle_dynamic_group_booking(
             fetch_busy_times_for_user(&state.pool, uid, buf_start, buf_end, host_tz, et_filter)
                 .await;
         if i > 0 {
+            ensure_user_avail_seeded(&state.pool, uid).await;
             busy.extend(user_avail_as_busy(&state.pool, uid, buf_start, buf_end).await);
         }
         if has_conflict(&busy, buf_start, buf_end) {

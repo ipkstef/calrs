@@ -13,6 +13,31 @@
   {% endif %}
 </div>
 
+<div id="avail-banner" style="display: none; margin-bottom: 1.25rem; padding: 1rem 1.25rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);">
+  <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+    <div style="flex: 1;">
+      <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem;">Default availability</div>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">Your default working hours have been set to Mon–Fri, 9:00–17:00. These are used when others include you in dynamic group meetings.</div>
+      <a href="/dashboard/settings#availability" style="display: inline-block; margin-top: 0.5rem; font-size: 0.85rem; color: var(--accent); font-weight: 500; text-decoration: none;">Review your availability &rarr;</a>
+    </div>
+    <button type="button" id="avail-banner-dismiss" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 0; line-height: 1;" title="Dismiss">&times;</button>
+  </div>
+</div>
+<script>
+(function() {
+  if (!localStorage.getItem('calrs_avail_banner_dismissed')) {
+    var b = document.getElementById('avail-banner');
+    if (b) b.style.display = '';
+  }
+  var btn = document.getElementById('avail-banner-dismiss');
+  if (btn) btn.addEventListener('click', function() {
+    localStorage.setItem('calrs_avail_banner_dismissed', '1');
+    var b = document.getElementById('avail-banner');
+    if (b) b.style.display = 'none';
+  });
+})();
+</script>
+
 {% if source_count == 0 or event_type_count == 0 %}
 <div class="card" style="margin-bottom: 1.25rem; border-left: 3px solid var(--accent);">
   <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Getting started</h2>
