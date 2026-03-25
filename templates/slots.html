@@ -803,7 +803,8 @@
     "hasPrevMonth": {% if prev_month is defined and prev_month %}true{% else %}false{% endif %},
     "prevMonth": "{{ prev_month | default(value='') }}",
     "nextMonth": "{{ next_month }}",
-    "defaultCalendarView": "{{ default_calendar_view | default(value='month') }}"
+    "defaultCalendarView": "{{ default_calendar_view | default(value='month') }}",
+    "deferredLoad": {% if deferred_load is defined and deferred_load %}true{% else %}false{% endif %}
   }
   </script>
 
@@ -857,10 +858,17 @@
           <div class="slot-panel-title" id="slot-panel-title">Select a date</div>
         </div>
         <div class="slot-list" id="slot-list">
+          {% if deferred_load is defined and deferred_load %}
+          <div class="slot-empty" id="deferred-loader">
+            <div style="width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: calrs-spin 0.8s linear infinite;"></div>
+            <div style="color: var(--text-muted); font-size: 0.85rem;">Loading availability...</div>
+          </div>
+          {% else %}
           <div class="slot-empty">
             <div class="slot-empty-icon">&#128197;</div>
             <div>Click a highlighted date to see available times</div>
           </div>
+          {% endif %}
         </div>
       </div>
 
@@ -1558,6 +1566,46 @@
   // Apply saved view preference
   if (currentView !== 'month') {
     switchView(currentView);
+  }
+
+  // --- Deferred slot loading for dynamic group links ---
+  if (calData.deferredLoad) {
+    var deferUrl = basePath + '?deferred=1';
+    if (calData.monthYear) deferUrl += '&month=' + calData.monthYear;
+    if (guestTz) deferUrl += '&tz=' + encodeURIComponent(guestTz);
+    if (inviteToken) deferUrl += '&invite=' + encodeURIComponent(inviteToken);
+
+    fetch(deferUrl).then(function(r) { return r.text(); }).then(function(html) {
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(html, 'text/html');
+      var newDataEl = doc.getElementById('calendar-data');
+      if (!newDataEl) return;
+
+      var newData = JSON.parse(newDataEl.textContent);
+      slotData = newData.slotData;
+      availableDates = newData.availableDates;
+
+      calData.slotData = slotData;
+      calData.availableDates = availableDates;
+
+      // Remove loading spinner
+      var loader = document.getElementById('deferred-loader');
+      if (loader) {
+        loader.innerHTML = '<div class="slot-empty-icon">&#128197;</div><div>Click a highlighted date to see available times</div>';
+        loader.id = '';
+      }
+
+      // Rebuild all views with real data
+      buildCalendar();
+      if (currentView === 'week') buildWeekView();
+      else if (currentView === 'column') buildColumnView();
+    }).catch(function(e) {
+      console.error('calrs: deferred slot load failed', e);
+      var loader = document.getElementById('deferred-loader');
+      if (loader) {
+        loader.innerHTML = '<div style="color:var(--error-text);">Failed to load availability. Please refresh.</div>';
+      }
+    });
   }
 
 })();

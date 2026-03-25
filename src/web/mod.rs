@@ -6834,11 +6834,6 @@ async fn show_dynamic_group_slots(
         .collect::<Vec<_>>()
         .join(" & ");
 
-    // Sync all users' calendars if stale
-    for (uid, _, _, _, _) in &dg_users {
-        crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
-    }
-
     let guest_tz = parse_guest_tz(query.tz.as_deref());
     let host_tz = get_host_tz(&state.pool, &et_id).await;
     let guest_tz_name = guest_tz.name().to_string();
@@ -6856,37 +6851,56 @@ async fn show_dynamic_group_slots(
         month_year,
     ) = build_month_params(year, month, host_tz, guest_tz);
 
-    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
-    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
-    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
+    // Deferred loading: on initial page load (no &deferred=1), skip sync + computation
+    // and render the page shell immediately. JS will fetch with &deferred=1 to get real data.
+    let is_deferred_callback = query.deferred.as_deref() == Some("1");
 
-    // Fetch busy times for all participants — collective mode (ALL must be free)
-    let mut member_busy = HashMap::new();
-    for (i, (uid, _, _, _, _)) in dg_users.iter().enumerate() {
-        // Only apply event-type calendar filter to owner; check all busy calendars for others
-        let et_filter = if i == 0 { Some(et_id.as_str()) } else { None };
-        member_busy.insert(
-            uid.clone(),
-            fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz, et_filter)
+    let slot_days = if is_deferred_callback {
+        // Full sync + computation (AJAX callback)
+        for (uid, _, _, _, _) in &dg_users {
+            crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
+        }
+
+        let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+        let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
+        let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
+
+        let mut member_busy = HashMap::new();
+        for (i, (uid, _, _, _, _)) in dg_users.iter().enumerate() {
+            let et_filter = if i == 0 { Some(et_id.as_str()) } else { None };
+            member_busy.insert(
+                uid.clone(),
+                fetch_busy_times_for_user(
+                    &state.pool,
+                    uid,
+                    now_host,
+                    window_end,
+                    host_tz,
+                    et_filter,
+                )
                 .await,
-        );
-    }
-    let busy = BusySource::Team(member_busy);
+            );
+        }
+        let busy = BusySource::Team(member_busy);
 
-    let slot_days = compute_slots(
-        &state.pool,
-        &et_id,
-        duration,
-        buf_before,
-        buf_after,
-        min_notice,
-        start_offset,
-        days_ahead,
-        host_tz,
-        guest_tz,
-        busy,
-    )
-    .await;
+        compute_slots(
+            &state.pool,
+            &et_id,
+            duration,
+            buf_before,
+            buf_after,
+            min_notice,
+            start_offset,
+            days_ahead,
+            host_tz,
+            guest_tz,
+            busy,
+        )
+        .await
+    } else {
+        // Initial load: empty slots, page renders instantly
+        vec![]
+    };
 
     let days_ctx: Vec<minijinja::Value> = slot_days
         .iter()
@@ -6950,6 +6964,7 @@ async fn show_dynamic_group_slots(
             invite_guest_name => "",
             invite_guest_email => "",
             default_calendar_view => default_calendar_view,
+            deferred_load => !is_deferred_callback,
             company_link => state.company_link.read().await.clone(),
         })
         .unwrap_or_else(|e| format!("Template error: {}", e)),
@@ -8728,6 +8743,9 @@ struct SlotsQuery {
     tz: Option<String>,
     #[serde(default)]
     invite: Option<String>,
+    /// When "1", perform full sync + computation (AJAX callback for deferred loading)
+    #[serde(default)]
+    deferred: Option<String>,
 }
 
 /// Parse a "YYYY-MM" month param, returning (year, month_1indexed). Defaults to current month in guest TZ.
