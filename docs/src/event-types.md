@@ -4,7 +4,7 @@ Event types are bookable meeting templates. Each one defines the duration, avail
 
 ## Meeting types overview
 
-calrs supports six distinct booking scenarios:
+calrs supports seven distinct booking scenarios:
 
 | Type | Who books? | How? | Assigned to | Use case |
 |---|---|---|---|---|
@@ -14,8 +14,11 @@ calrs supports six distinct booking scenarios:
 | **Team (public)** | Anyone | Listed on team page | Round-robin | Public support call page |
 | **Team (internal)** | Invited guests | Any employee generates a link | Round-robin | Cross-team: Sales shares Support links with customers |
 | **Team (private)** | Invited guests | Owner sends invite links | Round-robin | Demo team sends links to qualified leads |
+| **Dynamic group** | Anyone with the URL | Ad-hoc link: `/u/alice+bob/slug` | Event type owner | One-off sales call needing engineering support |
 
 **Personal vs team:** Personal event types book time on your calendar only. Team event types show combined availability (any member free) and assign the booking to the least-busy member via round-robin.
+
+**Dynamic group links:** Ad-hoc collective meetings without creating a team — see [Dynamic group links](#dynamic-group-links) below.
 
 **Multi-timezone teams:** For teams spread across timezones, set a wide availability window (e.g., 06:00–23:00) and let each member's synced CalDAV calendar handle the blocking. The slot picker naturally shows the union of all members' real availability — see [Teams > Multi-timezone teams](./teams.md#multi-timezone-teams) for details.
 
@@ -204,3 +207,46 @@ Multiple custom hour windows can be added for the same date (e.g., morning + aft
 - **Slot picker:** `/u/yourname/slug` — shows available time slots
 - **Booking form:** `/u/yourname/slug/book?date=...&time=...` — booking form for a specific slot
 - **Invite booking:** same URLs with `?invite={token}` — for private event types accessed via invite links
+- **Dynamic group:** `/u/alice+bob+carol/slug` — collective availability across multiple users (see below)
+
+## Dynamic group links
+
+Dynamic group links let you create ad-hoc collective meetings by combining usernames in the URL — no team setup required.
+
+### How it works
+
+Take any public event type URL and add other usernames with `+`:
+
+```
+/u/alice/intro                → individual booking (Alice only)
+/u/alice+bob/intro            → collective booking (Alice & Bob)
+/u/alice+bob+carol/intro      → collective booking (Alice, Bob & Carol)
+```
+
+The first username owns the event type. Their event type settings (duration, buffer, availability rules) define the meeting. All participants' calendars are checked — only slots where **everyone** is free are shown.
+
+![Dynamic group slot picker](images/dynamic-group-slots.png)
+
+### Building a dynamic group link
+
+From the event type edit page, public personal event types show a **Dynamic Group Link** card at the bottom. Type a username to search — only users who have opted in are shown. Click to add them, and the URL is built live with a copy button.
+
+![Dynamic group link builder](images/dynamic-group-card.png)
+
+### Opt-out
+
+Users can disable being included in dynamic group links from **Profile & Settings**. The checkbox "Allow others to include me in dynamic group links" is enabled by default. When disabled, the user won't appear in the search dropdown and any URL containing their username will show an error.
+
+### CalDAV write-back
+
+When a dynamic group booking is confirmed:
+
+- The event is written to the **first user's** (event type owner's) CalDAV calendar
+- Other participants are added as `ATTENDEE` in the ICS event
+- CalDAV servers that support scheduling (Nextcloud, SOGo, etc.) automatically propagate the invite to participants' calendars
+
+### Constraints
+
+- Only works with **public** event types (not internal or private)
+- Requires at least **two usernames** in the URL
+- All users must have `allow_dynamic_group` enabled

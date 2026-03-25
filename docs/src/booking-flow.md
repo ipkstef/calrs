@@ -2,7 +2,7 @@
 
 ## Guest experience
 
-1. **Visit the booking page** — `/u/host/meeting-slug` (or via an invite link for private event types)
+1. **Visit the booking page** — `/u/host/meeting-slug` (or via an invite link for private event types, or `/u/host+other/slug` for [dynamic group links](./event-types.md#dynamic-group-links))
 2. **Pick a timezone** — auto-detected from the browser, changeable via dropdown
 3. **Browse available slots** — displayed as a week view, navigate with Previous/Next buttons
 4. **Click a slot** — opens the booking form
