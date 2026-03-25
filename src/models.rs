@@ -30,6 +30,7 @@ pub struct User {
     pub title: Option<String>,
     pub bio: Option<String>,
     pub avatar_path: Option<String>,
+    pub allow_dynamic_group: bool,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

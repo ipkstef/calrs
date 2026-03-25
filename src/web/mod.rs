@@ -2,7 +2,7 @@ use crate::utils::convert_event_to_tz;
 use axum::extract::{Form, Multipart, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Redirect;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{
@@ -1256,6 +1256,53 @@ fn split_csv_ids(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse a dynamic group username string like "alice+bob+carol" into individual usernames.
+/// Returns the deduplicated list, or an error if fewer than 2 valid usernames.
+fn parse_dynamic_group_usernames(combined: &str) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<String> = combined
+        .split('+')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(s.clone()))
+        .collect();
+    if unique.len() < 2 {
+        return Err("Dynamic group links require at least two usernames.".to_string());
+    }
+    Ok(unique)
+}
+
+/// Validate that all usernames exist, are enabled, and allow dynamic group links.
+/// Returns Vec<(user_id, username, name, email)> in the same order as input.
+async fn validate_dynamic_group_users(
+    pool: &SqlitePool,
+    usernames: &[String],
+) -> Result<Vec<(String, String, String, String)>, String> {
+    let mut users = Vec::with_capacity(usernames.len());
+    for uname in usernames {
+        let row: Option<(String, String, String, String, bool)> = sqlx::query_as(
+            "SELECT id, username, name, COALESCE(booking_email, email), allow_dynamic_group FROM users WHERE username = ? AND enabled = 1",
+        )
+        .bind(uname)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        match row {
+            None => return Err(format!("User '{}' not found.", uname)),
+            Some((_, _, _, _, false)) => {
+                return Err(format!(
+                    "User '{}' has not enabled dynamic group links.",
+                    uname
+                ))
+            }
+            Some((id, username, name, email, _)) => {
+                users.push((id, username, name, email));
+            }
+        }
+    }
+    Ok(users)
+}
+
 fn admin_sidebar_context(user: &crate::models::User, active: &str) -> minijinja::Value {
     context! {
         user_name => user.name,
@@ -1722,6 +1769,7 @@ struct SettingsForm {
     bio: Option<String>,
     booking_email: Option<String>,
     timezone: Option<String>,
+    allow_dynamic_group: Option<String>,
 }
 
 async fn settings_page(
@@ -1774,6 +1822,7 @@ fn settings_render(
             user_id => user.id,
             has_avatar => user.avatar_path.is_some(),
             username => user.username.as_deref().unwrap_or(""),
+            allow_dynamic_group => user.allow_dynamic_group,
             success => success.unwrap_or(""),
             error => error.unwrap_or(""),
             impersonating => impersonating,
@@ -1916,14 +1965,17 @@ async fn settings_save(
         .unwrap_or("UTC")
         .to_string();
 
+    let allow_dynamic_group = form.allow_dynamic_group.as_deref() == Some("on");
+
     let result = sqlx::query(
-        "UPDATE users SET name = ?, title = ?, bio = ?, booking_email = ?, timezone = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE users SET name = ?, title = ?, bio = ?, booking_email = ?, timezone = ?, allow_dynamic_group = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(&name)
     .bind(&title)
     .bind(&bio)
     .bind(&booking_email)
     .bind(&timezone)
+    .bind(allow_dynamic_group)
     .bind(&user.id)
     .execute(&state.pool)
     .await;
@@ -3530,6 +3582,7 @@ async fn edit_event_type_form(
             is_group => team_id.is_some(),
             is_round_robin_group => is_round_robin_group,
             priority_members => members_ctx,
+            owner_username => auth_user.user.username.as_deref().unwrap_or(""),
             error => "",
             sidebar => sidebar_context(&auth_user, "event-types"),
             impersonating => impersonating,
@@ -6690,6 +6743,631 @@ async fn user_profile(
     )
 }
 
+// --- Dynamic group link handlers ---
+
+async fn show_dynamic_group_slots(
+    state: &AppState,
+    combined_username: &str,
+    slug: &str,
+    query: &SlotsQuery,
+) -> Html<String> {
+    let usernames = match parse_dynamic_group_usernames(combined_username) {
+        Ok(u) => u,
+        Err(e) => return Html(e),
+    };
+    let dg_users = match validate_dynamic_group_users(&state.pool, &usernames).await {
+        Ok(u) => u,
+        Err(e) => return Html(e),
+    };
+
+    // Load event type from first user (owner)
+    let owner_username = &usernames[0];
+    let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, Option<String>, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name, u.title, u.avatar_path, et.visibility, et.default_calendar_view
+         FROM event_types et
+         JOIN accounts a ON a.id = et.account_id
+         JOIN users u ON u.id = a.user_id
+         WHERE u.username = ? AND et.slug = ? AND et.enabled = 1 AND u.enabled = 1",
+    )
+    .bind(owner_username)
+    .bind(slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (
+        et_id,
+        et_slug,
+        et_title,
+        et_desc,
+        duration,
+        buf_before,
+        buf_after,
+        min_notice,
+        loc_type,
+        loc_value,
+        _owner_user_id,
+        _owner_name,
+        _owner_title,
+        _owner_avatar_path,
+        visibility,
+        default_calendar_view,
+    ) = match et {
+        Some(e) => e,
+        None => return Html("Event type not found.".to_string()),
+    };
+
+    // Dynamic group links only for public event types
+    if visibility != "public" {
+        return Html("Dynamic group links are only available for public event types.".to_string());
+    }
+
+    // Build combined host display name
+    let host_name = dg_users
+        .iter()
+        .map(|(_, _, name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(" & ");
+
+    // Sync all users' calendars if stale
+    for (uid, _, _, _) in &dg_users {
+        crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
+    }
+
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let host_tz = get_host_tz(&state.pool, &et_id).await;
+    let guest_tz_name = guest_tz.name().to_string();
+
+    let (year, month) = parse_month_param(query.month.as_deref(), guest_tz);
+    let (
+        start_offset,
+        days_ahead,
+        month_label,
+        prev_month,
+        next_month,
+        first_weekday,
+        days_in_month,
+        today_date,
+        month_year,
+    ) = build_month_params(year, month, host_tz, guest_tz);
+
+    let now_host = Utc::now().with_timezone(&host_tz).naive_local();
+    let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
+    let window_end = end_date.and_hms_opt(23, 59, 59).unwrap_or(now_host);
+
+    // Fetch busy times for all participants — collective mode (ALL must be free)
+    let mut member_busy = HashMap::new();
+    for (i, (uid, _, _, _)) in dg_users.iter().enumerate() {
+        // Only apply event-type calendar filter to owner; check all busy calendars for others
+        let et_filter = if i == 0 { Some(et_id.as_str()) } else { None };
+        member_busy.insert(
+            uid.clone(),
+            fetch_busy_times_for_user(&state.pool, uid, now_host, window_end, host_tz, et_filter)
+                .await,
+        );
+    }
+    let busy = BusySource::Team(member_busy);
+
+    let slot_days = compute_slots(
+        &state.pool,
+        &et_id,
+        duration,
+        buf_before,
+        buf_after,
+        min_notice,
+        start_offset,
+        days_ahead,
+        host_tz,
+        guest_tz,
+        busy,
+    )
+    .await;
+
+    let days_ctx: Vec<minijinja::Value> = slot_days
+        .iter()
+        .map(|d| {
+            let slots: Vec<minijinja::Value> = d
+                .slots
+                .iter()
+                .map(|s| {
+                    context! { start => s.start, end => s.end, host_date => s.host_date, host_time => s.host_time }
+                })
+                .collect();
+            context! { date => d.date, label => d.label, slots => slots }
+        })
+        .collect();
+
+    let available_dates: Vec<String> = slot_days.iter().map(|d| d.date.clone()).collect();
+
+    let tz_options: Vec<minijinja::Value> = common_timezones()
+        .iter()
+        .map(|(iana, label)| {
+            context! { value => iana, label => label, selected => (*iana == guest_tz_name) }
+        })
+        .collect();
+
+    let tmpl = match state.templates.get_template("slots.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Internal error: {}", e)),
+    };
+    Html(
+        tmpl.render(context! {
+            event_type => context! {
+                slug => et_slug,
+                title => et_title,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
+                duration_min => duration,
+                location_type => loc_type,
+                location_value => loc_value,
+            },
+            host_name => host_name,
+            host_title => "",
+            host_user_id => dg_users[0].0,
+            host_has_avatar => false,
+            host_initials => "",
+            username => combined_username,
+            days => days_ctx,
+            available_dates => available_dates,
+            month_label => month_label,
+            month_year => month_year,
+            prev_month => prev_month,
+            next_month => next_month,
+            first_weekday => first_weekday,
+            days_in_month => days_in_month,
+            today_date => today_date,
+            guest_tz => guest_tz_name,
+            tz_options => tz_options,
+            invite_token => "",
+            invite_guest_name => "",
+            invite_guest_email => "",
+            default_calendar_view => default_calendar_view,
+            company_link => state.company_link.read().await.clone(),
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn show_dynamic_group_book_form(
+    state: &AppState,
+    combined_username: &str,
+    slug: &str,
+    query: &BookQuery,
+) -> Html<String> {
+    let usernames = match parse_dynamic_group_usernames(combined_username) {
+        Ok(u) => u,
+        Err(e) => return Html(e),
+    };
+    let dg_users = match validate_dynamic_group_users(&state.pool, &usernames).await {
+        Ok(u) => u,
+        Err(e) => return Html(e),
+    };
+
+    let owner_username = &usernames[0];
+    let et: Option<(String, String, String, Option<String>, i32, String, Option<String>, String, i32)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, et.visibility, et.max_additional_guests
+         FROM event_types et
+         JOIN accounts a ON a.id = et.account_id
+         JOIN users u ON u.id = a.user_id
+         WHERE u.username = ? AND et.slug = ? AND et.enabled = 1 AND u.enabled = 1",
+    )
+    .bind(owner_username)
+    .bind(slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (
+        _,
+        et_slug,
+        et_title,
+        et_desc,
+        duration,
+        loc_type,
+        loc_value,
+        visibility,
+        max_additional_guests,
+    ) = match et {
+        Some(e) => e,
+        None => return Html("Event type not found.".to_string()),
+    };
+
+    if visibility != "public" {
+        return Html("Dynamic group links are only available for public event types.".to_string());
+    }
+
+    let host_name = dg_users
+        .iter()
+        .map(|(_, _, name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(" & ");
+
+    let guest_tz = parse_guest_tz(query.tz.as_deref());
+    let guest_tz_name = guest_tz.name().to_string();
+
+    let date = match NaiveDate::parse_from_str(&query.date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return Html("Invalid date format.".to_string()),
+    };
+    let time = match NaiveTime::parse_from_str(&query.time, "%H:%M") {
+        Ok(t) => t,
+        Err(_) => return Html("Invalid time format.".to_string()),
+    };
+    let end_time = (date.and_time(time) + Duration::minutes(duration as i64))
+        .time()
+        .format("%H:%M")
+        .to_string();
+    let date_label = date.format("%A, %B %-d, %Y").to_string();
+
+    let tmpl = match state.templates.get_template("book.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Internal error: {}", e)),
+    };
+    Html(
+        tmpl.render(context! {
+            event_type => context! {
+                slug => et_slug,
+                title => et_title,
+                description => et_desc.as_deref().map(crate::utils::render_inline_markdown),
+                duration_min => duration,
+                location_type => loc_type,
+                location_value => loc_value,
+            },
+            host_name => host_name,
+            username => combined_username,
+            date => query.date,
+            date_label => date_label,
+            time_start => query.time,
+            time_end => end_time,
+            guest_tz => guest_tz_name,
+            error => "",
+            form_name => "",
+            form_email => "",
+            form_notes => "",
+            invite_token => "",
+            max_additional_guests => max_additional_guests,
+            company_link => state.company_link.read().await.clone(),
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+}
+
+async fn handle_dynamic_group_booking(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    combined_username: &str,
+    slug: &str,
+    form: &BookForm,
+) -> Response {
+    // Rate limit by IP
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .unwrap_or("unknown")
+        .trim()
+        .to_string();
+    if state.booking_limiter.check_limited(&client_ip).await {
+        tracing::warn!(ip = %client_ip, "rate limited");
+        return Html("Too many booking attempts. Please try again in a few minutes.".to_string())
+            .into_response();
+    }
+
+    if let Err(e) = validate_booking_input(&form.name, &form.email, &form.notes) {
+        return Html(e).into_response();
+    }
+
+    let usernames = match parse_dynamic_group_usernames(combined_username) {
+        Ok(u) => u,
+        Err(e) => return Html(e).into_response(),
+    };
+    let dg_users = match validate_dynamic_group_users(&state.pool, &usernames).await {
+        Ok(u) => u,
+        Err(e) => return Html(e).into_response(),
+    };
+
+    let owner_username = &usernames[0];
+    let et: Option<(String, String, String, i32, i32, i32, i32, i32, String, Option<String>, String, Option<i32>, String, i32)> = sqlx::query_as(
+        "SELECT et.id, et.slug, et.title, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.requires_confirmation, et.location_type, et.location_value, u.id, et.reminder_minutes, et.visibility, et.max_additional_guests
+         FROM event_types et
+         JOIN accounts a ON a.id = et.account_id
+         JOIN users u ON u.id = a.user_id
+         WHERE u.username = ? AND et.slug = ? AND et.enabled = 1 AND u.enabled = 1",
+    )
+    .bind(owner_username)
+    .bind(slug)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let (
+        et_id,
+        _et_slug,
+        et_title,
+        duration,
+        buffer_before,
+        buffer_after,
+        min_notice,
+        requires_confirmation,
+        loc_type,
+        loc_value,
+        owner_user_id,
+        reminder_min,
+        visibility,
+        max_additional_guests,
+    ) = match et {
+        Some(e) => e,
+        None => return Html("Event type not found.".to_string()).into_response(),
+    };
+
+    if visibility != "public" {
+        return Html("Dynamic group links are only available for public event types.".to_string())
+            .into_response();
+    }
+
+    let needs_approval = requires_confirmation != 0;
+
+    // Parse additional guests
+    let additional_attendees = match parse_additional_guests(
+        &form.additional_guests,
+        max_additional_guests,
+        &form.email,
+    ) {
+        Ok(emails) => emails,
+        Err(e) => return Html(e).into_response(),
+    };
+
+    let date = match NaiveDate::parse_from_str(&form.date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return Html("Invalid date.".to_string()).into_response(),
+    };
+    if let Err(e) = validate_date_not_too_far(date) {
+        return Html(e).into_response();
+    }
+    let start_time = match NaiveTime::parse_from_str(&form.time, "%H:%M") {
+        Ok(t) => t,
+        Err(_) => return Html("Invalid time.".to_string()).into_response(),
+    };
+
+    let slot_start = date.and_time(start_time);
+    let slot_end = slot_start + Duration::minutes(duration as i64);
+
+    let now = Local::now().naive_local();
+    if slot_start < now + Duration::minutes(min_notice as i64) {
+        return Html("This slot is no longer available (too soon).".to_string()).into_response();
+    }
+
+    let buf_start = slot_start - Duration::minutes(buffer_before as i64);
+    let buf_end = slot_end + Duration::minutes(buffer_after as i64);
+
+    // Check availability for ALL participants
+    let host_tz = get_host_tz(&state.pool, &et_id).await;
+    for (i, (uid, uname, _, _)) in dg_users.iter().enumerate() {
+        let et_filter = if i == 0 { Some(et_id.as_str()) } else { None };
+        let busy =
+            fetch_busy_times_for_user(&state.pool, uid, buf_start, buf_end, host_tz, et_filter)
+                .await;
+        if has_conflict(&busy, buf_start, buf_end) {
+            return Html(format!(
+                "This slot is no longer available ({} has a conflict).",
+                uname
+            ))
+            .into_response();
+        }
+    }
+
+    // Check booking frequency limits
+    if would_exceed_frequency_limit(&state.pool, &et_id, slot_start).await {
+        return Html("This event type has reached its booking limit for this period.".to_string())
+            .into_response();
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let uid = format!("{}@calrs", uuid::Uuid::new_v4());
+    let cancel_token = uuid::Uuid::new_v4().to_string();
+    let reschedule_token = uuid::Uuid::new_v4().to_string();
+    let start_at = slot_start.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let end_at = slot_end.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let guest_tz = parse_guest_tz(form.tz.as_deref());
+    let guest_timezone = guest_tz.name().to_string();
+
+    let initial_status = if needs_approval {
+        "pending"
+    } else {
+        "confirmed"
+    };
+    let confirm_token: Option<String> = if needs_approval {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    };
+
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return Html(format!("Database error: {}", e)).into_response(),
+    };
+
+    let insert_result = sqlx::query(
+        "INSERT INTO bookings (id, event_type_id, uid, guest_name, guest_email, guest_timezone, notes, start_at, end_at, status, cancel_token, reschedule_token, confirm_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&et_id)
+    .bind(&uid)
+    .bind(&form.name)
+    .bind(&form.email)
+    .bind(&guest_timezone)
+    .bind(&form.notes)
+    .bind(&start_at)
+    .bind(&end_at)
+    .bind(initial_status)
+    .bind(&cancel_token)
+    .bind(&reschedule_token)
+    .bind(&confirm_token)
+    .execute(&mut *tx)
+    .await;
+
+    match insert_result {
+        Ok(_) => {}
+        Err(e) => {
+            let _ = tx.rollback().await;
+            if e.to_string().contains("UNIQUE constraint failed") {
+                return Html("This slot is no longer available.".to_string()).into_response();
+            }
+            return Html(format!("Database error: {}", e)).into_response();
+        }
+    }
+
+    // Combine co-participant emails with guest-provided additional attendees
+    let co_participant_emails: Vec<String> = dg_users
+        .iter()
+        .skip(1)
+        .map(|(_, _, _, email)| email.clone())
+        .collect();
+    let all_additional: Vec<String> = co_participant_emails
+        .iter()
+        .chain(additional_attendees.iter())
+        .cloned()
+        .collect();
+
+    // Insert all additional attendees (co-participants + guest-provided)
+    for attendee_email in &all_additional {
+        let attendee_id = uuid::Uuid::new_v4().to_string();
+        let _ =
+            sqlx::query("INSERT INTO booking_attendees (id, booking_id, email) VALUES (?, ?, ?)")
+                .bind(&attendee_id)
+                .bind(&id)
+                .bind(attendee_email)
+                .execute(&mut *tx)
+                .await;
+    }
+
+    if let Err(e) = tx.commit().await {
+        if e.to_string().contains("UNIQUE constraint failed") {
+            return Html("This slot is no longer available.".to_string()).into_response();
+        }
+        return Html(format!("Database error: {}", e)).into_response();
+    }
+
+    tracing::info!(booking_id = %id, event_type = %slug, guest = %form.email, dynamic_group = %combined_username, "dynamic group booking created");
+
+    // Send emails and CalDAV write-back
+    if let Ok(Some(smtp_config)) =
+        crate::email::load_smtp_config(&state.pool, &state.secret_key).await
+    {
+        let owner_email = dg_users[0].3.clone();
+        let host_name = dg_users
+            .iter()
+            .map(|(_, _, name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(" & ");
+
+        let location_display = if loc_value.as_ref().is_some_and(|v| !v.is_empty()) {
+            loc_value.clone()
+        } else {
+            None
+        };
+        let details = crate::email::BookingDetails {
+            event_title: et_title.clone(),
+            date: form.date.clone(),
+            start_time: form.time.clone(),
+            end_time: slot_end.time().format("%H:%M").to_string(),
+            guest_name: form.name.clone(),
+            guest_email: form.email.clone(),
+            guest_timezone: guest_timezone.clone(),
+            host_name: host_name.clone(),
+            host_email: owner_email,
+            uid: uid.clone(),
+            notes: form.notes.clone(),
+            location: location_display,
+            reminder_minutes: reminder_min,
+            additional_attendees: all_additional.clone(),
+        };
+
+        let base_url = std::env::var("CALRS_BASE_URL").ok();
+        let guest_cancel_url = base_url.as_ref().map(|base| {
+            format!(
+                "{}/booking/cancel/{}",
+                base.trim_end_matches('/'),
+                cancel_token
+            )
+        });
+        let guest_reschedule_url = base_url.as_ref().map(|base| {
+            format!(
+                "{}/booking/reschedule/{}",
+                base.trim_end_matches('/'),
+                reschedule_token
+            )
+        });
+
+        if needs_approval {
+            let _ = crate::email::send_host_approval_request(
+                &smtp_config,
+                &details,
+                &id,
+                confirm_token.as_deref(),
+                base_url.as_deref(),
+            )
+            .await;
+            let _ = crate::email::send_guest_pending_notice_ex(
+                &smtp_config,
+                &details,
+                guest_cancel_url.as_deref(),
+                guest_reschedule_url.as_deref(),
+            )
+            .await;
+        } else {
+            let _ = crate::email::send_guest_confirmation_ex(
+                &smtp_config,
+                &details,
+                guest_cancel_url.as_deref(),
+                guest_reschedule_url.as_deref(),
+            )
+            .await;
+            let _ = crate::email::send_host_notification(&smtp_config, &details).await;
+            // Push to owner's CalDAV — ICS includes co-participants as ATTENDEEs
+            caldav_push_booking(
+                &state.pool,
+                &state.secret_key,
+                &owner_user_id,
+                &uid,
+                &details,
+            )
+            .await;
+        }
+    }
+
+    let host_display = dg_users
+        .iter()
+        .map(|(_, _, name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(" & ");
+    let date_label = date.format("%A, %B %-d, %Y").to_string();
+    let end_time_str = slot_end.time().format("%H:%M").to_string();
+
+    let tmpl = match state.templates.get_template("confirmed.html") {
+        Ok(t) => t,
+        Err(e) => return Html(format!("Internal error: {}", e)).into_response(),
+    };
+    Html(
+        tmpl.render(context! {
+            event_title => et_title,
+            date_label => date_label,
+            time_start => form.time,
+            time_end => end_time_str,
+            host_name => host_display,
+            guest_email => form.email,
+            notes => form.notes,
+            pending => needs_approval,
+            location_type => loc_type,
+            location_value => loc_value,
+            additional_attendees => all_additional,
+            company_link => state.company_link.read().await.clone(),
+        })
+        .unwrap_or_else(|e| format!("Template error: {}", e)),
+    )
+    .into_response()
+}
+
 // --- User-scoped booking handlers ---
 
 async fn show_slots_for_user(
@@ -6697,6 +7375,9 @@ async fn show_slots_for_user(
     Path((username, slug)): Path<(String, String)>,
     Query(query): Query<SlotsQuery>,
 ) -> impl IntoResponse {
+    if username.contains('+') {
+        return show_dynamic_group_slots(&state, &username, &slug, &query).await;
+    }
     let et: Option<(String, String, String, Option<String>, i32, i32, i32, i32, String, Option<String>, String, String, Option<String>, Option<String>, String, String)> = sqlx::query_as(
         "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.buffer_before, et.buffer_after, et.min_notice_min, et.location_type, et.location_value, u.id, u.name, u.title, u.avatar_path, et.visibility, et.default_calendar_view
          FROM event_types et
@@ -6884,6 +7565,9 @@ async fn show_book_form_for_user(
     Path((username, slug)): Path<(String, String)>,
     Query(query): Query<BookQuery>,
 ) -> impl IntoResponse {
+    if username.contains('+') {
+        return show_dynamic_group_book_form(&state, &username, &slug, &query).await;
+    }
     let et: Option<(String, String, String, Option<String>, i32, String, Option<String>, String, i32)> = sqlx::query_as(
         "SELECT et.id, et.slug, et.title, et.description, et.duration_min, et.location_type, et.location_value, et.visibility, et.max_additional_guests
          FROM event_types et
@@ -7015,6 +7699,9 @@ async fn handle_booking_for_user(
 ) -> impl IntoResponse {
     if let Err(resp) = verify_csrf_token(&headers, &form._csrf) {
         return resp;
+    }
+    if username.contains('+') {
+        return handle_dynamic_group_booking(&state, &headers, &username, &slug, &form).await;
     }
     // Rate limit by IP
     let client_ip = headers

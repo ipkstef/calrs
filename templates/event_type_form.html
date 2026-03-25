@@ -317,6 +317,28 @@
   </div>
 </div>
 
+{% if editing and not is_group and owner_username and form_visibility == "public" %}
+<!-- Card: Dynamic Group Link -->
+<div class="card" style="margin-top: 1rem;">
+  <h2>Dynamic Group Link</h2>
+  <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
+    Create an ad-hoc meeting link that checks availability for you and other users.
+  </p>
+  <div style="display: flex; gap: 0.5rem; align-items: center;">
+    <input type="text" id="dg-username-input" placeholder="Add a username" style="flex: 1; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; background: var(--surface); color: var(--text);">
+    <button type="button" id="dg-add-btn" class="btn" style="font-size: 0.85rem; padding: 0.5rem 0.75rem; white-space: nowrap;">Add</button>
+  </div>
+  <div id="dg-members" style="margin-top: 0.5rem;"></div>
+  <div id="dg-url-box" style="display: none; margin-top: 0.75rem;">
+    <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Group link URL</label>
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
+      <input type="text" id="dg-url" readonly style="flex: 1; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; font-family: monospace; background: var(--surface); color: var(--text);">
+      <button type="button" id="dg-copy-btn" class="btn" style="font-size: 0.85rem; padding: 0.5rem 0.75rem; white-space: nowrap;">Copy</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Save button -->
 <div style="margin-top: 1.25rem;">
   <button type="submit" class="btn">
@@ -888,5 +910,65 @@
     }
   });
   {% endif %}
+
+  // --- Dynamic Group Link URL builder ---
+  (function() {
+    var addBtn = document.getElementById('dg-add-btn');
+    if (!addBtn) return; // card not rendered (not editing, team, or non-public)
+    var input = document.getElementById('dg-username-input');
+    var membersDiv = document.getElementById('dg-members');
+    var urlBox = document.getElementById('dg-url-box');
+    var urlInput = document.getElementById('dg-url');
+    var copyBtn = document.getElementById('dg-copy-btn');
+    var owner = '{{ owner_username }}';
+    var slug = '{{ form_slug }}';
+    var extras = [];
+
+    function updateUrl() {
+      if (extras.length === 0) {
+        urlBox.style.display = 'none';
+        return;
+      }
+      var combined = [owner].concat(extras).join('+');
+      var base = location.origin || (location.protocol + '//' + location.host);
+      urlInput.value = base + '/u/' + combined + '/' + slug;
+      urlBox.style.display = '';
+    }
+
+    function renderMembers() {
+      membersDiv.innerHTML = '';
+      extras.forEach(function(u, i) {
+        var tag = document.createElement('span');
+        tag.style.cssText = 'display:inline-flex;align-items:center;gap:0.25rem;padding:0.25rem 0.5rem;background:var(--surface-hover);border-radius:var(--radius);font-size:0.8rem;margin:0.25rem 0.25rem 0 0;';
+        tag.textContent = u + ' ';
+        var rm = document.createElement('button');
+        rm.type = 'button';
+        rm.textContent = '\u00d7';
+        rm.style.cssText = 'background:none;border:none;color:var(--error-text);cursor:pointer;font-size:1rem;padding:0;line-height:1;';
+        rm.onclick = function() { extras.splice(i, 1); renderMembers(); updateUrl(); };
+        tag.appendChild(rm);
+        membersDiv.appendChild(tag);
+      });
+    }
+
+    function addUsername() {
+      var val = input.value.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
+      if (!val || val === owner || extras.indexOf(val) !== -1) { input.value = ''; return; }
+      extras.push(val);
+      input.value = '';
+      renderMembers();
+      updateUrl();
+    }
+
+    addBtn.onclick = addUsername;
+    input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); addUsername(); } });
+    copyBtn.onclick = function() {
+      urlInput.select();
+      navigator.clipboard.writeText(urlInput.value).then(function() {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(function() { copyBtn.textContent = 'Copy'; }, 2000);
+      });
+    };
+  })();
 </script>
 {% endblock dashboard_content %}

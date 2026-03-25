@@ -118,6 +118,14 @@
       <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Your availability rules and booking times are computed in this timezone.</span>
     </div>
 
+    <div class="form-group" style="margin-top: 1rem;">
+      <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+        <input type="checkbox" name="allow_dynamic_group" {% if allow_dynamic_group %}checked{% endif %} style="width: auto;">
+        Allow others to include me in dynamic group links
+      </label>
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">When enabled, other users can create ad-hoc collective meeting URLs that include you (e.g. <code>/u/you+them/meeting</code>).</span>
+    </div>
+
     <button type="submit" class="btn" style="margin-top: 1.5rem;">Save settings</button>
   </form>
 </div>

@@ -374,6 +374,10 @@ Data is stored at `$XDG_DATA_HOME/calrs/calrs.db` (typically `~/.local/share/cal
 - Lint: `cargo clippy -- -D warnings`
 - Format: `cargo fmt`
 
+### Coding style (enforced by pre-commit hook)
+
+**Always run `cargo fmt` on any modified Rust file before committing.** The pre-commit hook runs `cargo fmt --check` and will reject unformatted code. When editing Rust code, write it in `rustfmt`-canonical style from the start — in particular, if a function call with arguments fits on one line after formatting, don't split it across multiple lines.
+
 ### Known compiler warnings (intentional)
 
 The following `dead_code` warnings are expected and should **not** be suppressed:
