@@ -63,6 +63,10 @@
     <td align="center"><img src="assets/screenshots/reschedule-confirm.png" width="400"><br><b>Reschedule confirmation</b></td>
   </tr>
   <tr>
+    <td align="center"><img src="assets/screenshots/dynamic-group-slots.png" width="400"><br><b>Dynamic group link</b></td>
+    <td align="center"><img src="assets/screenshots/dynamic-group-card.png" width="400"><br><b>Dynamic group link builder</b></td>
+  </tr>
+  <tr>
     <td align="center" colspan="2">
       <img src="assets/screenshots/slots-light.png" width="400"><br><b>Light mode</b>
     </td>
@@ -89,6 +93,7 @@
 - **Availability troubleshoot** — visual timeline showing why slots are available or blocked, with event details
 - **Calendar view toggle** — guests can switch between month grid, week columns, and column (list) views on the slot picker. Hosts set the default view per event type
 - **Booking limits** — cap bookings per day/week/month/year, or show only the earliest slot per day (one slot per day mode)
+- **Dynamic group links** — combine usernames in a URL (`/u/alice+bob/intro`) for instant collective meetings without creating a team. All participants' calendars are intersected. Autocomplete user picker in the event type editor, opt-out toggle in settings
 
 ### CalDAV integration
 
@@ -112,7 +117,7 @@
 
 ### Meeting types
 
-calrs supports six distinct booking scenarios. Each serves a different use case — there is no overlap:
+calrs supports seven distinct booking scenarios. Each serves a different use case — there is no overlap:
 
 | Type | Who books? | How do they find it? | Assigned to | Example |
 |---|---|---|---|---|
@@ -122,6 +127,7 @@ calrs supports six distinct booking scenarios. Each serves a different use case 
 | **Team (public)** | Anyone | Listed on team page | Round-robin (least busy) | Public "Support Call" page |
 | **Team (internal)** | Invited guests only | Any employee generates a link | Round-robin (least busy) | Cross-team: Sales shares Support booking links with customers |
 | **Team (private)** | Invited guests only | Owner sends an invite link | Round-robin (least busy) | Demo team: sales manager sends links to qualified leads |
+| **Dynamic group** | Anyone with the URL | Ad-hoc link: `/u/alice+bob/slug` | Event type owner | One-off sales call needing engineering support |
 
 ### Teams
 
