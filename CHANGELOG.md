@@ -114,6 +114,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Booking frequency limits | 1.1.0 | Cap bookings per day/week/month/year per event type |
 | One slot per day | 1.1.0 | Show only the earliest available time each day |
 | Event type form redesign | 1.1.0 | Reorganized into focused cards: Booking Options, Access, Notifications |
+| Dynamic group links | 1.2.0 | Ad-hoc collective meetings via `/u/alice+bob/slug` — no team setup needed |
+| OIDC team member roles | 1.2.0 | Set admin/member role on OIDC-synced team members without permission sync |
+| SOGo CalDAV compatibility | 1.2.0 | Handle arbitrary XML namespace prefixes in CalDAV parser |
+
+## [1.2.0] - 2026-03-25
+
+Ad-hoc collective scheduling and team permission improvements.
+
+### Added
+
+- **Dynamic group links** — combine usernames in a URL (`/u/alice+bob/intro`) to create instant collective meetings. The first user's event type defines settings (duration, buffers, availability rules); all participants' calendars are intersected to show only mutually available slots
+  - **Opt-out setting** — users can disable being included in dynamic group links from Profile & Settings (enabled by default)
+  - **Stacked avatars** — dynamic group slots page shows overlapping avatar circles for all participants
+  - **Autocomplete user picker** — event type edit page has a search-as-you-type dropdown to build dynamic group URLs, filtered to users who opted in
+  - **CalDAV write-back with attendees** — confirmed bookings are pushed to the owner's calendar with co-participants as ATTENDEE in the ICS; CalDAV servers propagate the invite
+- **OIDC team member role management** — team admins can now set admin/member roles on OIDC group-synced members directly from the team settings UI. Locally-set roles are preserved across OIDC login sync
+
+### Fixed
+
+- Team role dropdown now uses a `<select>` element instead of a toggle button for clearer UX
+- CalDAV XML parser handles arbitrary namespace prefixes (e.g. SOGo's non-standard prefixes) instead of requiring specific ones
 
 ## [1.1.0] - 2026-03-20
 
