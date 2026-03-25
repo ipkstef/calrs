@@ -117,6 +117,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Dynamic group links | 1.2.0 | Ad-hoc collective meetings via `/u/alice+bob/slug` — no team setup needed |
 | OIDC team member roles | 1.2.0 | Set admin/member role on OIDC-synced team members without permission sync |
 | SOGo CalDAV compatibility | 1.2.0 | Handle arbitrary XML namespace prefixes in CalDAV parser |
+| Default availability | 1.3.0 | Per-user working hours used by dynamic group links to constrain participants |
+| Deferred slot loading | 1.3.0 | Instant page render with async slot computation for dynamic group links |
+| Force full resync | 1.3.0 | Dashboard button + automatic 24h periodic full resync to catch deleted events |
+
+## [1.3.0] - 2026-03-25
+
+Per-user default availability, instant page loads for dynamic group links, and sync reliability improvements.
+
+### Added
+
+- **Per-user default availability** — set your working hours in Profile & Settings. Used by dynamic group links to constrain participants' availability (e.g., no slots outside your 9-17 window). Auto-seeded to Mon-Fri 9:00-17:00 on first use. Timezone-aware: a New York participant's 9-17 correctly maps to 15-23 in Paris
+- **Dashboard onboarding banner** — one-time notice about default availability with a direct link to Settings#availability. Dismissable
+- **Deferred slot loading** — dynamic group link pages render instantly with a spinner, then fetch availability asynchronously. Prevents 10s+ waits when multiple users' CalDAV calendars need syncing
+- **Force full resync button** — "Full resync" on the dashboard sources page clears sync tokens and re-fetches all events from the server, detecting deletions that delta sync missed
+- **Automatic full resync every 24h** — the background sync loop forces a full resync per source once per day, catching orphaned events automatically (e.g., events deleted in BlueMind that sync-collection didn't report)
+
+### Fixed
+
+- Dynamic group slot page: avatars stacked vertically above names to prevent layout overflow with many participants
+- Dynamic group deferred loading: `clearSlotPanel()` was destroying the slot panel title element, causing `selectDay()` to crash on the deferred callback
+- Dynamic group month navigation: prev/next month fetched without `&deferred=1`, returning empty slots instead of computed data
+- Deferred slot loading: show "No availability found for all participants" instead of misleading "Click a highlighted date" when no mutual slots exist
+- Event type form: empty numeric fields (buffer, duration, etc.) no longer crash with "cannot parse integer from empty string"
+- Participant availability timezone conversion: rules are now interpreted in each participant's timezone and converted to the host's timezone for slot computation
+- Orphan detection logging: remote vs local event counts per calendar, individual UIDs being removed
 
 ## [1.2.0] - 2026-03-25
 
