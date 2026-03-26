@@ -3324,6 +3324,10 @@ async fn new_event_type_form(
         })
         .collect();
 
+    // Pre-fill availability from user's default schedule
+    ensure_user_avail_seeded(&state.pool, &user.id).await;
+    let user_avail = load_user_avail_schedule(&state.pool, &user.id).await;
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -3351,9 +3355,7 @@ async fn new_event_type_form(
             form_visibility => match preset { "private" => "private", "internal" => "internal", _ => "public" },
             form_location_type => "link",
             form_location_value => "",
-            form_avail_days => "1,2,3,4,5",
-            form_avail_start => "09:00",
-            form_avail_end => "17:00",
+            form_avail_schedule => user_avail,
             form_reminder_minutes => 1440,
             form_max_additional_guests => 0,
             form_default_calendar_view => "month",
@@ -3461,6 +3463,17 @@ async fn create_event_type(
         .location_value
         .as_deref()
         .filter(|s| !s.trim().is_empty());
+
+    if location_value.is_none() {
+        return render_event_type_form_error(
+            &state,
+            &auth_user,
+            "Location details are required (e.g. a video call link, phone number, or address).",
+            &form,
+            false,
+        )
+        .into_response();
+    }
 
     // Verify team membership if a team_id is specified
     if let Some(tid) = team_id {
@@ -3926,6 +3939,17 @@ async fn update_event_type(
         .location_value
         .as_deref()
         .filter(|s| !s.trim().is_empty());
+
+    if location_value.is_none() {
+        return render_event_type_form_error(
+            &state,
+            &auth_user,
+            "Location details are required (e.g. a video call link, phone number, or address).",
+            &form,
+            true,
+        )
+        .into_response();
+    }
 
     let reminder_minutes = {
         let v = parse_int_field(&form.reminder_minutes, 0);
@@ -5441,6 +5465,10 @@ async fn new_group_event_type_form(
         .map(|(id, name)| context! { id => id, name => name })
         .collect();
 
+    // Pre-fill availability from user's default schedule
+    ensure_user_avail_seeded(&state.pool, &user.id).await;
+    let user_avail = load_user_avail_schedule(&state.pool, &user.id).await;
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -5463,9 +5491,7 @@ async fn new_group_event_type_form(
             form_requires_confirmation => false,
             form_location_type => "link",
             form_location_value => "",
-            form_avail_days => "1,2,3,4,5",
-            form_avail_start => "09:00",
-            form_avail_end => "17:00",
+            form_avail_schedule => user_avail,
             form_default_calendar_view => "month",
             form_first_slot_only => false,
             form_frequency_limits => "",
@@ -5557,6 +5583,17 @@ async fn create_group_event_type(
         .location_value
         .as_deref()
         .filter(|s| !s.trim().is_empty());
+
+    if location_value.is_none() {
+        return render_event_type_form_error(
+            &state,
+            &auth_user,
+            "Location details are required (e.g. a video call link, phone number, or address).",
+            &form,
+            false,
+        )
+        .into_response();
+    }
 
     let default_calendar_view = match form.default_calendar_view.as_deref().unwrap_or("month") {
         v @ ("month" | "week" | "column") => v.to_string(),
@@ -5898,6 +5935,18 @@ async fn update_group_event_type(
         .location_value
         .as_deref()
         .filter(|s| !s.trim().is_empty());
+
+    if location_value.is_none() {
+        return render_event_type_form_error(
+            &state,
+            &auth_user,
+            "Location details are required (e.g. a video call link, phone number, or address).",
+            &form,
+            true,
+        )
+        .into_response();
+    }
+
     let reminder_minutes = {
         let v = parse_int_field(&form.reminder_minutes, 0);
         if v > 0 {
@@ -15690,7 +15739,7 @@ mod tests {
         let (app, pool, session, _) = setup_test_app().await;
         let csrf = "test-csrf-create-et";
         let body = format!(
-            "_csrf={}&title=New+Meeting&slug=new-meeting&duration_min=45&avail_days=1,2,3,4,5&avail_start=09:00&avail_end=17:00",
+            "_csrf={}&title=New+Meeting&slug=new-meeting&duration_min=45&location_value=https%3A%2F%2Fmeet.example.com&avail_days=1,2,3,4,5&avail_start=09:00&avail_end=17:00",
             csrf
         );
         let response = app
@@ -16424,7 +16473,7 @@ mod tests {
         let (app, pool, session, _) = setup_test_app().await;
         let csrf = "test-csrf-update-et";
         let body = format!(
-            "_csrf={}&title=Updated+Title&slug=test-meeting&duration_min=30&avail_days=1,2,3,4,5&avail_start=09:00&avail_end=17:00",
+            "_csrf={}&title=Updated+Title&slug=test-meeting&duration_min=30&location_value=https%3A%2F%2Fmeet.example.com&avail_days=1,2,3,4,5&avail_start=09:00&avail_end=17:00",
             csrf
         );
         let response = app
@@ -16622,7 +16671,7 @@ mod tests {
         let (app, pool, session, _) = setup_test_app().await;
         let csrf = "test-csrf-multi-win";
         let body = format!(
-            "_csrf={}&title=Split+Day&slug=split-day&duration_min=30&avail_days=1,2,3,4,5&avail_windows=09%3A00-12%3A00%2C13%3A00-17%3A00",
+            "_csrf={}&title=Split+Day&slug=split-day&duration_min=30&location_value=https%3A%2F%2Fmeet.example.com&avail_days=1,2,3,4,5&avail_windows=09%3A00-12%3A00%2C13%3A00-17%3A00",
             csrf
         );
         let response = app

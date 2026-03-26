@@ -74,9 +74,92 @@
     </div>
     <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Shown on the booking page. Supports **bold**, *italic*, and [links](url).</span>
   </div>
+
+  <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.75rem; align-items: start;" class="form-grid-2">
+    <div class="form-group" style="min-width: 140px;">
+      <label for="location_type">Location</label>
+      <select id="location_type" name="location_type" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        <option value="link" {% if form_location_type == "link" %}selected{% endif %}>Video call</option>
+        <option value="phone" {% if form_location_type == "phone" %}selected{% endif %}>Phone</option>
+        <option value="in_person" {% if form_location_type == "in_person" %}selected{% endif %}>In person</option>
+        <option value="custom" {% if form_location_type == "custom" %}selected{% endif %}>Custom</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="location_value">Details</label>
+      <input type="text" id="location_value" name="location_value" required value="{{ form_location_value }}" placeholder="https://meet.example.com/my-room">
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label for="duration_min">Duration (minutes)</label>
+    <input type="number" id="duration_min" name="duration_min" required value="{{ form_duration }}" min="5" max="480" step="5">
+  </div>
 </div>
 
 <style>
+  /* Collapsible sections */
+  .collapsible-section { overflow: visible; }
+  .collapsible-section > .collapsible-header {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    list-style: none;
+    padding: 0;
+    gap: 0.75rem;
+    user-select: none;
+  }
+  .collapsible-section > .collapsible-header::-webkit-details-marker { display: none; }
+  .collapsible-section > .collapsible-header h2 { margin: 0; flex-shrink: 0; }
+  .collapsible-section > .collapsible-header .collapsible-hint {
+    flex: 1;
+    text-align: right;
+    font-size: 0.825rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .collapsible-section > .collapsible-header .collapsible-chevron {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease;
+  }
+  .collapsible-section > .collapsible-header .collapsible-chevron::after {
+    content: '';
+    display: block;
+    width: 7px;
+    height: 7px;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    transform: rotate(-45deg);
+    transition: transform 0.2s ease;
+  }
+  .collapsible-section[open] > .collapsible-header .collapsible-chevron::after {
+    transform: rotate(45deg);
+  }
+  .collapsible-section > .collapsible-body {
+    padding-top: 0.75rem;
+    margin-top: 0.75rem;
+    border-top: 1px solid var(--border);
+  }
+  /* Animation styles — only applied via JS class during transitions */
+  .collapsible-section.animating > .collapsible-body {
+    overflow: hidden;
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+  }
+  .collapsible-section > .collapsible-header .collapsible-hint {
+    transition: opacity 0.2s ease;
+  }
+  .collapsible-section[open] > .collapsible-header .collapsible-hint {
+    opacity: 0.4;
+  }
+
   .priority-btn {
     padding: 0.3rem 0.75rem;
     font-size: 0.8rem;
@@ -133,189 +216,183 @@
 </div>
 {% endif %}
 
-<!-- Card 3: Scheduling -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Scheduling</h2>
-
-  <div class="form-group">
-    <label for="duration_min">Duration (minutes)</label>
-    <input type="number" id="duration_min" name="duration_min" required value="{{ form_duration }}" min="5" max="480" step="5">
-  </div>
-
-  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;" class="form-grid-2">
-    <div class="form-group">
-      <label for="buffer_before">Buffer before (min)</label>
-      <input type="number" id="buffer_before" name="buffer_before" value="{{ form_buffer_before }}" min="0" max="120" step="5">
-    </div>
-    <div class="form-group">
-      <label for="buffer_after">Buffer after (min)</label>
-      <input type="number" id="buffer_after" name="buffer_after" value="{{ form_buffer_after }}" min="0" max="120" step="5">
-    </div>
-  </div>
-
-  <div class="form-group">
-    <label for="min_notice_value">Minimum notice</label>
-    <div style="display: flex; gap: 0.5rem; align-items: center;">
-      <input type="number" id="min_notice_value" value="" min="0" step="1" style="flex: 1; max-width: 120px;">
-      <select id="min_notice_unit" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text);">
-        <option value="1">minutes</option>
-        <option value="60">hours</option>
-        <option value="1440">days</option>
-      </select>
-    </div>
-    <input type="hidden" id="min_notice_min" name="min_notice_min" value="{{ form_min_notice }}">
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">How far in advance someone must book.</span>
-  </div>
-
-  <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-      <h3 style="font-size: 0.95rem; margin-bottom: 0;">Availability</h3>
+<!-- Collapsible: Availability -->
+<details class="card collapsible-section" style="margin-top: 1rem;" id="scheduling-section"{% if editing %} open{% endif %}>
+  <summary class="collapsible-header"><h2>Availability</h2><span class="collapsible-hint" id="scheduling-hint"></span><span class="collapsible-chevron"></span></summary>
+  <div class="collapsible-body">
+    <div id="schedule-container" style="display: flex; flex-direction: column; gap: 0.25rem;"></div>
+    <div style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
       <button type="button" id="copy-to-all-btn" style="padding: 0.25rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.75rem; transition: all 0.15s ease;" title="Copy the first enabled day's windows to all other enabled days">Copy to all days</button>
     </div>
-    <div id="schedule-container" style="display: flex; flex-direction: column; gap: 0.25rem;"></div>
     <input type="hidden" name="avail_schedule" id="avail_schedule" value="{{ form_avail_schedule | default(value='') }}">
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.5rem;">Set different hours for each day. Use + to add multiple windows (e.g. morning + afternoon).</span>
+    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.5rem;">Pre-filled from your <a href="/dashboard/settings#availability" style="color: var(--accent);">default availability</a>. You can override it here for this event type.</span>
   </div>
-</div>
+</details>
 
-<!-- Card: Booking Limits -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Booking limits</h2>
-
-  <!-- One slot per day toggle -->
-  <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);">
-    <div>
-      <strong style="font-size: 0.925rem;">One slot per day</strong>
-      <div style="color: var(--text-muted); font-size: 0.825rem;">Only show the earliest available time each day.</div>
+<!-- Collapsible: Buffers & notice -->
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and ((form_buffer_before is defined and form_buffer_before and form_buffer_before != "0") or (form_buffer_after is defined and form_buffer_after and form_buffer_after != "0") or (form_min_notice is defined and form_min_notice and form_min_notice != "0")) %} open{% endif %}>
+  <summary class="collapsible-header">
+    <h2>Buffers &amp; notice</h2>
+    <span class="collapsible-hint" id="buffers-hint"></span>
+    <span class="collapsible-chevron"></span>
+  </summary>
+  <div class="collapsible-body">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;" class="form-grid-2">
+      <div class="form-group">
+        <label for="buffer_before">Buffer before (min)</label>
+        <input type="number" id="buffer_before" name="buffer_before" value="{{ form_buffer_before }}" min="0" max="120" step="5">
+      </div>
+      <div class="form-group">
+        <label for="buffer_after">Buffer after (min)</label>
+        <input type="number" id="buffer_after" name="buffer_after" value="{{ form_buffer_after }}" min="0" max="120" step="5">
+      </div>
     </div>
-    <label style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;">
-      <input type="checkbox" name="first_slot_only" {% if form_first_slot_only %}checked{% endif %} autocomplete="off" style="opacity: 0; width: 0; height: 0;" id="first-slot-toggle">
-      <span style="position: absolute; cursor: pointer; inset: 0; background: #71717a; border-radius: 24px; transition: 0.2s;" id="first-slot-track">
-        <span style="position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s;" id="first-slot-knob"></span>
-      </span>
-    </label>
-  </div>
-
-  <!-- Frequency limits toggle -->
-  <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); margin-top: 0.5rem;">
-    <div>
-      <strong style="font-size: 0.925rem;">Limit booking frequency</strong>
-      <div style="color: var(--text-muted); font-size: 0.825rem;">Limit how many times this event can be booked per period.</div>
+    <div class="form-group">
+      <label for="min_notice_value">Minimum notice</label>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <input type="number" id="min_notice_value" value="" min="0" step="1" style="flex: 1; max-width: 120px;">
+        <select id="min_notice_unit" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text);">
+          <option value="1">minutes</option>
+          <option value="60">hours</option>
+          <option value="1440">days</option>
+        </select>
+      </div>
+      <input type="hidden" id="min_notice_min" name="min_notice_min" value="{{ form_min_notice }}">
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">How far in advance someone must book.</span>
     </div>
-    <label style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;">
-      <input type="checkbox" id="freq-limit-toggle" autocomplete="off" style="opacity: 0; width: 0; height: 0;">
-      <span style="position: absolute; cursor: pointer; inset: 0; background: #71717a; border-radius: 24px; transition: 0.2s;" id="freq-toggle-track">
-        <span style="position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s;" id="freq-toggle-knob"></span>
-      </span>
-    </label>
   </div>
-  <div id="freq-limits-container" style="display: none; margin-top: 0.5rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);">
-    <div id="freq-limits-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
-    <button type="button" id="add-freq-limit" style="margin-top: 0.75rem; padding: 0.375rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; transition: all 0.15s ease;">+ Add limit</button>
-  </div>
-  <input type="hidden" name="frequency_limits" id="frequency_limits" value="{{ form_frequency_limits | default(value='') }}">
-</div>
+</details>
 
-<!-- Card 4: Location -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Location</h2>
-  <div class="form-group">
-    <label for="location_type">Type</label>
-    <select id="location_type" name="location_type" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="link" {% if form_location_type == "link" %}selected{% endif %}>Video call link</option>
-      <option value="phone" {% if form_location_type == "phone" %}selected{% endif %}>Phone call</option>
-      <option value="in_person" {% if form_location_type == "in_person" %}selected{% endif %}>In person</option>
-      <option value="custom" {% if form_location_type == "custom" %}selected{% endif %}>Custom</option>
-    </select>
-  </div>
-  <div class="form-group">
-    <label for="location_value">Location details <span class="hint">(URL, phone number, address, etc.)</span></label>
-    <input type="text" id="location_value" name="location_value" value="{{ form_location_value }}" placeholder="https://meet.example.com/my-room">
-  </div>
-</div>
-
-<!-- Card 5: Calendars (if available) -->
-{% if calendars is defined and calendars %}
-<div class="card" style="margin-top: 1rem;">
-  <h2>Calendars</h2>
-  <span class="hint" style="font-size: 0.825rem; color: var(--text-muted); display: block; margin-bottom: 0.75rem;">Select which calendars to check for conflicts. If none selected, all calendars are used.</span>
-  <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-    {% set selected_padded = "," ~ selected_calendar_ids ~ "," %}
-    {% for cal in calendars %}
-      <label style="display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; transition: all 0.15s ease;">
-        <input type="checkbox" class="cal-check" value="{{ cal.id }}" {% if ("," ~ cal.id ~ ",") in selected_padded %}checked{% endif %} style="accent-color: var(--accent);">
-        {{ cal.name }}
+<!-- Collapsible: Booking limits -->
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and (form_first_slot_only or (form_frequency_limits is defined and form_frequency_limits)) %} open{% endif %}>
+  <summary class="collapsible-header">
+    <h2>Booking limits</h2>
+    <span class="collapsible-hint" id="limits-hint"></span>
+    <span class="collapsible-chevron"></span>
+  </summary>
+  <div class="collapsible-body">
+    <!-- One slot per day toggle -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);">
+      <div>
+        <strong style="font-size: 0.925rem;">One slot per day</strong>
+        <div style="color: var(--text-muted); font-size: 0.825rem;">Only show the earliest available time each day.</div>
+      </div>
+      <label style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;">
+        <input type="checkbox" name="first_slot_only" {% if form_first_slot_only %}checked{% endif %} autocomplete="off" style="opacity: 0; width: 0; height: 0;" id="first-slot-toggle">
+        <span style="position: absolute; cursor: pointer; inset: 0; background: #71717a; border-radius: 24px; transition: 0.2s;" id="first-slot-track">
+          <span style="position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s;" id="first-slot-knob"></span>
+        </span>
       </label>
-    {% endfor %}
-  </div>
-  <input type="hidden" name="calendar_ids" id="calendar_ids" value="{{ selected_calendar_ids }}">
-</div>
-{% endif %}
-
-<!-- Card: Booking options -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Booking options</h2>
-
-  <label style="display: flex; align-items: center; gap: 0.625rem; cursor: pointer; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); transition: all 0.15s ease;">
-    <input type="checkbox" name="requires_confirmation" {% if form_requires_confirmation %}checked{% endif %} style="accent-color: var(--accent); width: 1.125rem; height: 1.125rem;">
-    <div>
-      <strong style="font-size: 0.925rem;">Requires confirmation</strong>
-      <div style="color: var(--text-muted); font-size: 0.825rem;">Bookings will be pending until you approve them from the dashboard.</div>
     </div>
-  </label>
 
-  <div class="form-group" style="margin-top: 0.75rem;">
-    <label for="max_additional_guests">Additional guests</label>
-    <select id="max_additional_guests" name="max_additional_guests" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="0" {% if form_max_additional_guests == 0 %}selected{% endif %}>Guests cannot add others</option>
-      <option value="1" {% if form_max_additional_guests == 1 %}selected{% endif %}>Up to 1 additional guest</option>
-      <option value="3" {% if form_max_additional_guests == 3 %}selected{% endif %}>Up to 3 additional guests</option>
-      <option value="5" {% if form_max_additional_guests == 5 %}selected{% endif %}>Up to 5 additional guests</option>
-      <option value="10" {% if form_max_additional_guests == 10 %}selected{% endif %}>Up to 10 additional guests</option>
-    </select>
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Allow the person booking to invite additional attendees who will receive the calendar invite.</span>
+    <!-- Frequency limits toggle -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); margin-top: 0.5rem;">
+      <div>
+        <strong style="font-size: 0.925rem;">Limit booking frequency</strong>
+        <div style="color: var(--text-muted); font-size: 0.825rem;">Limit how many times this event can be booked per period.</div>
+      </div>
+      <label style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;">
+        <input type="checkbox" id="freq-limit-toggle" autocomplete="off" style="opacity: 0; width: 0; height: 0;">
+        <span style="position: absolute; cursor: pointer; inset: 0; background: #71717a; border-radius: 24px; transition: 0.2s;" id="freq-toggle-track">
+          <span style="position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s;" id="freq-toggle-knob"></span>
+        </span>
+      </label>
+    </div>
+    <div id="freq-limits-container" style="display: none; margin-top: 0.5rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);">
+      <div id="freq-limits-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+      <button type="button" id="add-freq-limit" style="margin-top: 0.75rem; padding: 0.375rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; transition: all 0.15s ease;">+ Add limit</button>
+    </div>
+    <input type="hidden" name="frequency_limits" id="frequency_limits" value="{{ form_frequency_limits | default(value='') }}">
   </div>
+</details>
 
-  <div class="form-group" style="margin-top: 0.75rem;">
-    <label for="default_calendar_view">Default calendar view</label>
-    <select id="default_calendar_view" name="default_calendar_view" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="month" {% if form_default_calendar_view is not defined or form_default_calendar_view == "month" %}selected{% endif %}>Month — calendar grid with slot list</option>
-      <option value="week" {% if form_default_calendar_view == "week" %}selected{% endif %}>Week — 7-day columns with time slots</option>
-      <option value="column" {% if form_default_calendar_view == "column" %}selected{% endif %}>Column — days listed with inline slots</option>
-    </select>
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">The view guests see by default. They can switch views anytime.</span>
-  </div>
-</div>
+<!-- Collapsible: Booking options -->
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and (form_requires_confirmation or (form_max_additional_guests is defined and form_max_additional_guests and form_max_additional_guests != 0) or (form_default_calendar_view is defined and form_default_calendar_view and form_default_calendar_view != "month")) %} open{% endif %}>
+  <summary class="collapsible-header">
+    <h2>Booking options</h2>
+    <span class="collapsible-hint" id="options-hint"></span>
+    <span class="collapsible-chevron"></span>
+  </summary>
+  <div class="collapsible-body">
+    <label style="display: flex; align-items: center; gap: 0.625rem; cursor: pointer; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); transition: all 0.15s ease;">
+      <input type="checkbox" name="requires_confirmation" {% if form_requires_confirmation %}checked{% endif %} style="accent-color: var(--accent); width: 1.125rem; height: 1.125rem;">
+      <div>
+        <strong style="font-size: 0.925rem;">Requires confirmation</strong>
+        <div style="color: var(--text-muted); font-size: 0.825rem;">Bookings will be pending until you approve them from the dashboard.</div>
+      </div>
+    </label>
 
-<!-- Card: Access -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Access</h2>
-  <div class="form-group">
-    <label for="visibility">Visibility</label>
-    <select id="visibility" name="visibility" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="public" {% if form_visibility is not defined or form_visibility == "public" %}selected{% endif %}>Public — visible on your profile</option>
-      <option value="internal" {% if form_visibility == "internal" %}selected{% endif %}>Internal — any colleague can generate invite links</option>
-      <option value="private" {% if form_visibility == "private" %}selected{% endif %}>Private — invite link only</option>
-    </select>
-    <span class="hint" style="display: block; margin-top: 0.25rem;">Controls who can see and book this event type.</span>
-  </div>
-</div>
+    <div class="form-group" style="margin-top: 0.75rem;">
+      <label for="max_additional_guests">Additional guests</label>
+      <select id="max_additional_guests" name="max_additional_guests" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        <option value="0" {% if form_max_additional_guests == 0 %}selected{% endif %}>Guests cannot add others</option>
+        <option value="1" {% if form_max_additional_guests == 1 %}selected{% endif %}>Up to 1 additional guest</option>
+        <option value="3" {% if form_max_additional_guests == 3 %}selected{% endif %}>Up to 3 additional guests</option>
+        <option value="5" {% if form_max_additional_guests == 5 %}selected{% endif %}>Up to 5 additional guests</option>
+        <option value="10" {% if form_max_additional_guests == 10 %}selected{% endif %}>Up to 10 additional guests</option>
+      </select>
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Allow the person booking to invite additional attendees who will receive the calendar invite.</span>
+    </div>
 
-<!-- Card: Notifications -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Notifications</h2>
-  <div class="form-group">
-    <label for="reminder_minutes">Booking reminder</label>
-    <select id="reminder_minutes" name="reminder_minutes" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
-      <option value="0" {% if form_reminder_minutes == 0 %}selected{% endif %}>No reminder</option>
-      <option value="60" {% if form_reminder_minutes == 60 %}selected{% endif %}>1 hour before</option>
-      <option value="240" {% if form_reminder_minutes == 240 %}selected{% endif %}>4 hours before</option>
-      <option value="1440" {% if form_reminder_minutes == 1440 %}selected{% endif %}>1 day before</option>
-      <option value="2880" {% if form_reminder_minutes == 2880 %}selected{% endif %}>2 days before</option>
-    </select>
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Send a reminder email to both you and your guest before the meeting.</span>
+    <div class="form-group" style="margin-top: 0.75rem;">
+      <label for="default_calendar_view">Default calendar view</label>
+      <select id="default_calendar_view" name="default_calendar_view" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        <option value="month" {% if form_default_calendar_view is not defined or form_default_calendar_view == "month" %}selected{% endif %}>Month — calendar grid with slot list</option>
+        <option value="week" {% if form_default_calendar_view == "week" %}selected{% endif %}>Week — 7-day columns with time slots</option>
+        <option value="column" {% if form_default_calendar_view == "column" %}selected{% endif %}>Column — days listed with inline slots</option>
+      </select>
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">The view guests see by default. They can switch views anytime.</span>
+    </div>
+
+    {% if calendars is defined and calendars %}
+    <div style="border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 0.75rem;">
+      <label style="font-weight: 600; font-size: 0.925rem; display: block; margin-bottom: 0.5rem;">Conflict calendars</label>
+      <span class="hint" style="font-size: 0.825rem; color: var(--text-muted); display: block; margin-bottom: 0.75rem;">Select which calendars to check for conflicts. If none selected, all calendars are used.</span>
+      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+        {% set selected_padded = "," ~ selected_calendar_ids ~ "," %}
+        {% for cal in calendars %}
+          <label style="display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; transition: all 0.15s ease;">
+            <input type="checkbox" class="cal-check" value="{{ cal.id }}" {% if ("," ~ cal.id ~ ",") in selected_padded %}checked{% endif %} style="accent-color: var(--accent);">
+            {{ cal.name }}
+          </label>
+        {% endfor %}
+      </div>
+      <input type="hidden" name="calendar_ids" id="calendar_ids" value="{{ selected_calendar_ids }}">
+    </div>
+    {% endif %}
   </div>
-</div>
+</details>
+
+<!-- Collapsible: Access & notifications -->
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and ((form_visibility is defined and form_visibility and form_visibility != "public") or (form_reminder_minutes is defined and form_reminder_minutes and form_reminder_minutes != 0)) %} open{% endif %}>
+  <summary class="collapsible-header">
+    <h2>Access &amp; notifications</h2>
+    <span class="collapsible-hint" id="access-hint"></span>
+    <span class="collapsible-chevron"></span>
+  </summary>
+  <div class="collapsible-body">
+    <div class="form-group">
+      <label for="visibility">Visibility</label>
+      <select id="visibility" name="visibility" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        <option value="public" {% if form_visibility is not defined or form_visibility == "public" %}selected{% endif %}>Public — visible on your profile</option>
+        <option value="internal" {% if form_visibility == "internal" %}selected{% endif %}>Internal — any colleague can generate invite links</option>
+        <option value="private" {% if form_visibility == "private" %}selected{% endif %}>Private — invite link only</option>
+      </select>
+      <span class="hint" style="display: block; margin-top: 0.25rem;">Controls who can see and book this event type.</span>
+    </div>
+    <div class="form-group" style="margin-top: 0.75rem;">
+      <label for="reminder_minutes">Booking reminder</label>
+      <select id="reminder_minutes" name="reminder_minutes" style="padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.925rem; font-family: inherit; background: var(--surface); color: var(--text); width: 100%;">
+        <option value="0" {% if form_reminder_minutes == 0 %}selected{% endif %}>No reminder</option>
+        <option value="60" {% if form_reminder_minutes == 60 %}selected{% endif %}>1 hour before</option>
+        <option value="240" {% if form_reminder_minutes == 240 %}selected{% endif %}>4 hours before</option>
+        <option value="1440" {% if form_reminder_minutes == 1440 %}selected{% endif %}>1 day before</option>
+        <option value="2880" {% if form_reminder_minutes == 2880 %}selected{% endif %}>2 days before</option>
+      </select>
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Send a reminder email to both you and your guest before the meeting.</span>
+    </div>
+  </div>
+</details>
 
 {% if editing and not is_group and owner_username and form_visibility == "public" %}
 <!-- Card: Dynamic Group Link -->
@@ -350,6 +427,59 @@
 </form>
 
 <script>
+  // --- Animated collapsible sections ---
+  (function() {
+    document.querySelectorAll('.collapsible-section').forEach(function(details) {
+      var summary = details.querySelector('.collapsible-header');
+      var body = details.querySelector('.collapsible-body');
+      if (!summary || !body) return;
+
+      function cleanup() {
+        details.classList.remove('animating');
+        body.style.maxHeight = '';
+        body.style.opacity = '';
+      }
+
+      summary.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (details.open) {
+          // Closing: set start values, force layout, add transition, then animate
+          body.style.maxHeight = body.scrollHeight + 'px';
+          body.style.opacity = '1';
+          body.offsetHeight; // force layout so browser registers start values
+          details.classList.add('animating');
+          requestAnimationFrame(function() {
+            body.style.maxHeight = '0';
+            body.style.opacity = '0';
+          });
+          body.addEventListener('transitionend', function handler(ev) {
+            if (ev.propertyName !== 'max-height') return;
+            body.removeEventListener('transitionend', handler);
+            details.removeAttribute('open');
+            cleanup();
+          });
+        } else {
+          // Opening: open details, set start at 0, force layout, add transition, animate to height
+          details.setAttribute('open', '');
+          body.style.maxHeight = '0';
+          body.style.opacity = '0';
+          body.offsetHeight; // force layout
+          details.classList.add('animating');
+          var h = body.scrollHeight;
+          requestAnimationFrame(function() {
+            body.style.maxHeight = h + 'px';
+            body.style.opacity = '1';
+          });
+          body.addEventListener('transitionend', function handler(ev) {
+            if (ev.propertyName !== 'max-height') return;
+            body.removeEventListener('transitionend', handler);
+            cleanup();
+          });
+        }
+      });
+    });
+  })();
+
   // --- Priority AJAX (no page reload) ---
   function sendPriority(userId, priority) {
     var url = '/dashboard/{% if is_group is defined and is_group %}group-event-types{% else %}event-types{% endif %}/{{ form_slug }}/priority/' + userId;
@@ -546,6 +676,110 @@
     });
   });
 
+  // --- Dynamic hints for collapsible sections ---
+  (function() {
+    function $(id) { return document.getElementById(id); }
+    function on(el, ev, fn) { if (el) el.addEventListener(ev, fn); }
+    function fmtMinutes(m) {
+      if (m >= 1440 && m % 1440 === 0) return (m / 1440) + (m / 1440 === 1 ? ' day' : ' days');
+      if (m >= 60 && m % 60 === 0) return (m / 60) + 'h';
+      return m + 'min';
+    }
+
+    // --- Buffers & notice ---
+    var bufBefore = $('buffer_before'), bufAfter = $('buffer_after');
+    var noticeVal = $('min_notice_value'), noticeUnit = $('min_notice_unit');
+    var bufHint = $('buffers-hint');
+    function updateBufHint() {
+      if (!bufHint) return;
+      var parts = [];
+      var bb = bufBefore ? parseInt(bufBefore.value, 10) || 0 : 0;
+      var ba = bufAfter ? parseInt(bufAfter.value, 10) || 0 : 0;
+      if (bb > 0 || ba > 0) {
+        if (bb > 0 && ba > 0) parts.push(bb + 'min before, ' + ba + 'min after');
+        else if (bb > 0) parts.push(bb + 'min buffer before');
+        else parts.push(ba + 'min buffer after');
+      }
+      var nv = noticeVal ? parseInt(noticeVal.value, 10) || 0 : 0;
+      var nu = noticeUnit ? parseInt(noticeUnit.value, 10) : 1;
+      var totalNotice = nv * nu;
+      if (totalNotice > 0) parts.push(fmtMinutes(totalNotice) + ' notice');
+      bufHint.textContent = parts.length > 0 ? parts.join(', ') : 'No buffers, book anytime';
+    }
+    on(bufBefore, 'input', updateBufHint);
+    on(bufAfter, 'input', updateBufHint);
+    on(noticeVal, 'input', updateBufHint);
+    on(noticeUnit, 'change', updateBufHint);
+    updateBufHint();
+
+    // --- Booking limits ---
+    var firstSlot = $('first-slot-toggle'), freqToggle = $('freq-limit-toggle');
+    var limitsHint = $('limits-hint');
+    function updateLimitsHint() {
+      if (!limitsHint) return;
+      var parts = [];
+      if (firstSlot && firstSlot.checked) parts.push('One slot per day');
+      if (freqToggle && freqToggle.checked) {
+        var rows = document.querySelectorAll('[data-freq-row]');
+        var periodLabels = { day: '/day', week: '/week', month: '/month', year: '/year' };
+        rows.forEach(function(row) {
+          var c = parseInt(row.querySelector('input[type=number]').value, 10) || 0;
+          var p = row.querySelector('select').value;
+          if (c > 0) parts.push('Max ' + c + (periodLabels[p] || ''));
+        });
+      }
+      limitsHint.textContent = parts.length > 0 ? parts.join(', ') : 'No limits';
+    }
+    on(firstSlot, 'change', updateLimitsHint);
+    on(freqToggle, 'change', function() { setTimeout(updateLimitsHint, 50); });
+    // Also observe freq limit changes via mutation (rows are added/removed dynamically)
+    var freqList = $('freq-limits-list');
+    if (freqList) {
+      new MutationObserver(function() { setTimeout(updateLimitsHint, 50); })
+        .observe(freqList, { childList: true, subtree: true, attributes: true });
+    }
+    updateLimitsHint();
+
+    // --- Booking options ---
+    var confirmCb = document.querySelector('input[name="requires_confirmation"]');
+    var guestsSel = $('max_additional_guests');
+    var viewSel = $('default_calendar_view');
+    var optionsHint = $('options-hint');
+    function updateOptionsHint() {
+      if (!optionsHint) return;
+      var parts = [];
+      if (confirmCb && confirmCb.checked) parts.push('Confirmation required');
+      else parts.push('Auto-confirmed');
+      var g = guestsSel ? parseInt(guestsSel.value, 10) || 0 : 0;
+      if (g > 0) parts.push('up to ' + g + ' extra guest' + (g > 1 ? 's' : ''));
+      var v = viewSel ? viewSel.value : 'month';
+      if (v !== 'month') parts.push(v + ' view');
+      optionsHint.textContent = parts.join(', ');
+    }
+    on(confirmCb, 'change', updateOptionsHint);
+    on(guestsSel, 'change', updateOptionsHint);
+    on(viewSel, 'change', updateOptionsHint);
+    updateOptionsHint();
+
+    // --- Access & notifications ---
+    var visSel = $('visibility');
+    var reminderSel = $('reminder_minutes');
+    var accessHint = $('access-hint');
+    var visLabels = { public: 'Public', internal: 'Internal', private: 'Private' };
+    function updateAccessHint() {
+      if (!accessHint) return;
+      var vis = visSel ? visSel.value : 'public';
+      var parts = [visLabels[vis] || vis];
+      var rem = reminderSel ? parseInt(reminderSel.value, 10) || 0 : 0;
+      if (rem > 0) parts.push('reminder ' + fmtMinutes(rem) + ' before');
+      else parts.push('no reminder');
+      accessHint.textContent = parts.join(', ');
+    }
+    on(visSel, 'change', updateAccessHint);
+    on(reminderSel, 'change', updateAccessHint);
+    updateAccessHint();
+  })();
+
   // --- Per-day availability schedule ---
   (function() {
     var container = document.getElementById('schedule-container');
@@ -584,6 +818,39 @@
         }
       }
       hidden.value = parts.join(';');
+      updateSchedulingHint();
+    }
+
+    function updateSchedulingHint() {
+      var hint = document.getElementById('scheduling-hint');
+      if (!hint) return;
+      var dayShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      var enabledDays = [];
+      for (var d = 0; d <= 6; d++) { if (schedule[d] && schedule[d].length) enabledDays.push(d); }
+      var dayStr = '';
+      if (enabledDays.length === 0) {
+        dayStr = 'No days set';
+      } else if (enabledDays.length === 7) {
+        dayStr = 'Every day';
+      } else if (enabledDays.length === 5 && enabledDays.join(',') === '1,2,3,4,5') {
+        dayStr = 'Mon\u2013Fri';
+      } else {
+        dayStr = enabledDays.map(function(d) { return dayShort[d]; }).join(', ');
+      }
+      // Find common time window if all days share the same single window
+      var commonWindow = '';
+      var allSame = enabledDays.length > 0;
+      if (allSame) {
+        var first = schedule[enabledDays[0]];
+        if (first.length === 1) {
+          for (var i = 1; i < enabledDays.length; i++) {
+            var w = schedule[enabledDays[i]];
+            if (w.length !== 1 || w[0].start !== first[0].start || w[0].end !== first[0].end) { allSame = false; break; }
+          }
+          if (allSame) commonWindow = ' ' + first[0].start + '\u2013' + first[0].end;
+        } else { allSame = false; }
+      }
+      hint.textContent = dayStr + commonWindow;
     }
 
     function timeSelectHtml(cls, val) {
@@ -729,6 +996,7 @@
     }
     renderSchedule();
     serializeSchedule();
+
   })();
 
   // --- Minimum notice with unit selector ---
