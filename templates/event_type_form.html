@@ -200,13 +200,13 @@
       </div>
       <div id="schedule-container" style="display: flex; flex-direction: column; gap: 0.25rem;"></div>
       <input type="hidden" name="avail_schedule" id="avail_schedule" value="{{ form_avail_schedule | default(value='') }}">
-      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.5rem;">Set different hours for each day. Use + to add multiple windows (e.g. morning + afternoon). Defaults from your profile settings.</span>
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.5rem;">Pre-filled from your <a href="/dashboard/settings#availability" style="color: var(--accent);">default availability</a>. You can override it here for this event type.</span>
     </div>
   </div>
 </details>
 
 <!-- Collapsible: Location -->
-<details class="card collapsible-section" style="margin-top: 1rem;"{% if form_location_value is defined and form_location_value %} open{% endif %}>
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and form_location_value is defined and form_location_value %} open{% endif %}>
   <summary class="collapsible-header"><h2>Location</h2><span class="collapsible-hint" id="location-hint">{% if form_location_value is defined and form_location_value %}{{ form_location_value }}{% else %}Not set{% endif %}</span><span class="collapsible-chevron"></span></summary>
   <div class="collapsible-body">
     <div class="form-group">
@@ -226,7 +226,7 @@
 </details>
 
 <!-- Collapsible: Buffers & notice -->
-<details class="card collapsible-section" style="margin-top: 1rem;"{% if (form_buffer_before is defined and form_buffer_before and form_buffer_before != "0") or (form_buffer_after is defined and form_buffer_after and form_buffer_after != "0") or (form_min_notice is defined and form_min_notice and form_min_notice != "0") %} open{% endif %}>
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and ((form_buffer_before is defined and form_buffer_before and form_buffer_before != "0") or (form_buffer_after is defined and form_buffer_after and form_buffer_after != "0") or (form_min_notice is defined and form_min_notice and form_min_notice != "0")) %} open{% endif %}>
   <summary class="collapsible-header">
     <h2>Buffers &amp; notice</h2>
     <span class="collapsible-hint" id="buffers-hint">
@@ -270,7 +270,7 @@
 </details>
 
 <!-- Collapsible: Booking limits -->
-<details class="card collapsible-section" style="margin-top: 1rem;"{% if form_first_slot_only or (form_frequency_limits is defined and form_frequency_limits) %} open{% endif %}>
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and (form_first_slot_only or (form_frequency_limits is defined and form_frequency_limits)) %} open{% endif %}>
   <summary class="collapsible-header">
     <h2>Booking limits</h2>
     <span class="collapsible-hint">
@@ -319,7 +319,7 @@
 </details>
 
 <!-- Collapsible: Booking options -->
-<details class="card collapsible-section" style="margin-top: 1rem;"{% if form_requires_confirmation or (form_max_additional_guests is defined and form_max_additional_guests and form_max_additional_guests != 0) or (form_default_calendar_view is defined and form_default_calendar_view and form_default_calendar_view != "month") %} open{% endif %}>
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and (form_requires_confirmation or (form_max_additional_guests is defined and form_max_additional_guests and form_max_additional_guests != 0) or (form_default_calendar_view is defined and form_default_calendar_view and form_default_calendar_view != "month")) %} open{% endif %}>
   <summary class="collapsible-header">
     <h2>Booking options</h2>
     <span class="collapsible-hint">
@@ -384,7 +384,7 @@
 </details>
 
 <!-- Collapsible: Access & notifications -->
-<details class="card collapsible-section" style="margin-top: 1rem;"{% if (form_visibility is defined and form_visibility and form_visibility != "public") or (form_reminder_minutes is defined and form_reminder_minutes and form_reminder_minutes != 0) %} open{% endif %}>
+<details class="card collapsible-section" style="margin-top: 1rem;"{% if editing and ((form_visibility is defined and form_visibility and form_visibility != "public") or (form_reminder_minutes is defined and form_reminder_minutes and form_reminder_minutes != 0)) %} open{% endif %}>
   <summary class="collapsible-header">
     <h2>Access &amp; notifications</h2>
     <span class="collapsible-hint">
