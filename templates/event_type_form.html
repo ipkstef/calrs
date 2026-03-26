@@ -184,29 +184,30 @@
 </div>
 {% endif %}
 
-<!-- Card: Scheduling (always visible) -->
-<div class="card" style="margin-top: 1rem;">
-  <h2>Scheduling</h2>
-
-  <div class="form-group">
-    <label for="duration_min">Duration (minutes)</label>
-    <input type="number" id="duration_min" name="duration_min" required value="{{ form_duration }}" min="5" max="480" step="5">
-  </div>
-
-  <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-      <h3 style="font-size: 0.95rem; margin-bottom: 0;">Availability</h3>
-      <button type="button" id="copy-to-all-btn" style="padding: 0.25rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.75rem; transition: all 0.15s ease;" title="Copy the first enabled day's windows to all other enabled days">Copy to all days</button>
+<!-- Collapsible: Scheduling -->
+<details class="card collapsible-section" style="margin-top: 1rem;" id="scheduling-section"{% if editing %} open{% endif %}>
+  <summary class="collapsible-header"><h2>Scheduling</h2><span class="collapsible-hint" id="scheduling-hint"></span><span class="collapsible-chevron"></span></summary>
+  <div class="collapsible-body">
+    <div class="form-group">
+      <label for="duration_min">Duration (minutes)</label>
+      <input type="number" id="duration_min" name="duration_min" required value="{{ form_duration }}" min="5" max="480" step="5">
     </div>
-    <div id="schedule-container" style="display: flex; flex-direction: column; gap: 0.25rem;"></div>
-    <input type="hidden" name="avail_schedule" id="avail_schedule" value="{{ form_avail_schedule | default(value='') }}">
-    <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.5rem;">Set different hours for each day. Use + to add multiple windows (e.g. morning + afternoon).</span>
+
+    <div style="border-top: 1px solid var(--border); padding-top: 1.25rem; margin-top: 0.5rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0;">Availability</h3>
+        <button type="button" id="copy-to-all-btn" style="padding: 0.25rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.75rem; transition: all 0.15s ease;" title="Copy the first enabled day's windows to all other enabled days">Copy to all days</button>
+      </div>
+      <div id="schedule-container" style="display: flex; flex-direction: column; gap: 0.25rem;"></div>
+      <input type="hidden" name="avail_schedule" id="avail_schedule" value="{{ form_avail_schedule | default(value='') }}">
+      <span class="hint" style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.5rem;">Set different hours for each day. Use + to add multiple windows (e.g. morning + afternoon). Defaults from your profile settings.</span>
+    </div>
   </div>
-</div>
+</details>
 
 <!-- Collapsible: Location -->
 <details class="card collapsible-section" style="margin-top: 1rem;"{% if form_location_value is defined and form_location_value %} open{% endif %}>
-  <summary class="collapsible-header"><h2>Location</h2><span class="collapsible-hint">{% if form_location_value is defined and form_location_value %}{{ form_location_value }}{% else %}Not set{% endif %}</span><span class="collapsible-chevron"></span></summary>
+  <summary class="collapsible-header"><h2>Location</h2><span class="collapsible-hint" id="location-hint">{% if form_location_value is defined and form_location_value %}{{ form_location_value }}{% else %}Not set{% endif %}</span><span class="collapsible-chevron"></span></summary>
   <div class="collapsible-body">
     <div class="form-group">
       <label for="location_type">Type</label>
@@ -228,11 +229,15 @@
 <details class="card collapsible-section" style="margin-top: 1rem;"{% if (form_buffer_before is defined and form_buffer_before and form_buffer_before != "0") or (form_buffer_after is defined and form_buffer_after and form_buffer_after != "0") or (form_min_notice is defined and form_min_notice and form_min_notice != "0") %} open{% endif %}>
   <summary class="collapsible-header">
     <h2>Buffers &amp; notice</h2>
-    <span class="collapsible-hint">
-      {%- if (form_buffer_before is defined and form_buffer_before and form_buffer_before != "0") or (form_buffer_after is defined and form_buffer_after and form_buffer_after != "0") or (form_min_notice is defined and form_min_notice and form_min_notice != "0") -%}
-        Configured
+    <span class="collapsible-hint" id="buffers-hint">
+      {%- set has_buffers = (form_buffer_before is defined and form_buffer_before and form_buffer_before != "0") or (form_buffer_after is defined and form_buffer_after and form_buffer_after != "0") -%}
+      {%- set has_notice = form_min_notice is defined and form_min_notice and form_min_notice != "0" -%}
+      {%- if has_buffers or has_notice -%}
+        {%- if form_buffer_before is defined and form_buffer_before and form_buffer_before != "0" -%}{{ form_buffer_before }}min before{%- endif -%}
+        {%- if form_buffer_after is defined and form_buffer_after and form_buffer_after != "0" -%}{% if form_buffer_before is defined and form_buffer_before and form_buffer_before != "0" %}, {% endif %}{{ form_buffer_after }}min after{%- endif -%}
+        {%- if has_notice -%}{% if has_buffers %}, {% endif %}{{ form_min_notice }}min notice{%- endif -%}
       {%- else -%}
-        Defaults
+        None
       {%- endif -%}
     </span>
     <span class="collapsible-chevron"></span>
@@ -647,6 +652,53 @@
     });
   });
 
+  // --- Dynamic hints for collapsible sections ---
+  (function() {
+    // Location hint
+    var locVal = document.getElementById('location_value');
+    var locType = document.getElementById('location_type');
+    var locHint = document.getElementById('location-hint');
+    function updateLocHint() {
+      if (!locHint) return;
+      var v = locVal ? locVal.value.trim() : '';
+      if (v) { locHint.textContent = v; }
+      else {
+        var typeLabels = { link: 'Video call', phone: 'Phone', in_person: 'In person', custom: 'Custom' };
+        locHint.textContent = locType ? (typeLabels[locType.value] || 'Not set') : 'Not set';
+      }
+    }
+    if (locVal) locVal.addEventListener('input', updateLocHint);
+    if (locType) locType.addEventListener('change', updateLocHint);
+
+    // Buffers & notice hint
+    var bufBefore = document.getElementById('buffer_before');
+    var bufAfter = document.getElementById('buffer_after');
+    var noticeVal = document.getElementById('min_notice_value');
+    var noticeUnit = document.getElementById('min_notice_unit');
+    var bufHint = document.getElementById('buffers-hint');
+    function updateBufHint() {
+      if (!bufHint) return;
+      var parts = [];
+      var bb = bufBefore ? parseInt(bufBefore.value, 10) || 0 : 0;
+      var ba = bufAfter ? parseInt(bufAfter.value, 10) || 0 : 0;
+      if (bb > 0) parts.push(bb + 'min before');
+      if (ba > 0) parts.push(ba + 'min after');
+      var nv = noticeVal ? parseInt(noticeVal.value, 10) || 0 : 0;
+      var nu = noticeUnit ? parseInt(noticeUnit.value, 10) : 1;
+      var totalNotice = nv * nu;
+      if (totalNotice > 0) {
+        if (totalNotice >= 1440 && totalNotice % 1440 === 0) parts.push((totalNotice / 1440) + 'd notice');
+        else if (totalNotice >= 60 && totalNotice % 60 === 0) parts.push((totalNotice / 60) + 'h notice');
+        else parts.push(totalNotice + 'min notice');
+      }
+      bufHint.textContent = parts.length > 0 ? parts.join(', ') : 'None';
+    }
+    if (bufBefore) bufBefore.addEventListener('input', updateBufHint);
+    if (bufAfter) bufAfter.addEventListener('input', updateBufHint);
+    if (noticeVal) noticeVal.addEventListener('input', updateBufHint);
+    if (noticeUnit) noticeUnit.addEventListener('change', updateBufHint);
+  })();
+
   // --- Per-day availability schedule ---
   (function() {
     var container = document.getElementById('schedule-container');
@@ -685,6 +737,42 @@
         }
       }
       hidden.value = parts.join(';');
+      updateSchedulingHint();
+    }
+
+    function updateSchedulingHint() {
+      var hint = document.getElementById('scheduling-hint');
+      if (!hint) return;
+      var dur = document.getElementById('duration_min');
+      var mins = dur ? parseInt(dur.value, 10) || 30 : 30;
+      var durStr = mins >= 60 ? (mins % 60 === 0 ? (mins / 60) + 'h' : Math.floor(mins / 60) + 'h' + (mins % 60) + 'min') : mins + 'min';
+      var dayShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      var enabledDays = [];
+      for (var d = 0; d <= 6; d++) { if (schedule[d] && schedule[d].length) enabledDays.push(d); }
+      var dayStr = '';
+      if (enabledDays.length === 0) {
+        dayStr = 'no days';
+      } else if (enabledDays.length === 7) {
+        dayStr = 'every day';
+      } else if (enabledDays.length === 5 && enabledDays.join(',') === '1,2,3,4,5') {
+        dayStr = 'Mon\u2013Fri';
+      } else {
+        dayStr = enabledDays.map(function(d) { return dayShort[d]; }).join(', ');
+      }
+      // Find common time window if all days share the same single window
+      var commonWindow = '';
+      var allSame = enabledDays.length > 0;
+      if (allSame) {
+        var first = schedule[enabledDays[0]];
+        if (first.length === 1) {
+          for (var i = 1; i < enabledDays.length; i++) {
+            var w = schedule[enabledDays[i]];
+            if (w.length !== 1 || w[0].start !== first[0].start || w[0].end !== first[0].end) { allSame = false; break; }
+          }
+          if (allSame) commonWindow = ' ' + first[0].start + '\u2013' + first[0].end;
+        } else { allSame = false; }
+      }
+      hint.textContent = durStr + ', ' + dayStr + commonWindow;
     }
 
     function timeSelectHtml(cls, val) {
@@ -830,6 +918,10 @@
     }
     renderSchedule();
     serializeSchedule();
+
+    // Update scheduling hint when duration changes
+    var durEl = document.getElementById('duration_min');
+    if (durEl) durEl.addEventListener('input', updateSchedulingHint);
   })();
 
   // --- Minimum notice with unit selector ---

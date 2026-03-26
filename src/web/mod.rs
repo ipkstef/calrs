@@ -3324,6 +3324,10 @@ async fn new_event_type_form(
         })
         .collect();
 
+    // Pre-fill availability from user's default schedule
+    ensure_user_avail_seeded(&state.pool, &user.id).await;
+    let user_avail = load_user_avail_schedule(&state.pool, &user.id).await;
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -3351,9 +3355,7 @@ async fn new_event_type_form(
             form_visibility => match preset { "private" => "private", "internal" => "internal", _ => "public" },
             form_location_type => "link",
             form_location_value => "",
-            form_avail_days => "1,2,3,4,5",
-            form_avail_start => "09:00",
-            form_avail_end => "17:00",
+            form_avail_schedule => user_avail,
             form_reminder_minutes => 1440,
             form_max_additional_guests => 0,
             form_default_calendar_view => "month",
@@ -5441,6 +5443,10 @@ async fn new_group_event_type_form(
         .map(|(id, name)| context! { id => id, name => name })
         .collect();
 
+    // Pre-fill availability from user's default schedule
+    ensure_user_avail_seeded(&state.pool, &user.id).await;
+    let user_avail = load_user_avail_schedule(&state.pool, &user.id).await;
+
     let tmpl = match state.templates.get_template("event_type_form.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("Template error: {}", e)),
@@ -5463,9 +5469,7 @@ async fn new_group_event_type_form(
             form_requires_confirmation => false,
             form_location_type => "link",
             form_location_value => "",
-            form_avail_days => "1,2,3,4,5",
-            form_avail_start => "09:00",
-            form_avail_end => "17:00",
+            form_avail_schedule => user_avail,
             form_default_calendar_view => "month",
             form_first_slot_only => false,
             form_frequency_limits => "",
