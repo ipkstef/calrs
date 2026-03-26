@@ -346,12 +346,13 @@ async fn upsert_raw_events(pool: &SqlitePool, cal_id: &str, raw_events: &[RawEve
             let status = extract_vevent_field(vevent, "STATUS");
             let rrule = extract_vevent_field(vevent, "RRULE");
             let recurrence_id = extract_vevent_field(vevent, "RECURRENCE-ID");
+            let transp = extract_vevent_field(vevent, "TRANSP");
             let timezone = extract_vevent_tzid(vevent, "DTSTART");
 
             let event_id = Uuid::new_v4().to_string();
             let _ = sqlx::query(
-                "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id, timezone)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "INSERT INTO events (id, calendar_id, uid, summary, start_at, end_at, location, description, status, rrule, raw_ical, recurrence_id, timezone, transp)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(calendar_id, uid, COALESCE(recurrence_id, '')) DO UPDATE SET
                    summary = excluded.summary,
                    start_at = excluded.start_at,
@@ -363,6 +364,7 @@ async fn upsert_raw_events(pool: &SqlitePool, cal_id: &str, raw_events: &[RawEve
                    raw_ical = excluded.raw_ical,
                    recurrence_id = excluded.recurrence_id,
                    timezone = excluded.timezone,
+                   transp = excluded.transp,
                    synced_at = datetime('now')",
             )
             .bind(&event_id)
@@ -378,6 +380,7 @@ async fn upsert_raw_events(pool: &SqlitePool, cal_id: &str, raw_events: &[RawEve
             .bind(&raw.ical_data)
             .bind(&recurrence_id)
             .bind(&timezone)
+            .bind(&transp)
             .execute(pool)
             .await;
 

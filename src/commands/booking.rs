@@ -150,7 +150,8 @@ pub async fn run(pool: &SqlitePool, key: &[u8; 32], cmd: BookingCommands) -> Res
                  WHERE c.is_busy = 1
                    AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
                         OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
-                   AND (e.status IS NULL OR e.status != 'CANCELLED')",
+                   AND (e.status IS NULL OR e.status != 'CANCELLED')
+                   AND (e.transp IS NULL OR e.transp != 'TRANSPARENT')",
             )
             .bind(&et_id).bind(&et_id)
             .fetch_all(pool)

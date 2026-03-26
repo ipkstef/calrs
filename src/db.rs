@@ -183,6 +183,10 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
             "041_last_full_sync",
             include_str!("../migrations/041_last_full_sync.sql"),
         ),
+        (
+            "042_event_transp",
+            include_str!("../migrations/042_event_transp.sql"),
+        ),
     ];
 
     let mut applied_count = 0u32;
@@ -724,7 +728,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 41, "All 41 migrations should be tracked");
+        assert_eq!(count.0, 42, "All 42 migrations should be tracked");
     }
 
     #[tokio::test]
@@ -738,7 +742,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 41, "Still 41 migrations after second run");
+        assert_eq!(count.0, 42, "Still 42 migrations after second run");
     }
 
     #[tokio::test]

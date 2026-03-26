@@ -200,6 +200,7 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
                         OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
                    AND (e.rrule IS NULL OR e.rrule = '')
                    AND (e.status IS NULL OR e.status != 'CANCELLED')
+                   AND (e.transp IS NULL OR e.transp != 'TRANSPARENT')
                    AND ((e.start_at <= ? AND e.end_at >= ?) OR (e.start_at <= ? AND e.end_at >= ?))",
             )
             .bind(&et_id).bind(&et_id)
@@ -245,6 +246,7 @@ pub async fn run(pool: &SqlitePool, cmd: EventTypeCommands) -> Result<()> {
                    AND (NOT EXISTS (SELECT 1 FROM event_type_calendars WHERE event_type_id = ?)
                         OR c.id IN (SELECT calendar_id FROM event_type_calendars WHERE event_type_id = ?))
                    AND (e.status IS NULL OR e.status != 'CANCELLED')
+                   AND (e.transp IS NULL OR e.transp != 'TRANSPARENT')
                    AND e.rrule IS NOT NULL AND e.rrule != '' AND (e.start_at <= ? OR e.start_at <= ?)",
             )
             .bind(&et_id).bind(&et_id)
