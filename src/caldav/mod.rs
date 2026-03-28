@@ -42,6 +42,7 @@ impl CaldavClient {
 
     /// Send a PROPFIND request and return the response body
     async fn propfind(&self, url: &str, depth: &str, body: &str) -> Result<String> {
+        tracing::debug!(url = %url, depth = %depth, "sending PROPFIND request");
         let resp = self
             .client
             .request(reqwest::Method::from_bytes(b"PROPFIND")?, url)
@@ -51,6 +52,8 @@ impl CaldavClient {
             .body(body.to_string())
             .send()
             .await?;
+
+        tracing::debug!(url = %url, status = %resp.status(), "PROPFIND response received");
 
         if !resp.status().is_success() && resp.status().as_u16() != 207 {
             bail!("PROPFIND {} returned {}", url, resp.status());
@@ -338,8 +341,12 @@ pub struct RawEvent {
 fn parse_calendar_list(xml: &str) -> Vec<CalendarInfo> {
     let mut calendars = Vec::new();
     for response_block in split_responses(xml) {
-        // Only include actual calendar collections (has <cal:calendar/> or <C:calendar/> in resourcetype)
-        if !response_block.contains("calendar/>") {
+        // Only include actual calendar collections
+        // Match <cal:calendar/>, <C:calendar/>, <calendar xmlns="..."/>, etc.
+        // Some servers (SoGo) use unprefixed <calendar> with xmlns attribute
+        let has_calendar_resource =
+            response_block.contains("calendar/>") || response_block.contains("<calendar xmlns=");
+        if !has_calendar_resource {
             continue;
         }
         let href = extract_tag(response_block, "d:href").unwrap_or_default();
@@ -744,6 +751,24 @@ mod tests {
         assert_eq!(cals.len(), 1);
         assert_eq!(cals[0].href, "/SOGo/dav/user/Calendar/personal/");
         assert_eq!(cals[0].display_name, Some("Personal Calendar".to_string()));
+    }
+
+    #[test]
+    fn parse_calendars_sogo_unprefixed_xmlns() {
+        // SoGo uses unprefixed <calendar xmlns="urn:ietf:params:xml:ns:caldav"/> instead of <C:calendar/>
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:" xmlns:b="http://calendarserver.org/ns/" xmlns:a="http://apple.com/ns/ical/"><D:response><D:href>/SOGo/dav/user@example.com/Calendar/</D:href><D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop><D:resourcetype><D:collection/></D:resourcetype><D:displayname>Calendar</D:displayname></D:prop></D:propstat></D:response><D:response><D:href>/SOGo/dav/user@example.com/Calendar/personal/</D:href><D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop><D:resourcetype><D:collection/><calendar xmlns="urn:ietf:params:xml:ns:caldav"/><vevent-collection xmlns="http://groupdav.org/"/><vtodo-collection xmlns="http://groupdav.org/"/><schedule-outbox xmlns="urn:ietf:params:xml:ns:caldav"/></D:resourcetype><D:displayname>Personal Calendar</D:displayname><a:calendar-color>#AAAAAAFF</a:calendar-color><b:getctag>-1</b:getctag><D:sync-token>-1</D:sync-token></D:prop></D:propstat></D:response></D:multistatus>"#;
+
+        let cals = parse_calendar_list(xml);
+        assert_eq!(cals.len(), 1);
+        assert_eq!(
+            cals[0].href,
+            "/SOGo/dav/user@example.com/Calendar/personal/"
+        );
+        assert_eq!(cals[0].display_name, Some("Personal Calendar".to_string()));
+        assert_eq!(cals[0].color, Some("#AAAAAAFF".to_string()));
+        assert_eq!(cals[0].ctag, Some("-1".to_string()));
+        assert_eq!(cals[0].sync_token, Some("-1".to_string()));
     }
 
     // --- resolve_url ---
