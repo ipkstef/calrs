@@ -12745,43 +12745,44 @@ async fn caldav_push_booking(
     booking_uid: &str,
     details: &crate::email::BookingDetails,
 ) {
-    // Find a CalDAV source with write_calendar_href configured for this user
-    let source: Option<(String, String, String, String)> = sqlx::query_as(
+    // Find all CalDAV sources with write_calendar_href configured for this user
+    let sources: Vec<(String, String, String, String)> = sqlx::query_as(
         "SELECT cs.url, cs.username, cs.password_enc, cs.write_calendar_href
          FROM caldav_sources cs
          JOIN accounts a ON a.id = cs.account_id
-         WHERE a.user_id = ? AND cs.enabled = 1 AND cs.write_calendar_href IS NOT NULL
-         LIMIT 1",
+         WHERE a.user_id = ? AND cs.enabled = 1 AND cs.write_calendar_href IS NOT NULL",
     )
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
-    .unwrap_or(None);
+    .unwrap_or_default();
 
-    let (url, username, password_enc, calendar_href) = match source {
-        Some(s) => s,
-        None => return, // No CalDAV write configured — silently skip
-    };
-
-    let password = match crate::crypto::decrypt_password(key, &password_enc) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-
-    let ics = crate::email::generate_ics(details, "");
-    let client = crate::caldav::CaldavClient::new(&url, &username, &password);
-
-    if let Err(e) = client.put_event(&calendar_href, booking_uid, &ics).await {
-        tracing::error!(uid = %booking_uid, error = %e, "CalDAV write-back failed");
+    if sources.is_empty() {
         return;
     }
 
-    // Record which calendar href the booking was pushed to
-    let _ = sqlx::query("UPDATE bookings SET caldav_calendar_href = ? WHERE uid = ?")
-        .bind(&calendar_href)
-        .bind(booking_uid)
-        .execute(pool)
-        .await;
+    let ics = crate::email::generate_ics(details, "");
+
+    for (url, username, password_enc, calendar_href) in &sources {
+        let password = match crate::crypto::decrypt_password(key, password_enc) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let client = crate::caldav::CaldavClient::new(url, username, &password);
+
+        if let Err(e) = client.put_event(calendar_href, booking_uid, &ics).await {
+            tracing::error!(uid = %booking_uid, calendar = %calendar_href, error = %e, "CalDAV write-back failed");
+            continue;
+        }
+
+        // Record which calendar href the booking was pushed to (last successful one)
+        let _ = sqlx::query("UPDATE bookings SET caldav_calendar_href = ? WHERE uid = ?")
+            .bind(calendar_href)
+            .bind(booking_uid)
+            .execute(pool)
+            .await;
+    }
 }
 
 /// Delete a booking from a user's CalDAV calendar by looking up their write-enabled source directly.
@@ -12792,31 +12793,27 @@ async fn caldav_delete_for_user(
     user_id: &str,
     booking_uid: &str,
 ) {
-    let source: Option<(String, String, String, String)> = sqlx::query_as(
+    let sources: Vec<(String, String, String, String)> = sqlx::query_as(
         "SELECT cs.url, cs.username, cs.password_enc, cs.write_calendar_href
          FROM caldav_sources cs
          JOIN accounts a ON a.id = cs.account_id
-         WHERE a.user_id = ? AND cs.enabled = 1 AND cs.write_calendar_href IS NOT NULL
-         LIMIT 1",
+         WHERE a.user_id = ? AND cs.enabled = 1 AND cs.write_calendar_href IS NOT NULL",
     )
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
-    .unwrap_or(None);
+    .unwrap_or_default();
 
-    let (url, username, password_enc, calendar_href) = match source {
-        Some(s) => s,
-        None => return,
-    };
+    for (url, username, password_enc, calendar_href) in &sources {
+        let password = match crate::crypto::decrypt_password(key, password_enc) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
-    let password = match crate::crypto::decrypt_password(key, &password_enc) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-
-    let client = crate::caldav::CaldavClient::new(&url, &username, &password);
-    if let Err(e) = client.delete_event(&calendar_href, booking_uid).await {
-        tracing::error!(uid = %booking_uid, user = %user_id, error = %e, "CalDAV team link event delete failed");
+        let client = crate::caldav::CaldavClient::new(url, username, &password);
+        if let Err(e) = client.delete_event(calendar_href, booking_uid).await {
+            tracing::error!(uid = %booking_uid, user = %user_id, calendar = %calendar_href, error = %e, "CalDAV event delete failed");
+        }
     }
 
     // Remove cached event
