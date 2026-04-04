@@ -6160,6 +6160,7 @@ async fn update_group_event_type(
     .bind(parse_int_field(&form.max_additional_guests, 0))
     .bind(form.scheduling_mode.as_deref().unwrap_or("round_robin"))
     .bind(&default_calendar_view)
+    .bind(if form.first_slot_only.as_deref() == Some("on") { 1 } else { 0 })
     .bind(&et_id)
     .execute(&state.pool)
     .await;
