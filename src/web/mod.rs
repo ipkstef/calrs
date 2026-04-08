@@ -3799,9 +3799,10 @@ async fn edit_event_type_form(
         .collect::<Vec<_>>()
         .join(",");
 
-    // Fetch team members with per-ET weights for round-robin priority
+    // Fetch team members with per-ET weights (round-robin priority OR collective exclusion)
     let is_round_robin_group = team_id.is_some() && scheduling_mode == "round_robin";
-    let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
+    let is_collective_team = team_id.is_some() && scheduling_mode == "collective";
+    let members_ctx: Vec<minijinja::Value> = if is_round_robin_group || is_collective_team {
         let tid = team_id.as_deref().unwrap();
         let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT u.id, u.name, u.avatar_path \
@@ -3913,6 +3914,7 @@ async fn edit_event_type_form(
             form_frequency_limits => form_frequency_limits,
             is_group => team_id.is_some(),
             is_round_robin_group => is_round_robin_group,
+            is_collective_team => is_collective_team,
             priority_members => members_ctx,
             owner_username => auth_user.user.username.as_deref().unwrap_or(""),
             dg_eligible_users => dg_eligible_ctx,
@@ -5924,9 +5926,10 @@ async fn edit_group_event_type_form(
     // Build per-day schedule string
     let avail_schedule = build_avail_schedule(&all_rules);
 
-    // Fetch team members with per-ET weights for round-robin priority
+    // Fetch team members with per-ET weights (round-robin priority OR collective exclusion)
     let is_round_robin_group = scheduling_mode == "round_robin";
-    let members_ctx: Vec<minijinja::Value> = if is_round_robin_group {
+    let is_collective_team = scheduling_mode == "collective";
+    let members_ctx: Vec<minijinja::Value> = if is_round_robin_group || is_collective_team {
         let members: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT u.id, u.name, u.avatar_path \
              FROM users u JOIN team_members tm ON tm.user_id = u.id \
@@ -6030,6 +6033,7 @@ async fn edit_group_event_type_form(
             form_default_calendar_view => default_calendar_view,
             form_first_slot_only => first_slot_only != 0,
             is_round_robin_group => is_round_robin_group,
+            is_collective_team => is_collective_team,
             priority_members => members_ctx,
             watcher_teams => watcher_teams_ctx,
             selected_watcher_team_ids => selected_watcher_team_ids,
