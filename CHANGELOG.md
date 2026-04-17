@@ -120,6 +120,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Default availability | 1.3.0 | Per-user working hours used by dynamic group links to constrain participants |
 | Deferred slot loading | 1.3.0 | Instant page render with async slot computation for dynamic group links |
 | Force full resync | 1.3.0 | Dashboard button + automatic 24h periodic full resync to catch deleted events |
+| Booking watchers | 1.4.0 | Designate team members as watchers on event types — they're notified of new bookings and can claim them |
+| Event type form redesign | 1.4.0 | Collapsible sections with progressive disclosure, dynamic recaps, pre-filled availability defaults |
+| Collective member exclusion | 1.4.0 | Opt specific members out of collective team event types while keeping them on the team |
+| Security review hardening | 1.4.0 | 7 findings from third-party security review addressed |
+
+## [1.4.0] - 2026-04-17
+
+Booking watchers, event type form redesign, security hardening, and a critical timezone fix for cross-zone bookings.
+
+### Added
+
+- **Booking watchers** (#31) — designate team members as watchers on team event types. Watchers receive booking notifications and can claim any unclaimed booking via email link, with a dashboard view of claimable bookings. Introduces `event_type_watchers` and `booking_claim_tokens` tables
+- **Collective member exclusion** — opt specific members out of collective team event types from the team settings UI, without removing them from the team. Per-event-type `excluded_member_user_ids` stored alongside member weights
+- **Event type form — progressive disclosure** — sections collapsed by default (only Basics stays open), with smooth open/close animations and dynamic hint recaps summarising each section's contents
+- **Pre-filled availability from user defaults** — new event types start with the user's configured default working hours
+- **Invite Links shortcuts** — "+ New internal event" header button and direct link to create internal event types from the Invite Links page
+- **CalDAV observability** — tracing for PROPFIND and write-back requests to aid debugging
+
+### Fixed
+
+- **Booking flow timezone mix-up** (#33) — slot pages displayed guest-local times correctly, but the `/book` URL carried the host's local time. The booking form re-rendered that host-local time to the guest, and the ICS generator then re-interpreted it as guest-local before converting to UTC — so the confirmed meeting ended up offset by the guest↔host timezone delta. The URL now carries guest-local date/time end-to-end; the backend converts to host-local for storage and conflict checks via a `guest_to_host_local` helper
+- **First-slot-only persistence** — `first_slot_only` was silently dropped on group event type update due to a missing SQL bind
+- **Security review findings** — 7 issues identified during security review resolved
+- **TRANSP:TRANSPARENT events** no longer consume availability (events marked as free in CalDAV)
+- **Timezone picker** — defaults to Midway for unlisted IANA zones instead of crashing; mismatch banner no longer shown for equivalent timezones (e.g. `Europe/Paris` ↔ `CET`)
+- **CalDAV write-back and delete** — operate on all configured sources per user, not just the first; ICS omits `METHOD` property so servers don't double-invite
+- **Nextcloud CalDAV discovery** — DAV headers recognized on OPTIONS connection test
+- **SoGo compatibility** — unprefixed `<calendar>` element in namespace-less CalDAV responses is correctly detected
+
+### Changed
+
+- **Invite Links URL** — `/dashboard/organization` renamed to `/dashboard/invite-links`
+- **Event type form layout** — duration moved into the Basics card; "Scheduling" section renamed to "Availability"; location moved into Basics and made required
+
+### Internal
+
+- Docker builds cache Rust dependencies between layers, shaving cold-cache rebuilds
+- Regression test for group event type update persistence
+- Regression tests for the guest↔host timezone conversion helper
 
 ## [1.3.0] - 2026-03-25
 

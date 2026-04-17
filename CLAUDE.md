@@ -84,7 +84,13 @@ calrs/
 │   ├── 035_drop_legacy_team_links.sql ← drops legacy team_links tables
 │   ├── 036_default_calendar_view.sql ← default_calendar_view on event_types
 │   ├── 037_booking_frequency_limits.sql ← booking_frequency_limits table
-│   └── 038_first_slot_only.sql   ← first_slot_only on event_types
+│   ├── 038_first_slot_only.sql   ← first_slot_only on event_types
+│   ├── 039_allow_dynamic_group.sql ← allow_dynamic_group opt-out on users
+│   ├── 040_user_availability.sql ← per-user default working hours (user_availability_rules)
+│   ├── 041_last_full_sync.sql    ← last_full_sync timestamp on caldav_sources
+│   ├── 042_event_transp.sql      ← TRANSP column on events (skip TRANSPARENT)
+│   ├── 043_event_type_watchers.sql ← event_type_watchers junction (team watches event type)
+│   └── 044_booking_claim.sql     ← claimed_by_user_id/claimed_at on bookings + booking_claim_tokens
 ├── templates/
 │   ├── base.html                 ← base layout + CSS (light/dark mode)
 │   ├── dashboard_base.html       ← sidebar layout (extends base.html, all dashboard pages extend this)
@@ -120,7 +126,10 @@ calrs/
 │   ├── booking_cancelled_guest.html ← guest self-cancel success page
 │   ├── booking_host_reschedule.html ← host-initiated reschedule page
 │   ├── booking_reschedule_confirm.html ← reschedule confirmation page
-│   └── booking_action_error.html ← error page for invalid/expired tokens
+│   ├── booking_action_error.html ← error page for invalid/expired tokens
+│   ├── booking_claim_form.html   ← watcher claim form (token-based)
+│   ├── booking_claimed.html      ← claim success page
+│   └── booking_already_claimed.html ← claim collision page (another watcher got there first)
 └── src/
     ├── main.rs                   ← CLI entry point, Cli/Commands enum, tokio main
     ├── db.rs                     ← SQLite pool setup (WAL mode) + migration runner
@@ -247,7 +256,7 @@ File: `src/web/mod.rs`, templates in `templates/`
 - `/dashboard/bookings` — Pending approval + upcoming bookings (cancel with optional reason)
 - `/dashboard/sources` — Calendar sources (add/test/sync/remove/write-back)
 - `/dashboard/teams` — Teams listing (create/edit/manage members/delete)
-- `/dashboard/organization` — Internal event types (personal + team) visible to authenticated users (invite link generation)
+- `/dashboard/invite-links` — Internal event types (personal + team) visible to authenticated users, with quick invite link generation (renamed from `/dashboard/organization`)
 
 **Admin panel** (`/dashboard/admin`): User management (promote/demote, enable/disable), auth settings (registration toggle, allowed domains), OIDC config, SMTP status, groups overview, impersonation. Requires `AdminUser`.
 
@@ -261,9 +270,11 @@ File: `src/web/mod.rs`, templates in `templates/`
 
 **Availability overrides:** Per-event-type date overrides at `/dashboard/event-types/{slug}/overrides`. Two types: blocked days (entire day off) and custom hours (replace weekly rules with specific time windows). Overrides are checked in `compute_slots_from_rules()` — blocked overrides skip the day, custom hours replace weekly rules. Also wired into CLI slot computation and troubleshoot view. Stored in `availability_overrides` table.
 
-**Team event types:** Created under a team from the dashboard. Two scheduling modes: round-robin (picks the least-busy available member, with configurable per-member weights) and collective (requires ALL members to be free). Public URLs: `/team/{slug}/{event-slug}`. Teams can be public (listed on team profile page) or private (accessible only to members). Team admins can manage members, link OIDC groups, and configure team settings at `/dashboard/teams/{id}/settings`.
+**Team event types:** Created under a team from the dashboard. Two scheduling modes: round-robin (picks the least-busy available member, with configurable per-member weights) and collective (requires ALL members to be free, with per-event-type member exclusions supported). Public URLs: `/team/{slug}/{event-slug}`. Teams can be public (listed on team profile page) or private (accessible only to members). Team admins can manage members, link OIDC groups, and configure team settings at `/dashboard/teams/{id}/settings`.
 
-**Event type visibility:** Three levels controlled by `visibility` column (TEXT: 'public'/'internal'/'private', migration 026). Public event types are listed on profile/group pages. Internal and private are hidden — both use tokenized invite links via `booking_invites`. Internal is available for both personal and team event types. The difference: internal event types allow **any authenticated user** to generate invite links (via the Invite Links page at `/dashboard/organization`), while private event types restrict invite creation to the owner. Quick link generation at `POST /dashboard/invites/{id}/quick-link` creates a single-use invite (expires 7 days) and returns JSON with the URL — available both on the Invite Links page and the per-event-type invite management page. The invite token is propagated through the booking flow via query params (`?invite=TOKEN`) and hidden form fields. Guest name/email are pre-filled from the invite (empty for quick links — guest fills them in). Token validation checks expiration and usage limits at every step. Invite management at `/dashboard/invites/{event_type_id}` includes a "Get link" button at the top for one-click link generation, plus an email form below for sending personalized invites. Invite emails use indigo accent (#6366f1).
+**Booking watchers:** Teams can be designated as watchers on a team event type via `event_type_watchers`. On a new booking, watchers are emailed with a tokenized "Claim this booking" link. Tokens live in `booking_claim_tokens` with an expiry. The first watcher to claim wins; subsequent claims land on `booking_already_claimed.html`. Claimed bookings surface on the watcher's dashboard via `bookings.claimed_by_user_id`.
+
+**Event type visibility:** Three levels controlled by `visibility` column (TEXT: 'public'/'internal'/'private', migration 026). Public event types are listed on profile/group pages. Internal and private are hidden — both use tokenized invite links via `booking_invites`. Internal is available for both personal and team event types. The difference: internal event types allow **any authenticated user** to generate invite links (via the Invite Links page at `/dashboard/invite-links`), while private event types restrict invite creation to the owner. Quick link generation at `POST /dashboard/invites/{id}/quick-link` creates a single-use invite (expires 7 days) and returns JSON with the URL — available both on the Invite Links page and the per-event-type invite management page. The invite token is propagated through the booking flow via query params (`?invite=TOKEN`) and hidden form fields. Guest name/email are pre-filled from the invite (empty for quick links — guest fills them in). Token validation checks expiration and usage limits at every step. Invite management at `/dashboard/invites/{event_type_id}` includes a "Get link" button at the top for one-click link generation, plus an email form below for sending personalized invites. Invite emails use indigo accent (#6366f1).
 
 **On-demand sync:** Slot pages (`/u/`, `/g/`, legacy `/{slug}`) and the troubleshoot view automatically sync the host's CalDAV sources if stale (>5 minutes since last sync). Uses `sync_if_stale()` from `commands/sync.rs` which calls `fetch_events_since()` with a time-range filter (RFC 4791) to only pull future events, with fallback to full fetch for servers that don't support it.
 
