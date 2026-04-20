@@ -125,6 +125,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Collective member exclusion | 1.4.0 | Opt specific members out of collective team event types while keeping them on the team |
 | Security review hardening | 1.4.0 | 7 findings from third-party security review addressed |
 
+## [1.4.1] - 2026-04-20
+
+Calendar invite compatibility fixes for Gmail.
+
+### Fixed
+
+- **ICS invite not parsed by Gmail** (#36) — trailing whitespace in the generated `method_line`, attendee lines, and `VALARM` block leaked into the output, so `BEGIN:VEVENT` and other property lines started with spaces. Per RFC 5545 §3.1 a line starting with whitespace is a folded continuation of the previous line, so Gmail saw the whole attachment as one folded `METHOD` line and never detected a VEVENT
+- **METHOD:PUBLISH on guest invites** (#36) — confirmation and reschedule emails sent the ICS with `METHOD:PUBLISH`, which clients treat as read-only informational feeds. Gmail and most clients only show the "Add to calendar" / RSVP banner for `METHOD:REQUEST`. The ICS already carried `ORGANIZER` + `ATTENDEE;RSVP=TRUE`, so REQUEST is what the content already expressed. Host notifications (already REQUEST) and cancellations (CANCEL) are unchanged
+
+### Changed
+
+- Guests may now see an RSVP prompt (Accept / Decline / Maybe) on booking confirmation and reschedule emails, where some clients previously showed only an informational entry
+
+### Internal
+
+- Regression test asserting no ICS line starts with whitespace
+- Flaky-on-Monday test pattern fixed across 23 booking/slot tests: `next_monday` now starts from tomorrow so it's always strictly in the future
+
 ## [1.4.0] - 2026-04-17
 
 Booking watchers, event type form redesign, security hardening, and a critical timezone fix for cross-zone bookings.
