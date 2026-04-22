@@ -96,7 +96,10 @@ impl CaldavClient {
 
         let base = base_url.trim_end_matches('/').to_string();
         let origin = reqwest::Url::parse(&base)
-            .map(|u: reqwest::Url| format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")))
+            .map(|u: reqwest::Url| match u.port() {
+                Some(port) => format!("{}://{}:{}", u.scheme(), u.host_str().unwrap_or(""), port),
+                None => format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")),
+            })
             .unwrap_or_else(|_| base.clone());
 
         Self {
@@ -879,10 +882,42 @@ mod tests {
     #[test]
     fn resolve_with_port() {
         let client = CaldavClient::new("https://cal.example.com:8443/dav", "user", "pass");
-        // origin should include host but not port in the simple format
-        let resolved = client.resolve_url("/calendars/alice/");
-        assert!(resolved.starts_with("https://"));
-        assert!(resolved.ends_with("/calendars/alice/"));
+        assert_eq!(
+            client.resolve_url("/calendars/alice/"),
+            "https://cal.example.com:8443/calendars/alice/"
+        );
+    }
+
+    // Regression test for https://github.com/olivierlambert/calrs/issues/42 —
+    // Nextcloud on a non-standard port returns site-absolute principal hrefs;
+    // resolve_url must preserve the port so PROPFIND hits the right server.
+    #[test]
+    fn resolve_with_port_nextcloud_principal() {
+        let client = CaldavClient::new("https://my-nextcloud:8080/remote.php/dav/", "user", "pass");
+        assert_eq!(
+            client.resolve_url("/remote.php/dav/principals/users/alice/"),
+            "https://my-nextcloud:8080/remote.php/dav/principals/users/alice/"
+        );
+    }
+
+    #[test]
+    fn resolve_without_port_https_default() {
+        let client = CaldavClient::new("https://cal.example.com/dav", "user", "pass");
+        assert_eq!(
+            client.resolve_url("/calendars/alice/"),
+            "https://cal.example.com/calendars/alice/"
+        );
+    }
+
+    #[test]
+    fn resolve_with_explicit_default_port_stripped() {
+        // Port 443 on https is the default; url crate strips it, which is fine —
+        // it reaches the same server.
+        let client = CaldavClient::new("https://cal.example.com:443/dav", "user", "pass");
+        assert_eq!(
+            client.resolve_url("/calendars/alice/"),
+            "https://cal.example.com/calendars/alice/"
+        );
     }
 
     // --- parse_calendar_list ---
