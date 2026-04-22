@@ -124,6 +124,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Event type form redesign | 1.4.0 | Collapsible sections with progressive disclosure, dynamic recaps, pre-filled availability defaults |
 | Collective member exclusion | 1.4.0 | Opt specific members out of collective team event types while keeping them on the team |
 | Security review hardening | 1.4.0 | 7 findings from third-party security review addressed |
+| Configurable slot interval | 1.5.0 | Slot start-time spacing decoupled from event duration (e.g., 20-min meetings on 30-min boundaries) |
+
+## [1.5.0] - 2026-04-22
+
+Configurable slot interval — start-time spacing is now independent from event duration.
+
+### Added
+
+- **Slot interval** (#38) — new optional field on the event type form. By default, slot start times are spaced by duration (existing behaviour). Set explicitly to control the cadence: a 20-minute event with a 30-minute interval produces slots at 9:00, 9:30, 10:00, … Buffers and minimum notice still apply on top. Stored as nullable `slot_interval_min` on `event_types`; NULL inherits duration — fully backward-compatible
+
+### Internal
+
+- Migration `045_slot_interval.sql`
+- 6 unit tests covering default, custom, and edge-case intervals (null, zero, interval > duration, buffer overlap)
 
 ## [1.4.1] - 2026-04-20
 

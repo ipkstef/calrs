@@ -31,6 +31,7 @@ Go to **Dashboard > Event types > + New** and fill in:
 - **Title** — display name (e.g., "30-minute intro call")
 - **Slug** — URL path (e.g., `intro` gives `/u/yourname/intro`)
 - **Duration** — meeting length in minutes
+- **Slot interval** — how often slots start (optional; leave blank to match duration — see [Slot interval](#slot-interval) below)
 - **Buffer before/after** — padding between meetings (prevents back-to-back bookings)
 - **Minimum notice** — how far in advance guests must book (in minutes)
 - **Requires confirmation** — if checked, bookings start as "pending" and you approve from the dashboard
@@ -97,6 +98,19 @@ The guest slot picker supports three views, switchable via icons in the calendar
 | **Column** | Days listed as rows with all time slot pills inline |
 
 The guest's chosen view is remembered in their browser. Hosts can set which view guests see by default from the **Booking options** card in the event type form.
+
+## Slot interval
+
+By default, slot start times are spaced by the event's **duration** — a 20-minute event produces slots at 9:00, 9:20, 9:40, and so on. The **Slot interval** field decouples start-time spacing from meeting length.
+
+| Duration | Slot interval | Slot start times |
+|---|---|---|
+| 20 min | *(blank — default)* | 9:00, 9:20, 9:40, 10:00, … |
+| 20 min | `30` | 9:00, 9:30, 10:00, 10:30, … *(10-minute gap between meetings)* |
+| 45 min | `60` | 9:00, 10:00, 11:00, … *(rounded hourly starts)* |
+| 60 min | `30` | 9:00, 9:30, 10:00, 10:30, … *(overlap-allowed cadence — slots still honour busy times and buffers)* |
+
+Set this when you want "every half hour on the dot" or similar rounded start times regardless of meeting length. Leave blank to preserve the legacy back-to-back behaviour. Buffers and minimum notice still apply on top.
 
 ## Slot computation
 
