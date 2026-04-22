@@ -15656,6 +15656,309 @@ mod tests {
         );
     }
 
+    // --- slot_interval_min unit tests ---
+
+    #[tokio::test]
+    async fn compute_slots_custom_interval_fewer_slots() {
+        // When slot_interval is 60 with a 30-min duration, the cursor steps by 60 min
+        // producing 1 slot per hour instead of 2 per hour
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Override: 60-min slot interval, 30-min duration
+        sqlx::query("UPDATE event_types SET slot_interval_min = 60 WHERE id = ?")
+            .bind(&et_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date() + Duration::days(1);
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30, // duration
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        // 09:00-17:00 = 8 hours; 60-min interval → 8 slots (09:00, 10:00, ..., 16:00)
+        assert_eq!(
+            monday.slots.len(),
+            8,
+            "60-min interval over 09:00-17:00 should yield 8 slots, got {}",
+            monday.slots.len()
+        );
+        // Verify exact start times
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        let expected: Vec<&str> = vec![
+            "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00",
+        ];
+        assert_eq!(
+            slot_times, expected,
+            "Slot times should match 60-min interval stepping"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_custom_interval_15_min() {
+        // 15-min interval with 30-min duration: cursor steps by 15 min
+        // 09:00-17:00 = 8 hours = 480 min; 480/15 = 32 cursor positions
+        // but cursor must satisfy cursor + 30 <= 17:00, so 16:45+30=17:15 > 17:00 → last is 16:30
+        // That gives 31 slots (09:00 through 16:30)
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        sqlx::query("UPDATE event_types SET slot_interval_min = 15 WHERE id = ?")
+            .bind(&et_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date() + Duration::days(1);
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30, // duration
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        // 09:00-17:00 with 30-min slot: 31 slots (09:00 … 16:30)
+        // 16:45 + 30 = 17:15 > 17:00 so it's excluded
+        assert_eq!(
+            monday.slots.len(),
+            31,
+            "15-min interval over 09:00-17:00 should yield 31 slots, got {}",
+            monday.slots.len()
+        );
+        // Verify first and last slots
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        assert_eq!(slot_times.first(), Some(&"09:00"));
+        assert_eq!(slot_times.last(), Some(&"16:30"));
+    }
+
+    #[tokio::test]
+    async fn compute_slots_interval_greater_than_duration() {
+        // When interval (60) > duration (30), cursor steps 60 but each slot occupies 30 min
+        // This means some potential slots are skipped (e.g., 09:30 is never checked)
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        sqlx::query("UPDATE event_types SET slot_interval_min = 60 WHERE id = ?")
+            .bind(&et_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date() + Duration::days(1);
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        // Block 09:00-09:30 on Monday
+        let monday_date = next_monday;
+        let busy_start = monday_date.and_hms_opt(9, 0, 0).unwrap();
+        let busy_end = monday_date.and_hms_opt(9, 30, 0).unwrap();
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![(busy_start, busy_end)]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        // 09:00 slot is blocked by busy event, so 7 remaining slots
+        assert_eq!(
+            monday.slots.len(),
+            7,
+            "09:00 slot should be blocked by busy event, got {}",
+            monday.slots.len()
+        );
+        let slot_times: Vec<&str> = monday.slots.iter().map(|s| s.start.as_str()).collect();
+        assert!(!slot_times.contains(&"09:00"), "09:00 should be blocked");
+        assert!(
+            slot_times.contains(&"10:00"),
+            "10:00 should still be available"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_null_interval_defaults_to_duration() {
+        // When slot_interval_min is NULL (unset), should default to duration (legacy behavior)
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        // Don't set slot_interval — it should be NULL from seed_test_data
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date() + Duration::days(1);
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30, // duration
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        // Should default to 30-min stepping (same as duration) → 16 slots
+        assert_eq!(
+            monday.slots.len(),
+            16,
+            "NULL interval should default to duration (30-min stepping) → 16 slots, got {}",
+            monday.slots.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_interval_zero_defaults_to_duration() {
+        // When slot_interval_min is 0, should also default to duration
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        sqlx::query("UPDATE event_types SET slot_interval_min = 0 WHERE id = ?")
+            .bind(&et_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date() + Duration::days(1);
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            0,
+            0,
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        assert_eq!(
+            monday.slots.len(),
+            16,
+            "Zero interval should default to duration (30-min stepping) → 16 slots, got {}",
+            monday.slots.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_slots_interval_with_buffer_overlap() {
+        // Interval of 60 with a 15-min buffer should correctly reject slots
+        // that would overlap with busy events via buffer zones
+        let pool = setup_test_db().await;
+        let (_, _, et_id) = seed_test_data(&pool).await;
+
+        sqlx::query("UPDATE event_types SET slot_interval_min = 60 WHERE id = ?")
+            .bind(&et_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let now = Utc::now().with_timezone(&Tz::UTC).naive_local();
+        let mut next_monday = now.date() + Duration::days(1);
+        while next_monday.weekday() != chrono::Weekday::Mon {
+            next_monday += Duration::days(1);
+        }
+        let days_to_monday = (next_monday - now.date()).num_days() as i32;
+
+        // Busy event at 09:00-09:30, with 15-min buffer it blocks 08:45-09:45
+        // So 09:00 slot (buf_start=08:45, buf_end=10:00) overlaps with busy event (08:45 < 09:30 && 09:00 > 08:45)
+        let busy_start = next_monday.and_hms_opt(9, 0, 0).unwrap();
+        let busy_end = next_monday.and_hms_opt(9, 30, 0).unwrap();
+
+        let slot_days = compute_slots(
+            &pool,
+            &et_id,
+            30,
+            15, // buffer before
+            15, // buffer after
+            0,
+            days_to_monday,
+            1,
+            Tz::UTC,
+            Tz::UTC,
+            BusySource::Individual(vec![(busy_start, busy_end)]),
+        )
+        .await;
+
+        assert!(!slot_days.is_empty());
+        let monday = &slot_days[0];
+        // 09:00 is blocked by direct overlap + buffer
+        assert_eq!(
+            monday.slots.len(),
+            7,
+            "09:00 slot blocked by event+buffer, got {}",
+            monday.slots.len()
+        );
+    }
+
     // --- HTTP integration tests ---
 
     use axum::body::Body;
