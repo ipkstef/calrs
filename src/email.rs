@@ -4921,4 +4921,70 @@ mod tests {
         // Confirm ICS does NOT have STATUS:CONFIRMED
         assert!(!ics.contains("STATUS:CONFIRMED"));
     }
+
+    // ===== Email-header injection defenses =====
+    //
+    // All email-sending paths build To/From/Reply-To via
+    // `format!("{name} <{email}>").parse::<Mailbox>()?` and subjects via
+    // `.subject(format!(…))`. The audit that produced #43 flagged the first
+    // pattern as potentially injectable (Claude's reasoning: an unvalidated
+    // guest name could contain CRLF and smuggle a Bcc: into the headers).
+    //
+    // Empirically the defense is lettre's typed builder: `Mailbox::from_str`
+    // rejects CRLF in display names, and `.subject(…)` RFC 2047-encodes any
+    // control chars (so `\r\n` ends up inside a base64-encoded section and
+    // never reaches the SMTP wire). These tests pin that behavior so we
+    // notice immediately if a future lettre upgrade relaxes either defense
+    // — at which point we'd need to add an explicit sanitizer at the
+    // boundary in email.rs.
+
+    #[test]
+    fn lettre_mailbox_rejects_crlf_in_display_name() {
+        use lettre::message::Mailbox;
+        // Exact shape used throughout email.rs:
+        //   format!("{} <{}>", details.guest_name, details.guest_email).parse()
+        let payloads = [
+            "Alice\r\nBcc: evil@attacker.com",
+            "Alice\nX-Smuggled: true",
+            "Alice\r\nSubject: hijacked",
+            "Alice\"; Bcc: evil@attacker.com\r\n",
+        ];
+        for payload in payloads {
+            let raw = format!("{} <guest@example.com>", payload);
+            let result = raw.parse::<Mailbox>();
+            assert!(
+                result.is_err(),
+                "lettre must reject CRLF/LF in display name — payload {:?} parsed to {:?}",
+                payload,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn lettre_subject_encodes_crlf_safely() {
+        use lettre::message::{Mailbox, Message};
+        let msg = Message::builder()
+            .from("sender@example.com".parse::<Mailbox>().unwrap())
+            .to("to@example.com".parse::<Mailbox>().unwrap())
+            .subject("Normal\r\nBcc: evil@attacker.com")
+            .body("body".to_string())
+            .expect("message builds");
+
+        let raw = msg.formatted();
+        let wire = String::from_utf8_lossy(&raw);
+
+        // The injected header name must not appear as its own header line.
+        // Exhaustively: neither right after a CRLF, nor at the start of the
+        // wire format (which would also be injection).
+        let lines: Vec<&str> = wire.split("\r\n").collect();
+        assert!(
+            !lines.iter().any(|l| l.starts_with("Bcc:")),
+            "Bcc header injected — lettre no longer encodes Subject CRLF. Wire:\n{}",
+            wire
+        );
+        // Sanity: the Subject line itself must exist exactly once.
+        let subject_count = lines.iter().filter(|l| l.starts_with("Subject:")).count();
+        assert_eq!(subject_count, 1, "exactly one Subject header expected");
+    }
 }
