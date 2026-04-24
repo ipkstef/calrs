@@ -6753,18 +6753,23 @@ async fn show_group_slots(
         while sync_tasks.join_next().await.is_some() {}
         let mut member_busy = HashMap::new();
         for (uid,) in &members {
-            member_busy.insert(
-                uid.clone(),
-                fetch_busy_times_for_user(
-                    &state.pool,
-                    uid,
-                    now_host,
-                    window_end,
-                    host_tz,
-                    Some(&et_id),
-                )
-                .await,
-            );
+            let mut busy = fetch_busy_times_for_user(
+                &state.pool,
+                uid,
+                now_host,
+                window_end,
+                host_tz,
+                Some(&et_id),
+            )
+            .await;
+            // Constrain each member to their personal working hours, converted
+            // from their own timezone into host_tz. Members without explicit
+            // hours in user_availability_rules are returned unconstrained
+            // (user_avail_as_busy short-circuits to an empty Vec), so we never
+            // plant surprise 9-17 defaults — only respect hours users actually
+            // set on the settings page.
+            busy.extend(user_avail_as_busy(&state.pool, uid, now_host, window_end, host_tz).await);
+            member_busy.insert(uid.clone(), busy);
         }
         if scheduling_mode == "collective" {
             BusySource::Team(member_busy)
@@ -8890,7 +8895,7 @@ async fn pick_group_member(
     let mut available_members = Vec::new();
 
     for (user_id, name, email, weight) in &members {
-        let busy = fetch_busy_times_for_user(
+        let mut busy = fetch_busy_times_for_user(
             pool,
             user_id,
             buf_start,
@@ -8899,6 +8904,11 @@ async fn pick_group_member(
             Some(event_type_id),
         )
         .await;
+        // Also exclude members who are outside their own working hours for
+        // this slot. Members without explicit user_availability_rules are
+        // returned unconstrained by user_avail_as_busy, matching the slot
+        // grid semantics in show_group_slots.
+        busy.extend(user_avail_as_busy(pool, user_id, buf_start, buf_end, host_tz).await);
         if !has_conflict(&busy, buf_start, buf_end) {
             available_members.push((user_id.clone(), name.clone(), email.clone(), *weight));
         }
@@ -14701,6 +14711,103 @@ mod tests {
         assert!(
             is_busy(dt(2026, 1, 12, 12, 0)),
             "NY 12:00 (Paris 18:00) should be blocked — outside member's working hours"
+        );
+    }
+
+    // Regression for Antoine's follow-up: the team event-type flow must apply
+    // each member's personal working hours as a constraint (converted into
+    // host_tz). Concretely: a team with a single America/Chicago member whose
+    // personal rules are Mon-Fri 09:00-17:00 local must render slots in Paris
+    // host_tz only from 16:00 onwards, not across the full 09:00-23:00 rule.
+    // Verifies the exact conversion user_avail_as_busy performs; the
+    // show_group_slots/pick_group_member handlers extend member_busy with
+    // this output before running compute_slots.
+    #[tokio::test]
+    async fn chicago_member_is_busy_at_paris_morning() {
+        let pool = setup_test_db().await;
+        let uid = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO users (id, email, name, role, auth_provider, username, enabled, timezone) \
+             VALUES (?, 'andy@example.com', 'Andy', 'user', 'local', 'andy', 1, 'America/Chicago')",
+        )
+        .bind(&uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Mon-Fri 09:00-17:00 Chicago local
+        for day in 1..=5 {
+            let rid = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO user_availability_rules (id, user_id, day_of_week, start_time, end_time) \
+                 VALUES (?, ?, ?, '09:00', '17:00')",
+            )
+            .bind(&rid)
+            .bind(&uid)
+            .bind(day)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // 2026-07-07 is a Tuesday in full summer DST (Chicago CDT UTC-5,
+        // Paris CEST UTC+2, 7-hour offset — matches Antoine's scenario).
+        let host_tz: Tz = "Europe/Paris".parse().unwrap();
+        let window_start = dt(2026, 7, 7, 0, 0);
+        let window_end = dt(2026, 7, 7, 23, 59);
+
+        let busy = user_avail_as_busy(&pool, &uid, window_start, window_end, host_tz).await;
+        let is_busy = |t: NaiveDateTime| busy.iter().any(|(s, e)| &t >= s && &t < e);
+
+        // Paris 09:00 = Chicago 02:00 — outside 09-17, must be blocked.
+        assert!(
+            is_busy(dt(2026, 7, 7, 9, 0)),
+            "Paris 09:00 (Chicago 02:00) must be blocked — Andy sleeping"
+        );
+        // Paris 16:00 = Chicago 09:00 — Andy just started, must be free.
+        assert!(
+            !is_busy(dt(2026, 7, 7, 16, 0)),
+            "Paris 16:00 (Chicago 09:00) must be free — Andy working"
+        );
+        // Paris 22:00 = Chicago 15:00 — Andy still working, must be free.
+        assert!(
+            !is_busy(dt(2026, 7, 7, 22, 0)),
+            "Paris 22:00 (Chicago 15:00) must be free — Andy working"
+        );
+    }
+
+    // Regression: when a team member without any user_availability_rules is
+    // active, they must be treated as always-available (no synthesized 9-17
+    // default). This preserves the behavior Antoine tested originally where
+    // a single Paris member expected the full event-type rule window.
+    #[tokio::test]
+    async fn member_without_personal_rules_is_unconstrained() {
+        let pool = setup_test_db().await;
+        let uid = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO users (id, email, name, role, auth_provider, username, enabled, timezone) \
+             VALUES (?, 'free@example.com', 'No Hours', 'user', 'local', 'free', 1, 'Europe/Paris')",
+        )
+        .bind(&uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Deliberately NO user_availability_rules rows for this user.
+
+        let host_tz: Tz = "Europe/Paris".parse().unwrap();
+        let busy = user_avail_as_busy(
+            &pool,
+            &uid,
+            dt(2026, 7, 7, 0, 0),
+            dt(2026, 7, 7, 23, 59),
+            host_tz,
+        )
+        .await;
+
+        assert!(
+            busy.is_empty(),
+            "no personal rules must mean no constraint — got {} busy intervals",
+            busy.len()
         );
     }
 
