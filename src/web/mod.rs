@@ -6675,18 +6675,22 @@ async fn show_group_slots(
         }
         let mut member_busy = HashMap::new();
         for (uid,) in &members {
-            member_busy.insert(
-                uid.clone(),
-                fetch_busy_times_for_user(
-                    &state.pool,
-                    uid,
-                    now_host,
-                    window_end,
-                    host_tz,
-                    Some(&et_id),
-                )
-                .await,
-            );
+            let mut busy = fetch_busy_times_for_user(
+                &state.pool,
+                uid,
+                now_host,
+                window_end,
+                host_tz,
+                Some(&et_id),
+            )
+            .await;
+            // Constrain each member to their own working hours, interpreted in
+            // their own timezone. Without this, a member in a different timezone
+            // would be considered available throughout the event type's rules
+            // in host_tz — see issue #50.
+            ensure_user_avail_seeded(&state.pool, uid).await;
+            busy.extend(user_avail_as_busy(&state.pool, uid, now_host, window_end, host_tz).await);
+            member_busy.insert(uid.clone(), busy);
         }
         if scheduling_mode == "collective" {
             BusySource::Team(member_busy)
@@ -8803,7 +8807,7 @@ async fn pick_group_member(
     let mut available_members = Vec::new();
 
     for (user_id, name, email, weight) in &members {
-        let busy = fetch_busy_times_for_user(
+        let mut busy = fetch_busy_times_for_user(
             pool,
             user_id,
             buf_start,
@@ -8812,6 +8816,9 @@ async fn pick_group_member(
             Some(event_type_id),
         )
         .await;
+        // Also exclude members who are outside their own working hours for this slot.
+        ensure_user_avail_seeded(pool, user_id).await;
+        busy.extend(user_avail_as_busy(pool, user_id, buf_start, buf_end, host_tz).await);
         if !has_conflict(&busy, buf_start, buf_end) {
             available_members.push((user_id.clone(), name.clone(), email.clone(), *weight));
         }
@@ -14480,6 +14487,67 @@ mod tests {
             monday.slots.len(),
             16,
             "All 16 slots available when team is free"
+        );
+    }
+
+    // Regression for issue #50: a team member in a different timezone than the host
+    // must only be considered available within THEIR working hours, not inside the
+    // event type's rule window interpreted in host_tz.
+    #[tokio::test]
+    async fn user_avail_as_busy_respects_member_timezone() {
+        let pool = setup_test_db().await;
+
+        let paris_uid = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO users (id, email, name, role, auth_provider, username, enabled, timezone) \
+             VALUES (?, 'paris@example.com', 'Paris User', 'user', 'local', 'paris', 1, 'Europe/Paris')",
+        )
+        .bind(&paris_uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Paris member works Mon-Fri 09:00-17:00 local time
+        for day in [1, 2, 3, 4, 5] {
+            let rid = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO user_availability_rules (id, user_id, day_of_week, start_time, end_time) \
+                 VALUES (?, ?, ?, '09:00', '17:00')",
+            )
+            .bind(&rid)
+            .bind(&paris_uid)
+            .bind(day)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Host is in New_York. In winter: Paris=UTC+1, NY=UTC-5 → 6h offset.
+        // Paris 09:00-17:00 == NY 03:00-11:00.
+        // Week of 2026-01-12 (Monday).
+        let host_tz: Tz = "America/New_York".parse().unwrap();
+        let window_start = dt(2026, 1, 12, 0, 0);
+        let window_end = dt(2026, 1, 12, 23, 59);
+
+        let busy = user_avail_as_busy(&pool, &paris_uid, window_start, window_end, host_tz).await;
+
+        // Helper: is (t) inside any busy interval?
+        let is_busy = |t: NaiveDateTime| busy.iter().any(|(s, e)| &t >= s && &t < e);
+
+        // NY 02:00 Monday = Paris 08:00 — Paris member NOT working yet → must be busy.
+        assert!(
+            is_busy(dt(2026, 1, 12, 2, 0)),
+            "NY 02:00 (Paris 08:00) should be blocked — outside member's working hours"
+        );
+        // NY 05:00 Monday = Paris 11:00 — Paris member IS working → must NOT be busy.
+        assert!(
+            !is_busy(dt(2026, 1, 12, 5, 0)),
+            "NY 05:00 (Paris 11:00) should be free — inside member's working hours"
+        );
+        // NY 12:00 Monday = Paris 18:00 — Paris member done for the day → must be busy.
+        assert!(
+            is_busy(dt(2026, 1, 12, 12, 0)),
+            "NY 12:00 (Paris 18:00) should be blocked — outside member's working hours"
         );
     }
 
