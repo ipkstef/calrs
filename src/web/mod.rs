@@ -6737,18 +6737,14 @@ async fn show_group_slots(
              WHERE tm.team_id = ? AND u.enabled = 1 \
              AND COALESCE(etw.weight, 1) > 0",
         ).bind(&et_id).bind(tid).fetch_all(&state.pool).await.unwrap_or_default();
-        // Sync all group members' calendars in parallel. Running sequentially
-        // means one slow CalDAV server stalls the whole request (see issue #50).
-        let mut sync_tasks = tokio::task::JoinSet::new();
+        // Sync all group members' calendars if stale. Kept sequential:
+        // parallelizing here caused memory spikes under concurrent page
+        // loads because sync_if_stale does not dedupe in-flight syncs on
+        // the same source, so multiple tasks would hold the full CalDAV
+        // response in memory at once. Revisit with a per-source guard.
         for (uid,) in &members {
-            let pool = state.pool.clone();
-            let key = state.secret_key;
-            let uid = uid.clone();
-            sync_tasks.spawn(async move {
-                crate::commands::sync::sync_if_stale(&pool, &key, &uid).await;
-            });
+            crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
         }
-        while sync_tasks.join_next().await.is_some() {}
         let mut member_busy = HashMap::new();
         for (uid,) in &members {
             member_busy.insert(
@@ -7561,18 +7557,11 @@ async fn show_dynamic_group_slots(
     let is_deferred_callback = query.deferred.as_deref() == Some("1");
 
     let slot_days = if is_deferred_callback {
-        // Full sync + computation (AJAX callback). Sync participants in parallel
-        // so one slow CalDAV server doesn't stall the whole request.
-        let mut sync_tasks = tokio::task::JoinSet::new();
+        // Full sync + computation (AJAX callback). Sequential — see the
+        // comment in show_group_slots on why parallelizing here was reverted.
         for (uid, _, _, _, _) in &dg_users {
-            let pool = state.pool.clone();
-            let key = state.secret_key;
-            let uid = uid.clone();
-            sync_tasks.spawn(async move {
-                crate::commands::sync::sync_if_stale(&pool, &key, &uid).await;
-            });
+            crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
         }
-        while sync_tasks.join_next().await.is_some() {}
 
         let now_host = Utc::now().with_timezone(&host_tz).naive_local();
         let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
