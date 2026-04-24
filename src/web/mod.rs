@@ -6669,10 +6669,18 @@ async fn show_group_slots(
              WHERE tm.team_id = ? AND u.enabled = 1 \
              AND COALESCE(etw.weight, 1) > 0",
         ).bind(&et_id).bind(tid).fetch_all(&state.pool).await.unwrap_or_default();
-        // Sync all group members' calendars if stale
+        // Sync all group members' calendars in parallel. Running sequentially
+        // means one slow CalDAV server stalls the whole request (see issue #50).
+        let mut sync_tasks = tokio::task::JoinSet::new();
         for (uid,) in &members {
-            crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
+            let pool = state.pool.clone();
+            let key = state.secret_key;
+            let uid = uid.clone();
+            sync_tasks.spawn(async move {
+                crate::commands::sync::sync_if_stale(&pool, &key, &uid).await;
+            });
         }
+        while sync_tasks.join_next().await.is_some() {}
         let mut member_busy = HashMap::new();
         for (uid,) in &members {
             let mut busy = fetch_busy_times_for_user(
@@ -7489,10 +7497,18 @@ async fn show_dynamic_group_slots(
     let is_deferred_callback = query.deferred.as_deref() == Some("1");
 
     let slot_days = if is_deferred_callback {
-        // Full sync + computation (AJAX callback)
+        // Full sync + computation (AJAX callback). Sync participants in parallel
+        // so one slow CalDAV server doesn't stall the whole request.
+        let mut sync_tasks = tokio::task::JoinSet::new();
         for (uid, _, _, _, _) in &dg_users {
-            crate::commands::sync::sync_if_stale(&state.pool, &state.secret_key, uid).await;
+            let pool = state.pool.clone();
+            let key = state.secret_key;
+            let uid = uid.clone();
+            sync_tasks.spawn(async move {
+                crate::commands::sync::sync_if_stale(&pool, &key, &uid).await;
+            });
         }
+        while sync_tasks.join_next().await.is_some() {}
 
         let now_host = Utc::now().with_timezone(&host_tz).naive_local();
         let end_date = now_host.date() + Duration::days((start_offset + days_ahead) as i64);
