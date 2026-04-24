@@ -126,6 +126,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 | Security review hardening | 1.4.0 | 7 findings from third-party security review addressed |
 | Configurable slot interval | 1.5.0 | Slot start-time spacing decoupled from event duration (e.g., 20-min meetings on 30-min boundaries) |
 | Security audit round 2 | 1.6.0 | 3 findings from @marcotama's third-party audit addressed (OIDC email-based account linking, stored XSS in onclick handlers, CSRF Secure flag) |
+| Explicit event-type timezone | 1.7.0 | Availability rules now pinned to a chosen IANA timezone per event type (previously derived from the creator's profile) |
+| Cross-timezone team availability | 1.7.0 | Team slot grid respects each member's personal working hours converted from their own timezone into the event's host timezone |
+
+## [1.7.0] - 2026-04-24
+
+Correctness and resilience release: fixes an OOM-triggering infinite loop in slot computation, adds explicit per-event-type timezones, makes team slot grids honour each member's personal working hours, and parallelizes per-member CalDAV syncs with per-source deduplication.
+
+### Added
+
+- **Explicit timezone on event types** (issue #50) — each event type now carries its own IANA `timezone` column; availability rules are interpreted in that timezone rather than silently inheriting the creator's profile timezone. Surfaces a timezone picker inside the Availability section of the event-type form. Migration `046_event_type_timezone` backfills every existing row with the current account owner's timezone, so upgrades preserve behaviour
+- **Per-member working hours on team events** — team slot grids now intersect each member's personal `user_availability_rules` (in the member's own timezone) with the event-type's rules. Members without explicit personal hours stay unconstrained (no auto-seeded 9–17 default is planted). Prevents the scenario from issue #50 where a team event in Paris would offer bookings at 09:00 Paris to a US-based member whose real working hours are 09:00 Chicago
+- **Member timezone shown on event-type priority list** — the Member Priority / Required Members section now displays each member's timezone under their name, making mis-configured user timezones immediately visible to admins
+
+### Fixed
+
+- **Infinite slot loop → OOM when availability window ends near midnight** — `compute_slots_from_rules` walked its inner cursor as a `NaiveTime`, and `NaiveTime + Duration` wraps at 24h. On a rule ending at 23:00 with a 60-minute slot duration, `cursor + slot_duration` wrapped to 00:00 (still ≤ 23:00 as a time-of-day), producing an infinite loop that allocated SlotTimes until the kernel OOM-killed the process. Production manifested as a ~4-minute CPU spike, ~9 GB RAM growth, ~240 GB of SQLite re-reads under memory pressure, and an OOM kill. Cursor now walks as `NaiveDateTime` so midnight rolls into the next day cleanly. Regression test pins the exact failing config (09:00–23:00, 60-min slot, 60-min interval)
+- **Dashboard Decline button no-op on pending bookings** (#51) — `cancel_booking` filtered on `status = 'confirmed'`, so clicking Decline on a pending booking matched zero rows and silently redirected. Broadened to include `pending` and branches on current status: confirmed bookings are cancelled (CalDAV delete + emails), pending bookings are declined (no CalDAV delete, guest decline notice only). Mirrors the email-token decline flow
+
+### Performance
+
+- **Parallel per-member CalDAV sync on team/dynamic-group slot pages** — team slot pages used to sync each member's CalDAV sources sequentially, so latency was Σ(per-member sync) and a single slow server stalled the whole request. Now fans out via `tokio::task::JoinSet`, guarded by a per-source async mutex inside `sync_if_stale`: same-source concurrent calls serialize and the loser skips after re-checking staleness, so at most one CalDAV fetch per source is in flight at any time across the whole process. Memory ceiling stays bounded even under burst traffic
+
+### Internal
+
+- Migration `046_event_type_timezone` with backfill from the account owner's timezone
+- New helper `normalize_event_type_tz` validates IANA names submitted via the form with a safe fallback
+- Regression tests: `get_host_tz_prefers_explicit_event_type_timezone`, `compute_slots_terminates_with_window_ending_at_23_00`, `chicago_member_is_busy_at_paris_morning`, `member_without_personal_rules_is_unconstrained`, `source_lock_identity`, `sync_if_stale_serializes_on_per_source_lock`
+- 545 tests total (up from 537 in 1.6.0), all green on pre-commit
+- Verified end-to-end against a copy of a production DB: the previously-OOMing team booking URL now responds in under a second with flat RSS
 
 ## [1.6.0] - 2026-04-23
 
